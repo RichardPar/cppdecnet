@@ -1,0 +1,560 @@
+#include "decnet/routing/lan.h"
+#include "decnet/events/events.h"
+
+#include "decnet/common/logging.h"
+#include "decnet/config.h"
+#include "decnet/node.h"
+#include "decnet/routing/routing.h"
+
+#include <algorithm>
+
+namespace decnet::routing {
+
+using datalink::all_endnodes;
+using datalink::all_routers;
+using datalink::ROUTING_PROTO;
+
+namespace {
+
+// The cache entry lifetime.  Port of NiCacheEntry.cachetime.
+constexpr double CACHE_TIME = 60.0;
+
+// DR election order: higher priority wins, ties broken by higher address.
+// Port of route_eth.sortkey.
+bool better_dr (std::uint8_t prio_a, Nodeid a, std::uint8_t prio_b, Nodeid b)
+{
+    if (prio_a != prio_b) return prio_a > prio_b;
+    return a > b;
+}
+
+}   // namespace
+
+// ------------------------------------------------------------ LanCircuit
+
+LanCircuit::LanCircuit (BaseRouter *parent, std::string name,
+                        datalink::BcDatalink *dl, const CircuitConfig &config)
+    : Circuit (parent, std::move (name)), parent_ (parent), datalink_ (dl)
+{
+    t3_ = config.t3 ? static_cast<double> (config.t3) : 10.0;
+    cost_ = config.cost ? config.cost : 4;
+    port_ = dl->create_bc_port (this, ROUTING_PROTO);
+    // A DECnet node's LAN address is derived from its node number, which is
+    // how a neighbour can address it without any prior exchange.
+    port_->set_macaddr (Macaddr::from_nodeid (parent->nodeid ()));
+}
+
+LanCircuit::~LanCircuit () = default;
+
+void LanCircuit::start ()
+{
+    send_hello ();
+    if (node ()) node ()->timers ().start (this, t3_);
+}
+
+void LanCircuit::stop ()
+{
+    if (node ()) node ()->timers ().stop (this);
+}
+
+std::size_t LanCircuit::adjacency_count () const
+{
+    return static_cast<std::size_t> (
+        std::count_if (adjacencies_.begin (), adjacencies_.end (),
+                       [] (const auto &kv)
+                       { return kv.second.state == AdjState::up; }));
+}
+
+void LanCircuit::timeout ()
+{
+    send_hello ();
+    if (node ()) node ()->timers ().start (this, t3_);
+}
+
+std::unique_ptr<RoutingPacketBase>
+LanCircuit::decode (const Bytes &frame, Macaddr &src) const
+{
+    if (frame.empty ()) {
+        DN_DEBUG ("null routing layer packet received on {}", name_);
+        return nullptr;
+    }
+    ByteView buf (frame.data (), frame.size ());
+
+    // A padded packet: the low seven bits of the first byte give the total
+    // pad length, the pad header included.  Two layers of padding is not a
+    // thing, so a second one means the packet is malformed.
+    if (buf[0] & 0x80) {
+        std::size_t pad = buf[0] & 0x7f;
+        if (pad == 0 || pad >= buf.size ()) {
+            DN_DEBUG ("bad padding on {}", name_);
+            return nullptr;
+        }
+        buf = buf.subspan (pad);
+        if (buf[0] & 0x80) {
+            DN_DEBUG ("double padded packet received on {}", name_);
+            return nullptr;
+        }
+    }
+    (void) src;
+    return RoutingPacketBase::parse_frame (buf);
+}
+
+void LanCircuit::dispatch (Work &w)
+{
+    auto *r = dynamic_cast<Received *> (&w);
+    if (!r) return;
+
+    // The datalink gives us the payload; the source address travels with
+    // the frame, so recover it from the sender's own node id in the packet
+    // where the packet carries one.
+    Macaddr src;
+    auto pkt = decode (r->packet (), src);
+    if (!pkt) return;
+    handle (*pkt, src);
+}
+
+bool LanCircuit::send_to (ShortData &pkt, const Adjacency &adj)
+{
+    send_to_mac (pkt, adj.macid ());
+    return true;                // a LAN has no notion of "unreachable"
+}
+
+void LanCircuit::send_update (const Bytes &frame)
+{
+    if (port_) port_->send (frame, all_routers ());
+}
+
+bool LanCircuit::wants_updates (unsigned level) const
+{
+    // Send only if somebody on this LAN would use it: any router for
+    // level 1, an area router for level 2.
+    for (const auto &[key, a] : adjacencies_) {
+        if (a.state != AdjState::up || a.ntype == ENDNODE) continue;
+        if (level == 2 && a.ntype != L2ROUTER) continue;
+        return true;
+    }
+    return false;
+}
+
+void LanCircuit::adj_timeout (Adjacency *adj)
+{
+    if (adj) adjacency_down (adj->nodeid ().value ());
+}
+
+void LanCircuit::lanevent (events::EventId ev, Nodeid neighbour, int reason)
+{
+    Node *n = node ();
+    if (!n) return;
+    events::Event e { ev, nice::Entity::make_circuit (name_) };
+    e.param (events::param::adjacent_node,
+             events::node_value (n->nicenode (neighbour)));
+    if (reason >= 0)
+        e.coded (events::param::reason, static_cast<std::uint64_t> (reason));
+    n->logevent (e);
+}
+
+void LanCircuit::adjacency_up (std::uint16_t key, const AdjacencyInfo &info)
+{
+    LanAdjacency &a = adjacencies_[key];
+    a.state = AdjState::up;
+    a.adj = std::make_shared<Adjacency> (this, info, t3_);
+    // This is what puts the neighbour into the routing table: a router
+    // gets a column, an endnode an entry in the shared endnode column.
+    a.adj->up ();
+    DN_INFO ("{} adjacency up: {} ({})", name_, info.id.str (),
+             ntype_string (info.ntype));
+    lanevent ({ 4, 15 }, info.id);          // adjacency up
+}
+
+void LanCircuit::adjacency_down (std::uint16_t key)
+{
+    auto it = adjacencies_.find (key);
+    if (it == adjacencies_.end ()) return;
+    if (it->second.adj) {
+        DN_INFO ("{} adjacency down: {}", name_,
+                 it->second.adj->nodeid ().str ());
+        lanevent ({ 4, 18 }, it->second.adj->nodeid (),
+                  events::reason::listener_timeout);
+        it->second.adj->down ();
+    }
+    adjacencies_.erase (it);
+}
+
+void LanCircuit::send_to_mac (ShortData &pkt, Macaddr nexthop)
+{
+    // A LAN carries the long header, which is what holds the Ethernet
+    // addresses.  pydecnet converts here for the same reason.
+    LongData ld;
+    ld.rqr     = pkt.rqr;
+    ld.rts     = pkt.rts;
+    ld.ie      = pkt.ie;
+    ld.dstnode = pkt.dstnode;
+    ld.srcnode = pkt.srcnode;
+    ld.visit   = pkt.visit;
+    ld.payload = pkt.payload;
+    port_->send (ld.encode_packet (), nexthop);
+}
+
+// --------------------------------------------------- EndnodeLanCircuit
+
+EndnodeLanCircuit::EndnodeLanCircuit (BaseRouter *parent, std::string name,
+                                      datalink::BcDatalink *dl,
+                                      const CircuitConfig &config)
+    : LanCircuit (parent, std::move (name), dl, config)
+{
+    // An endnode listens for the routers' announcements.
+    port_->add_multicast (all_endnodes ());
+}
+
+void EndnodeLanCircuit::send_hello ()
+{
+    EndnodeHello h;
+    h.tiver    = parent_->tiver ();
+    h.id       = parent_->nodeid ();
+    h.blksize  = ETHMTU;
+    h.timer    = static_cast<std::uint16_t> (t3_);
+    h.testdata = hello_testdata (50);
+    // Name the router we are using, so it can tell we have chosen it.
+    Macaddr n = dr_ ? dr_->second : Macaddr {};
+    const auto &nb = n.bytes ();
+    h.neighbor.assign (nb.begin (), nb.end ());
+    port_->send (h.encode_packet (), all_routers ());
+}
+
+void EndnodeLanCircuit::handle (RoutingPacketBase &pkt, Macaddr src)
+{
+    if (auto *rh = dynamic_cast<RouterHello *> (&pkt)) {
+        if (rh->id.area () != parent_->homearea ()) return;   // not ours
+        Macaddr rmac = Macaddr::from_nodeid (rh->id);
+
+        if (dr_ && dr_->first == rh->id) {
+            // The router we are already using; just note it is alive.
+            auto it = adjacencies_.find (rh->id.value ());
+            if (it != adjacencies_.end () && it->second.adj)
+                it->second.adj->alive ();
+            return;
+        }
+        if (dr_) {
+            DN_DEBUG ("{} designated router changed from {} to {}", name_,
+                      dr_->first.str (), rh->id.str ());
+            adjacency_down (dr_->first.value ());
+        } else {
+            DN_INFO ("{} using designated router {}", name_, rh->id.str ());
+        }
+        dr_ = std::make_pair (rh->id, rmac);
+
+        AdjacencyInfo info;
+        info.id      = rh->id;
+        info.ntype   = (rh->ntype == RouterHello::ntype_l2) ? L2ROUTER
+                                                            : L1ROUTER;
+        info.blksize = std::min (rh->blksize, ETHMTU);
+        info.tiver   = rh->tiver;
+        info.timer   = rh->timer;
+        info.priority = rh->prio;
+        adjacency_up (rh->id.value (), info);
+        return;
+    }
+    if (dynamic_cast<EndnodeHello *> (&pkt)) {
+        // Another endnode; nothing for us to do with it.
+        return;
+    }
+
+    // A data packet.  Remember who delivered it, so a reply can go back
+    // the same way rather than via the router.
+    ShortData sd;
+    if (auto *ld = dynamic_cast<LongData *> (&pkt)) {
+        sd.rqr = ld->rqr; sd.rts = ld->rts;
+        sd.dstnode = ld->dstnode; sd.srcnode = ld->srcnode;
+        sd.visit = ld->visit; sd.payload = ld->payload;
+    } else if (auto *s = dynamic_cast<ShortData *> (&pkt)) {
+        sd = *s;
+    } else {
+        return;
+    }
+    expire_cache ();
+    cache_[sd.srcnode.value ()] = CacheEntry {
+        src, std::chrono::steady_clock::now ()
+             + std::chrono::seconds (static_cast<int> (CACHE_TIME)) };
+    parent_->forward (sd);
+}
+
+void EndnodeLanCircuit::expire_cache ()
+{
+    auto now = std::chrono::steady_clock::now ();
+    for (auto it = cache_.begin (); it != cache_.end (); )
+        it = (it->second.expires <= now) ? cache_.erase (it) : std::next (it);
+}
+
+bool EndnodeLanCircuit::send (ShortData &pkt, bool tryhard)
+{
+    expire_cache ();
+    std::uint16_t dst = pkt.dstnode.value ();
+
+    if (tryhard) {
+        // A retransmit: the cached path may be why the first try failed.
+        cache_.erase (dst);
+    } else if (auto it = cache_.find (dst); it != cache_.end ()) {
+        send_to_mac (pkt, it->second.prevhop);
+        return true;
+    }
+    if (dr_) {
+        send_to_mac (pkt, dr_->second);
+        return true;
+    }
+    if (pkt.dstnode == parent_->nodeid ()) return false;
+    // No router known: address the destination directly and hope it is on
+    // this LAN.  That is all an endnode can do.
+    send_to_mac (pkt, Macaddr::from_nodeid (pkt.dstnode));
+    return true;
+}
+
+// --------------------------------------------------- RoutingLanCircuit
+
+RoutingLanCircuit::RoutingLanCircuit (BaseRouter *parent, std::string name,
+                                      datalink::BcDatalink *dl,
+                                      const CircuitConfig &config)
+    : LanCircuit (parent, std::move (name), dl, config),
+      drtimer_ ([this] { become_dr (); })
+{
+    port_->add_multicast (all_routers ());
+    if (config.priority) prio_ = static_cast<std::uint8_t> (config.priority);
+    if (config.maxrouters) maxrouters_ = config.maxrouters;
+}
+
+void RoutingLanCircuit::start ()
+{
+    LanCircuit::start ();
+    calc_dr ();
+}
+
+void RoutingLanCircuit::stop ()
+{
+    if (node ()) node ()->timers ().stop (&drtimer_);
+    // Announce an empty router list on the way out, so neighbours drop us
+    // promptly instead of waiting for the listen timer.
+    if (port_) {
+        RouterHello h;
+        h.tiver   = parent_->tiver ();
+        h.id      = parent_->nodeid ();
+        h.ntype   = (parent_->ntype () == L2ROUTER) ? RouterHello::ntype_l2
+                                                    : RouterHello::ntype_l1;
+        h.blksize = ETHMTU;
+        h.prio    = prio_;
+        h.timer   = static_cast<std::uint16_t> (t3_);
+        h.elist   = build_elist (true);
+        port_->send (h.encode_packet (), all_routers ());
+    }
+    LanCircuit::stop ();
+}
+
+Bytes RoutingLanCircuit::build_elist (bool empty) const
+{
+    Bytes rslist;
+    if (!empty) {
+        for (const auto &[key, a] : adjacencies_) {
+            if (a.ntype == ENDNODE) continue;
+            RSent e;
+            e.router = Nodeid (static_cast<std::uint16_t> (key));
+            e.prio   = a.prio;
+            e.twoway = (a.state == AdjState::up);
+            Bytes b = e.encode ();
+            rslist.insert (rslist.end (), b.begin (), b.end ());
+        }
+    }
+    Elist el;
+    el.rslist = std::move (rslist);
+    return el.encode ();
+}
+
+void RoutingLanCircuit::send_hello ()
+{
+    RouterHello h;
+    h.tiver   = parent_->tiver ();
+    h.id      = parent_->nodeid ();
+    h.ntype   = (parent_->ntype () == L2ROUTER) ? RouterHello::ntype_l2
+                                                : RouterHello::ntype_l1;
+    h.blksize = ETHMTU;
+    h.prio    = prio_;
+    h.timer   = static_cast<std::uint16_t> (t3_);
+    h.elist   = build_elist ();
+
+    Bytes frame = h.encode_packet ();
+    port_->send (frame, all_routers ());
+    // Only the designated router talks to the endnodes; that is the point
+    // of electing one.
+    if (isdr_) port_->send (frame, all_endnodes ());
+}
+
+void RoutingLanCircuit::handle (RoutingPacketBase &pkt, Macaddr src)
+{
+    if (auto *rh = dynamic_cast<RouterHello *> (&pkt)) {
+        // Out of area hellos are ignored, unless both ends are area
+        // routers -- the only pair allowed to span areas.
+        bool both_l2 = rh->ntype == RouterHello::ntype_l2
+                    && parent_->ntype () == L2ROUTER;
+        if (rh->id.area () != parent_->homearea () && !both_l2) return;
+
+        bool is_new = adjacencies_.find (rh->id.value ()) == adjacencies_.end ();
+        LanAdjacency &a = adjacencies_[rh->id.value ()];
+        a.macaddr = Macaddr::from_nodeid (rh->id);
+        a.prio    = rh->prio;
+        a.ntype   = (rh->ntype == RouterHello::ntype_l2) ? L2ROUTER : L1ROUTER;
+        a.listen_time = rh->timer * BCT3MULT;
+
+        // Look for ourselves in its router list.  Finding it is the only
+        // proof we have that this neighbour can hear us.
+        bool listed = false;
+        Elist el;
+        try {
+            el.decode (ByteView (rh->elist.data (), rh->elist.size ()));
+            ByteView rs (el.rslist.data (), el.rslist.size ());
+            while (rs.size () >= RSent::wire_size) {
+                RSent e;
+                e.decode (rs.subspan (0, RSent::wire_size));
+                if (e.router == parent_->nodeid ()) { listed = true; break; }
+                rs = rs.subspan (RSent::wire_size);
+            }
+        } catch (const DecodeError &) {
+            DN_TRACE ("bad elist in hello from {} on {}", rh->id.str (), name_);
+        }
+
+        if (listed && a.state != AdjState::up) {
+            AdjacencyInfo info;
+            info.id      = rh->id;
+            info.ntype   = a.ntype;
+            info.blksize = std::min (rh->blksize, ETHMTU);
+            info.tiver   = rh->tiver;
+            info.timer   = rh->timer;
+            info.priority = rh->prio;
+            adjacency_up (rh->id.value (), info);
+        } else if (a.state == AdjState::up) {
+            if (a.adj) a.adj->alive ();
+        } else if (is_new) {
+            DN_DEBUG ("{} heard router {}, waiting for two-way", name_,
+                      rh->id.str ());
+        }
+        calc_dr ();
+        return;
+    }
+
+    if (auto *eh = dynamic_cast<EndnodeHello *> (&pkt)) {
+        if (eh->id.area () != parent_->homearea ()) return;
+        LanAdjacency &a = adjacencies_[eh->id.value ()];
+        if (a.state == AdjState::up) {
+            if (a.adj) a.adj->alive ();
+            return;
+        }
+        a.macaddr = Macaddr::from_nodeid (eh->id);
+        a.ntype   = ENDNODE;
+        a.listen_time = eh->timer * BCT3MULT;
+        // An endnode needs no handshake: hearing it is enough.
+        AdjacencyInfo info;
+        info.id      = eh->id;
+        info.ntype   = ENDNODE;
+        info.blksize = std::min (eh->blksize, ETHMTU);
+        info.tiver   = eh->tiver;
+        info.timer   = eh->timer;
+        adjacency_up (eh->id.value (), info);
+        return;
+    }
+
+    if (auto *rm = dynamic_cast<RoutingMessage *> (&pkt)) {
+        // Attribute it to whichever neighbour sent it.
+        auto it = adjacencies_.find (
+            Nodeid (static_cast<std::uint16_t> (rm->srcnode)).value ());
+        if (it != adjacencies_.end () && it->second.adj
+            && it->second.state == AdjState::up) {
+            it->second.adj->alive ();
+            parent_->routing_message (*rm, it->second.adj.get (), cost_);
+        } else {
+            DN_TRACE ("{} routing message from {} with no adjacency", name_,
+                      rm->srcnode);
+        }
+        return;
+    }
+
+    ShortData sd;
+    if (auto *ld = dynamic_cast<LongData *> (&pkt)) {
+        sd.rqr = ld->rqr; sd.rts = ld->rts;
+        sd.dstnode = ld->dstnode; sd.srcnode = ld->srcnode;
+        sd.visit = ld->visit; sd.payload = ld->payload;
+    } else if (auto *s = dynamic_cast<ShortData *> (&pkt)) {
+        sd = *s;
+    } else {
+        return;
+    }
+    (void) src;
+    parent_->forward (sd);
+}
+
+bool RoutingLanCircuit::two_way (Nodeid id) const
+{
+    auto it = adjacencies_.find (id.value ());
+    return it != adjacencies_.end () && it->second.state == AdjState::up;
+}
+
+bool RoutingLanCircuit::best_dr (Nodeid &who) const
+{
+    std::uint8_t best_prio = prio_;
+    Nodeid       best_id = parent_->nodeid ();
+    bool         self = true;
+
+    for (const auto &[key, a] : adjacencies_) {
+        if (a.ntype == ENDNODE) continue;
+        // Only routers in our own area can be designated router here.
+        Nodeid id (static_cast<std::uint16_t> (key));
+        if (id.area () != parent_->homearea ()) continue;
+        if (better_dr (a.prio, id, best_prio, best_id)) {
+            best_prio = a.prio;
+            best_id = id;
+            self = false;
+        }
+    }
+    who = best_id;
+    return self;
+}
+
+void RoutingLanCircuit::calc_dr ()
+{
+    Nodeid who;
+    bool self = best_dr (who);
+
+    if (self) {
+        // Do not act on it for DRDELAY seconds: during startup several
+        // nodes may each briefly believe they have won, and acting at once
+        // would put two designated routers on the LAN.
+        if (!isdr_ && !drtimer_running_) {
+            DN_DEBUG ("{} designated router will be self, after {} seconds",
+                      name_, DRDELAY);
+            drtimer_running_ = true;
+            if (node ()) node ()->timers ().start (&drtimer_, DRDELAY);
+        }
+        return;
+    }
+    if (isdr_) {
+        isdr_ = false;
+        send_hello ();
+    }
+    if (dr_ != who) {
+        drtimer_running_ = false;
+        if (node ()) node ()->timers ().stop (&drtimer_);
+        dr_ = who;
+        DN_DEBUG ("{} designated router is {}", name_, who.str ());
+    }
+}
+
+void RoutingLanCircuit::become_dr ()
+{
+    drtimer_running_ = false;
+    Nodeid who;
+    if (best_dr (who)) {
+        isdr_ = true;
+        dr_ = parent_->nodeid ();
+        DN_INFO ("{} designated router is self", name_);
+        send_hello ();
+    } else {
+        // Somebody better turned up while we were waiting.
+        calc_dr ();
+    }
+}
+
+}   // namespace decnet::routing
