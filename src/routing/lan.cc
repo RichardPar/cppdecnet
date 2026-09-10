@@ -71,7 +71,7 @@ void LanCircuit::timeout ()
 }
 
 std::unique_ptr<RoutingPacketBase>
-LanCircuit::decode (const Bytes &frame, Macaddr &src) const
+LanCircuit::decode (const Bytes &frame) const
 {
     if (frame.empty ()) {
         DN_DEBUG ("null routing layer packet received on {}", name_);
@@ -94,7 +94,6 @@ LanCircuit::decode (const Bytes &frame, Macaddr &src) const
             return nullptr;
         }
     }
-    (void) src;
     return RoutingPacketBase::parse_frame (buf);
 }
 
@@ -103,13 +102,13 @@ void LanCircuit::dispatch (Work &w)
     auto *r = dynamic_cast<Received *> (&w);
     if (!r) return;
 
-    // The datalink gives us the payload; the source address travels with
-    // the frame, so recover it from the sender's own node id in the packet
-    // where the packet carries one.
-    Macaddr src;
-    auto pkt = decode (r->packet (), src);
+    // The datalink hands up the frame's own source address alongside the
+    // payload.  That address, rather than one derived from the node id in
+    // the packet, is what a neighbour is addressed by; see the note in
+    // EndnodeLanCircuit::handle.
+    auto pkt = decode (r->packet ());
     if (!pkt) return;
-    handle (*pkt, src);
+    handle (*pkt, r->src ());
 }
 
 bool LanCircuit::send_to (ShortData &pkt, const Adjacency &adj)
@@ -127,6 +126,19 @@ bool LanCircuit::wants_updates (unsigned level) const
 {
     // Send only if somebody on this LAN would use it: any router for
     // level 1, an area router for level 2.
+    //
+    // pydecnet has no such test -- it sends to ALL_ROUTERS every t1
+    // regardless (`routing.py`, Update.dispatch) -- and this was changed to
+    // match it on 10-Sep-2026. That made things worse against the real
+    // PDP-11 on the wired segment: with the gate the adjacency flapped,
+    // without it the adjacency stopped forming at all. Reverted, and the
+    // difference is recorded in BUGS.md rather than guessed at.
+    //
+    // The gate is still questionable on its own terms: a router that has
+    // just come up and has not yet heard a peer stays silent, and a peer
+    // waiting to hear from it waits for the message being withheld. Worth
+    // revisiting with a second router to test against, rather than an
+    // endnode that is upset by the extra traffic.
     for (const auto &[key, a] : adjacencies_) {
         if (a.state != AdjState::up || a.ntype == ENDNODE) continue;
         if (level == 2 && a.ntype != L2ROUTER) continue;
@@ -224,7 +236,17 @@ void EndnodeLanCircuit::handle (RoutingPacketBase &pkt, Macaddr src)
 {
     if (auto *rh = dynamic_cast<RouterHello *> (&pkt)) {
         if (rh->id.area () != parent_->homearea ()) return;   // not ours
-        Macaddr rmac = Macaddr::from_nodeid (rh->id);
+    // Address a neighbour by the source of the frame it sent, not by the
+    // address derived from its node id.  The specification says the two are
+    // the same -- a Phase IV node programs AA-00-04-00-xx-xx into its card
+    // -- and pydecnet relies on that (`Adjacency.macid = Macaddr (nodeid)`).
+    // A real PDP-11, BAJI on the test segment, does not: it announces
+    // id aa-00-04-00-13-04 while transmitting from 08-00-2b-11-22-33, and a
+    // loopback probe gets no answer at all on the derived address.  Since
+    // hellos are multicast, believing the derived address gives an adjacency
+    // that comes up and stays up while every unicast packet vanishes.  The
+    // source we heard is the address the neighbour demonstrably receives on.
+        Macaddr rmac = src;
 
         if (dr_ && dr_->first == rh->id) {
             // The router we are already using; just note it is alive.
@@ -303,6 +325,13 @@ bool EndnodeLanCircuit::send (ShortData &pkt, bool tryhard)
     if (pkt.dstnode == parent_->nodeid ()) return false;
     // No router known: address the destination directly and hope it is on
     // this LAN.  That is all an endnode can do.
+    //
+    // The derived address has to serve here, because a node id is the only
+    // thing we have: nothing has been heard from this destination, so there
+    // is no source address to prefer.  A neighbour that does not listen on
+    // its derived address is unreachable this way until it sends us
+    // something and the cache above picks up where it really lives.
+    // pydecnet has the same fallback.
     send_to_mac (pkt, Macaddr::from_nodeid (pkt.dstnode));
     return true;
 }
@@ -395,7 +424,9 @@ void RoutingLanCircuit::handle (RoutingPacketBase &pkt, Macaddr src)
 
         bool is_new = adjacencies_.find (rh->id.value ()) == adjacencies_.end ();
         LanAdjacency &a = adjacencies_[rh->id.value ()];
-        a.macaddr = Macaddr::from_nodeid (rh->id);
+        // See the note in EndnodeLanCircuit::handle: the address a neighbour
+        // sends from is the one it receives on, which need not be derived.
+        a.macaddr = src;
         a.prio    = rh->prio;
         a.ntype   = (rh->ntype == RouterHello::ntype_l2) ? L2ROUTER : L1ROUTER;
         a.listen_time = rh->timer * BCT3MULT;
@@ -443,7 +474,8 @@ void RoutingLanCircuit::handle (RoutingPacketBase &pkt, Macaddr src)
             if (a.adj) a.adj->alive ();
             return;
         }
-        a.macaddr = Macaddr::from_nodeid (eh->id);
+        // As above: believe the frame's source, not the derived address.
+        a.macaddr = src;
         a.ntype   = ENDNODE;
         a.listen_time = eh->timer * BCT3MULT;
         // An endnode needs no handshake: hearing it is enough.

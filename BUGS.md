@@ -11,17 +11,25 @@ source means "not written yet", not "broken".
 
 ## Outstanding
 
-### 1. An endnode originates ShortData, which is wrong on a LAN
+### 1. An endnode originates ShortData -- checked, not a defect
 
-`EndnodeRouting::send` builds a `ShortData` packet. PyDECnet builds a
-`LongData` there, because an endnode's one circuit may be an Ethernet and
-the long header is what carries the Ethernet addresses.
+`EndnodeRouting::send` builds a `ShortData` where PyDECnet builds a
+`LongData`, on the grounds that an endnode's one circuit may be an Ethernet
+and the long header is what carries the Ethernet addresses.
 
-Harmless today. The only circuits that reach it are point to point, where
-the circuit would convert a long header to a short one anyway. It becomes a
-real bug the moment an endnode has a LAN circuit.
+This entry used to say it "becomes a real bug the moment an endnode has a
+LAN circuit". That was checked on 10-Sep-2026, against exactly that case --
+`samples/pcap.conf`, an endnode whose only circuit is a pcap Ethernet --
+and it is wrong. Every LAN send path goes through
+`LanCircuit::send_to_mac`, which converts to `LongData` before it reaches
+the port. The short form is an internal representation; the wire is long
+and correct.
 
-`src/routing/routing.cc`
+Left here rather than deleted because the divergence from PyDECnet is real,
+even though the consequence claimed for it was not. Kept at number 1 so the
+numbering other documents refer to does not shift.
+
+`src/routing/routing.cc`, `src/routing/lan.cc`
 
 ### 2. Triggered updates reset the periodic timer
 
@@ -79,6 +87,50 @@ receiver, which is the other half of the same machinery.
 
 Dead code in `src/datalink/multinet.cc`. It calls the base and returns.
 
+### 9. A level 1 router sends no routing messages to a LAN of endnodes
+
+`LanCircuit::wants_updates` returns false unless a router adjacency is up,
+so a circuit whose only neighbour is an endnode never carries a routing
+message. pydecnet has no such test: it sends to ALL_ROUTERS every `t1`
+regardless (`routing.py`, `Update.dispatch`).
+
+The gate looks wrong on its own terms -- a router that has just come up and
+has not yet heard a peer stays silent, and a peer waiting to hear from it
+waits for the message being withheld.
+
+It was removed on 10-Sep-2026 to match pydecnet and put back the same day.
+Against the real PDP-11 on the wired segment, the gated build flapped its
+adjacency and the ungated build did not bring one up at all -- five extra
+frames per ten seconds at that machine's Ethernet controller is the
+suspicion, unproven. So the change is not simply correct, and the reason it
+was attempted -- that it was the last difference between our frames and
+pydecnet's -- had already lapsed, because pydecnet flaps against BAJI too.
+
+Retest with a second *router* on the segment rather than an endnode, where
+the traffic is wanted and the receiver is not a PDP-11.
+
+`src/routing/lan.cc`
+
+### 10. `test_eventlog` fails under load
+
+`eventlog.an_event_travels_to_a_remote_sink` times out in its `wait_until`
+about one run in three *while the machine is busy* -- during this session,
+with a decnetd and a tcpdump running against real hardware. On an idle
+machine it passed 6 of 6 both with and without the changes made that day,
+so it is not a regression from them.
+
+It stands two nodes up, joins them with a real circuit and waits for an
+event record to cross it, so it is timing sensitive by construction. The
+`wait_until` deadline is presumably tuned for an idle machine. Either the
+deadline is too tight or something in the path is slower than it should be
+under contention, and which of those it is has not been established.
+
+Worth pinning down rather than lengthening the timeout blindly: the same
+test caught a real ordering defect once already (the event raised from
+inside a state function, below).
+
+`tests/test_eventlog.cc:381`
+
 ---
 
 ## Fixed
@@ -128,6 +180,76 @@ dragged the object file in) and `test_routingmsg` failing on the same
 packets. `DN_PACKET_INDEX_REGISTERED` now names a registration function,
 which both gives the linker the reference it needs and runs it once before
 the first lookup.
+
+### A LAN neighbour was addressed by an address it does not listen on
+
+`RoutingLanCircuit::handle` recorded a neighbour's address as
+`Macaddr::from_nodeid (id)`, the Phase IV derived `AA-00-04-00-xx-xx`.
+pydecnet does exactly the same -- `Adjacency.macid = Macaddr (self.nodeid)`
+-- so this was faithful to the port's source rather than a transcription
+slip. The specification agrees with both: a Phase IV node programs its
+derived address into its card.
+
+A real PDP-11, BAJI at 1.19 on the test segment, does not. It announces
+`id = aa-00-04-00-13-04` inside its hellos while transmitting from
+`08-00-2b-11-22-33`, the card's own DEC address. A loopback probe settled
+what that means, and it is not subtle:
+
+    aa:00:04:00:13:04   0 of 5 replied
+    08:00:2b:11:22:33   5 of 5 replied
+
+So the node receives nothing at all on the address we would have sent to.
+Hellos are multicast and would have kept working, so the symptom would have
+been an adjacency that comes up, stays up, and passes no traffic -- with
+both ends looking healthy in their own logs.
+
+The fix is to believe the source address of the frame the neighbour
+actually sent. Doing that turned up the real gap: the routing layer never
+had it. `LanCircuit::decode` took a `Macaddr &src` out parameter, and its
+body ended with
+
+    (void) src;
+
+so every LAN adjacency was recorded against an all zeroes address the
+moment anything believed it. The datalink knew the address -- `bc.cc`
+parses it into `ParsedFrame::src` and uses it to drop our own echoed
+frames -- but `Received` had nowhere to put it, so it was dropped on the
+way up. pydecnet carries it as `work.src`; that part had not been ported.
+
+`Received` now carries the source address, `BcDatalink::receive_frame`
+passes it, and the LAN circuits address neighbours by it. `decode` lost the
+out parameter it never filled in.
+
+Worth noting how it was caught. The first attempt changed only the three
+places that assigned `from_nodeid`, which compiled clean and looked right.
+`test_lan.endnode_data_reaches_the_router` failed immediately: the endnode
+had dutifully sent its data to 00-00-00-00-00-00. A test that asks whether
+a packet arrived, rather than whether an adjacency exists, is what made the
+difference -- the same lesson as the LAN routing table fix above.
+
+### A hello identical in every field was still rejected, for its padding
+
+An Ethernet frame shorter than 60 bytes has to be padded. We padded with
+zeros; pydecnet pads with 0x42 (`FILL = b'\x42' * 60` in `ethernet.py`).
+That cannot matter, because DEC's padded format puts the payload length two
+bytes into the frame and a receiver has no business reading past it.
+
+It mattered. A PDP-11 running RSX, sent our router hello, built an
+adjacency to node **21.426** -- an address that exists nowhere on the
+network and appears nowhere in our packet. Sent pydecnet's, it built a
+correct one to 1.20. The two hellos were identical for all 27 payload
+bytes; the fill was the only difference. So that end reads past the length
+it is given, and what it finds there becomes part of an address.
+
+Found by A/B: pydecnet was run as the level 1 router on the same segment
+with the same node number and circuit, which is the one test that says
+whether a difference is ours. Then pydecnet's own `RouterHello` class was
+used to generate the message offline and diff it against the captured
+bytes, which is what narrowed it to the fill.
+
+The lesson is not about padding. It is that matching a reference
+implementation's *incidental* choices is worth doing when the peer is forty
+years old and may read past what it was told.
 
 ### Object lifetime inside a callback
 

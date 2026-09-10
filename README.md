@@ -58,6 +58,7 @@ V1.1.1 node:
 | NSP interrupts | out of band data on its own subchannel, with credit |
 | MOP | system id exchange, counters, loopback on a shared LAN |
 | Event logging | records to a remote sink over a logical link, and back |
+| Real hardware | a PDP-11 running RSX (BAJI, 1.19) on a pcap circuit: we elect ourselves designated router, it adopts us and says so in its own hellos, `rtr 1.20` |
 
 The loop test in full, since it exercises the whole stack:
 

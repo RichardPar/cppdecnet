@@ -34,8 +34,21 @@ Bytes build_frame (Macaddr dest, Macaddr src, std::uint16_t proto,
         f.push_back (static_cast<std::uint8_t> (payload.size () >> 8));
     }
     f.insert (f.end (), payload.begin (), payload.end ());
-    // Ethernet will not carry a frame shorter than 60 bytes.
-    if (f.size () < ETH_MIN_FRAME) f.resize (ETH_MIN_FRAME, 0);
+    // Ethernet will not carry a frame shorter than 60 bytes.  Fill with
+    // 0x42 rather than zero, which is what pydecnet does (`FILL = b'\x42'
+    // * 60` in ethernet.py).
+    //
+    // This looks like it cannot matter, since the DEC padded format gives
+    // the payload length two bytes into the frame and a receiver has no
+    // business reading past it.  On 10-Sep-2026 it mattered. Against a
+    // PDP-11 running RSX, our hello and pydecnet's were identical for
+    // every one of the 27 payload bytes and differed only in this fill.
+    // pydecnet's was accepted and ours produced an adjacency to a node
+    // that does not exist -- the PDP recorded its designated router as
+    // 21.426, from bytes we never sent. So something on that end reads
+    // beyond the length it was given, and the fill is what it finds.
+    // Matching pydecnet costs nothing and is what interoperates.
+    if (f.size () < ETH_MIN_FRAME) f.resize (ETH_MIN_FRAME, 0x42);
     return f;
 }
 
@@ -244,7 +257,8 @@ void BcDatalink::receive_frame (ByteView frame)
         }
         if (node ())
             node ()->add_work (std::make_unique<Received> (
-                port->owner (), Bytes (p.payload.begin (), p.payload.end ())));
+                port->owner (), Bytes (p.payload.begin (), p.payload.end ()),
+                p.src));
         return;
     }
 }

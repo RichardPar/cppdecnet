@@ -62,13 +62,23 @@ public:
     Received (Element *owner, Bytes packet) noexcept
         : Work (owner), packet_ (std::move (packet)) {}
 
+    // On a broadcast medium the frame's source address matters to the layer
+    // above: it is the address that neighbour demonstrably receives on,
+    // which is not always the one derived from its node id.  pydecnet
+    // carries the same thing as work.src.  Left empty by a datalink that
+    // has no such notion, a point to point circuit being the obvious one.
+    Received (Element *owner, Bytes packet, Macaddr src) noexcept
+        : Work (owner), packet_ (std::move (packet)), src_ (src) {}
+
     const char *kind () const noexcept override { return "Received"; }
 
     const Bytes &packet () const noexcept { return packet_; }
     Bytes &packet () noexcept { return packet_; }
+    Macaddr src () const noexcept { return src_; }
 
 private:
     Bytes packet_;
+    Macaddr src_ {};
 };
 
 // Run a function on the node thread.  Helper threads that must touch

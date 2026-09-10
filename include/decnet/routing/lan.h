@@ -98,8 +98,7 @@ public:
 protected:
     // Strip any padding, decode, and hand the packet to the subclass.
     // Returns null for anything to be ignored.
-    std::unique_ptr<RoutingPacketBase> decode (const Bytes &frame,
-                                               Macaddr &src) const;
+    std::unique_ptr<RoutingPacketBase> decode (const Bytes &frame) const;
 
     virtual void send_hello () = 0;
     virtual void handle (RoutingPacketBase &pkt, Macaddr src) = 0;

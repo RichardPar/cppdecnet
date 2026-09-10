@@ -243,6 +243,20 @@ reconcile two names for one bit. The byte is stored raw with an accessor
 for each reading, so the two cannot disagree. The wire forms are identical,
 and a regression test checks that against PyDECnet's output.
 
+### A LAN neighbour is addressed by the source it sent from
+
+pydecnet addresses a LAN neighbour by the Phase IV derived address,
+`Adjacency.macid = Macaddr (self.nodeid)`. We use the source address of the
+frame the neighbour actually sent, and fall back to the derived address only
+when nothing has been heard from a destination and a node id is all there is.
+
+This is a deliberate departure from "follow the Python, because the Python
+interoperates". Here it demonstrably does not: a real PDP-11 on the test
+segment announces a derived id of `aa-00-04-00-13-04` while transmitting
+from `08-00-2b-11-22-33`, and answers a loopback probe on the second
+address and not at all on the first. pydecnet would send it traffic it
+cannot receive. See `BUGS.md` for the measurement.
+
 ### The level 2 attached flag follows the spec, not the better definition
 
 An area router is "attached" when it can reach an area other than its own.
