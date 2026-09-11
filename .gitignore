@@ -3,3 +3,7 @@ compile_commands.json
 *.o
 *.d
 *.a
+
+# The real HECnet gateway configuration: a live address and port.  The
+# committed example is samples/hecnet.conf, with 11.22.33.44 instead.
+samples/myhecnet.conf
