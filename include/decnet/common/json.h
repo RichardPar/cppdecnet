@@ -1,6 +1,6 @@
 // decnet/common/json.h -- just enough JSON for the application protocol.
 //
-// The protocol pydecnet uses to talk to applications running as separate
+// The protocol the Python uses to talk to applications running as separate
 // processes is one JSON object per line, in each direction. The objects
 // are flat: string keys, and values that are strings, integers, booleans,
 // null, or a flat array of those -- the last only for the argument list of
@@ -12,7 +12,7 @@
 // Byte strings travel as latin-1: every byte 0 to 255 maps to the code
 // point of the same value, so a JSON string carries arbitrary bytes
 // without escaping beyond what JSON itself requires. That is what
-// pydecnet's DNJsonEncoder does, and it is why the two ends agree.
+// the Python's DNJsonEncoder does, and it is why the two ends agree.
 //
 // A note on using a JSON library instead. cJSON was tried, and cannot be
 // used here: it stores string values as NUL-terminated C strings, so a
@@ -95,7 +95,7 @@ public:
     std::string encode () const;
 
     // Substitute this object's "args" array into a message at each {}
-    // placeholder, which is how pydecnet formats a log record from an
+    // placeholder, which is how the Python formats a log record from an
     // application.  Extra placeholders are left as they are.
     std::string format_message (const std::string &key = "message",
                                 const std::string &argkey = "args") const;

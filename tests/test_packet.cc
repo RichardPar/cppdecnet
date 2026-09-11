@@ -28,7 +28,7 @@ struct Simple : Packet<Simple> {
         field<NodeidField> (&Simple::src,   "src"));
 };
 
-// A subclass adding fields to a base layout, the way pydecnet packet
+// A subclass adding fields to a base layout, the way the Python packet
 // classes extend a common header.
 struct Header : Packet<Header> {
     std::uint8_t flags = 0;

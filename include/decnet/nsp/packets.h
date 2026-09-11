@@ -4,7 +4,7 @@
 // unreliable datagram service routing provides into ordered, flow
 // controlled logical links.
 //
-// One difference from the Python.  pydecnet describes the first byte as a
+// One difference from the Python.  the Python describes the first byte as a
 // single bitmap whose fields overlap: "subtype" is bits 4 to 6, while
 // "int_ls" is bit 4, "bom" bit 5 and "eom" bit 6, and which reading
 // applies depends on the message type.  That works in Python because each
@@ -168,7 +168,7 @@ struct AckOther : IndexedBody<AckOther, NspPacketBase> {
 
 // A connect acknowledgement carries no payload, but VAXELN appends stray
 // bytes; treating them as payload suppresses a parse error rather than
-// dropping the packet.  pydecnet does the same.
+// dropping the packet.  the Python does the same.
 struct AckConn : IndexedBody<AckConn, NspPacketBase, Extra::allow> {
     static constexpr const char *name = "AckConn";
     static constexpr std::uint8_t flag = 0x24;

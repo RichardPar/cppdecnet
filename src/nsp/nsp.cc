@@ -367,7 +367,7 @@ void Connection::handle_interrupt (const IntMsg &msg)
         return;
     }
     // Interrupts are not reordered or held: there is at most one in
-    // flight in each direction under normal flow control, and pydecnet
+    // flight in each direction under normal flow control, and the Python
     // does not police inbound interrupt credit either.
     int_next_expect_ = got + Seq (1);
 
@@ -616,7 +616,7 @@ Connection::State Connection::cd (Work &w)
         // moment it is told the connection was accepted, and send_data
         // drops anything offered to a link that is not yet running -- so
         // notifying first would silently lose that first message.  In
-        // pydecnet the notification is a queued work item and so cannot
+        // the Python the notification is a queued work item and so cannot
         // run before the state change; here the call is direct, which is
         // what makes the order something this code has to get right.
         set_state (DN_MY_STATE (Connection, run));
@@ -774,7 +774,7 @@ NSP::NSP (Element *parent, const Config &config)
     DN_DEBUG ("initializing NSP");
     maxconns_ = config.nsp ().max_connections;
     qmax_     = config.nsp ().qmax;
-    // PORT: the NSP timers are still fixed; pydecnet takes them from the
+    // PORT: the NSP timers are still fixed; the Python takes them from the
     // same configuration line.
     unsigned ph = static_cast<unsigned> (node () ? node ()->phase ()
                                                  : Phase::ph4);

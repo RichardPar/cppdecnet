@@ -1,6 +1,8 @@
 # cppdecnet
 
-DECnet Phase II/III/IV in C++, ported from [PyDECnet](../pydecnet).
+DECnet Phase II/III/IV in C++.
+
+A shameless port of the Python.
 
 ```mermaid
 flowchart TB
@@ -44,15 +46,15 @@ out on purpose, [BUGS.md](BUGS.md) defects found along the way.
 
 ## Does it actually talk to anything?
 
-Yes, and that is checked rather than assumed. Against a live PyDECnet
+Yes, and that is checked rather than assumed. Against a live Python
 V1.1.1 node:
 
 | | |
 |---|---|
 | Point to point | adjacency comes up, hellos accepted, circuit stays up |
-| Level 1 routing | routes exchanged both ways; PyDECnet computes `Node 2, cost 4, hops 1 via MUL-0 1.2` from our advertisement |
+| Level 1 routing | routes exchanged both ways; the Python computes `Node 2, cost 4, hops 1 via MUL-0 1.2` from our advertisement |
 | Level 2 routing | cross-area adjacency, both ends attached, both advertise as the way out |
-| Ethernet | our circuit reads PyDECnet's LAN traffic: `RouterHello from 1.1 ntype=2 prio=64 blksize=591` |
+| Ethernet | our circuit reads the Python's LAN traffic: `RouterHello from 1.1 ntype=2 prio=64 blksize=591` |
 | NSP + session | `NCP LOOP NODE` works in both directions |
 | NSP flow control | segment and message modes obeyed, link service credit, XON/XOFF, `qmax` window |
 | NSP interrupts | out of band data on its own subchannel, with credit |
@@ -63,16 +65,16 @@ V1.1.1 node:
 The loop test in full, since it exercises the whole stack:
 
 ```
-# us -> PyDECnet's MIRROR
+# us -> the Python's MIRROR
 ECHO 6 bytes: 01 48 65 6c 6c 6f  "Hello"
 
-# PyDECnet's own dnping -> our MIRROR
+# the Python's own dnping -> our MIRROR
 $ dnping 1.2
 good reply
 ```
 
-Applications written for PyDECnet run here unchanged. Objects that run as
-separate programs use the same JSON-over-pipes protocol, so PyDECnet's own
+Applications written for the Python run here unchanged. Objects that run as
+separate programs use the same JSON-over-pipes protocol, so the Python's own
 `decnet/applications/mirror.py` can be named in our configuration and will
 serve connections:
 
@@ -81,8 +83,8 @@ object --number 25 --name MIRROR --file .../decnet/applications/mirror.py
 ```
 
 Two regression tests pin the wire formats down: the point to point init
-message PyDECnet sends (`tests/test_indexed.cc`), and six NSP message types
-encoded byte for byte against PyDECnet's output for the same values
+message the Python sends (`tests/test_indexed.cc`), and six NSP message types
+encoded byte for byte against the Python's output for the same values
 (`tests/test_nsppacket.cc`).
 
 ## Building
@@ -111,7 +113,7 @@ build/release/lib/libdecnet.a  the stack as a library
 
 ## Running
 
-Configuration files use PyDECnet's syntax unchanged.
+Configuration files use the Python's syntax unchanged.
 
 ```sh
 ./build/release/bin/decnetd --log-level debug samples/endnode.conf
@@ -124,7 +126,7 @@ Configuration files use PyDECnet's syntax unchanged.
   -h, --help              print this message
 ```
 
-`samples/endnode.conf` is a Phase IV endnode. Point it at a PyDECnet node
+`samples/endnode.conf` is a Phase IV endnode. Point it at a Python node
 listening on the same port and you should see:
 
 ```
@@ -181,7 +183,7 @@ the device string is the one we bind; the host part is ignored, so a bare
 
 This is the easiest way to reach another node, and it is what the sample
 configurations use. `samples/endnode.conf` and `samples/multinet.conf` are
-both Multinet, with the matching PyDECnet configuration written out in a
+both Multinet, with the matching Python configuration written out in a
 comment so you can stand both ends up.
 
 Multinet is a point to point data link, so the circuit forms exactly one
@@ -250,7 +252,7 @@ circuit eth-0 Ethernet udp:17801:127.0.0.1:17802 --random-address
 
 `--random-address` gives the circuit a locally administered MAC, which is
 what you want when several nodes run on one host and would otherwise
-collide. PyDECnet spells this API `bridge` as well as `udp`; both are
+collide. The Python spells this API `bridge` as well as `udp`; both are
 accepted and mean the same thing.
 
 This is the one to use for testing anything that needs LAN behaviour —
@@ -424,7 +426,7 @@ Two ways to ask a running node what it is doing, and they answer from the
 same place.
 
 `NCP` over the network. Object 19 is the network management listener, so a
-management station -- pydecnet's `ncp`, or the NCP on a real VMS or RSX
+management station -- the Python's `ncp`, or the NCP on a real VMS or RSX
 node -- can read this node's database:
 
 ```
@@ -436,9 +438,9 @@ READ INFORMATION is served for every entity at all four levels of detail,
 and `LOOP NODE` loops through MIRROR.
 
 Writes are refused, and the two are refused differently because NCP prints
-the reason. SET answers "unrecognized function", which is what pydecnet
+the reason. SET answers "unrecognized function", which is what the Python
 answers -- it does not implement SET either. ZERO COUNTERS answers
-"privilege violation": pydecnet implements it and refuses it that way when
+"privilege violation": the Python implements it and refuses it that way when
 it is read-only, which is our permanent posture, because the user name,
 password and account a request carries are not authenticated.
 See [NOTDONE.md](NOTDONE.md).
@@ -524,12 +526,12 @@ anything, which is the same posture as the NICE listener above.
 Two things to know before putting this on a network. The server **listens
 on every interface**, not just the loopback, and there is **no
 authentication**: anyone who can reach the port can read the node's
-database. That is what pydecnet's monitoring does too, and it is fine on a
+database. That is what the Python's monitoring does too, and it is fine on a
 private segment and wrong on a public one. Bind it behind whatever you
 already trust, or leave the line out.
 
 HTTPS is not offered. `--https-port` is accepted and ignored so that a real
-pydecnet configuration file still loads. The pages pydecnet has that these
+a real Python configuration file still loads. The pages the Python has that these
 do not -- per-connection NSP detail, the event display, the bridge page --
 are listed in [TASKS.md](TASKS.md).
 
@@ -553,7 +555,7 @@ mk/                 build fragments
 samples/            configuration files
 ```
 
-Each module names the PyDECnet module it came from in its header comment.
+Each module names the Python module it came from in its header comment.
 Incomplete spots are marked `PORT:` with the reason; `make todo` lists them.
 
 ## Testing
@@ -566,10 +568,10 @@ which is a convincing way to debug a failure that no longer exists.
 
 Four kinds of test:
 
-Unit tests ported alongside each module. The PyDECnet test suite is the
+Unit tests ported alongside each module. The Python test suite is the
 specification here.
 
-Wire format checks against bytes a real PyDECnet node produced. A format we
+Wire format checks against bytes a real Python node produced. A format we
 only agree with ourselves about is not worth much.
 
 End to end tests that stand two nodes up in one process, joined by a real
@@ -588,8 +590,12 @@ it would happen. Both have already paid for themselves — see [BUGS.md](BUGS.md
 
 ## Licence
 
-PyDECnet is BSD 3-clause and this port carries the same terms. See
-[LICENSE](LICENSE).
+This port is copyright its author and BSD 3-clause. The Python it was
+ported from is Paul Koning's, also BSD 3-clause, and its copyright notice
+is retained in [LICENSE](LICENSE) as those terms require.
+
+Credit where it is due: the protocol work here was worked out in that
+Python first, and this port would not exist without it.
 
 "DECnet" may be a trademark. Digital and its successors have no involvement
 in this implementation.

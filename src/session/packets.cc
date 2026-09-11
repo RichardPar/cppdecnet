@@ -136,7 +136,7 @@ ConnectData ConnectData::parse_message (ByteView buf)
         ByteView b = d.raw (n);
         c.connectdata.assign (b.begin (), b.end ());
     }
-    // Anything left over is not an error in pydecnet, only a debug note.
+    // Anything left over is not an error in the Python, only a debug note.
     return c;
 }
 

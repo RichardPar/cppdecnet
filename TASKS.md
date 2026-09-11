@@ -1,7 +1,7 @@
 # What is left
 
 The remaining work, ordered so each step can be tested against a live
-PyDECnet node. [PORTING.md](PORTING.md) says why the order is what it is;
+Python node. [PORTING.md](PORTING.md) says why the order is what it is;
 this is the checklist.
 
 Two neighbours: [BUGS.md](BUGS.md) has defects rather than unwritten work,
@@ -52,7 +52,7 @@ Green is finished, yellow is working but incomplete, grey is untouched.
 - [x] `common/crc`: CRC-16, CRC-CCITT, CRC-32 as constexpr tables
 - [x] `common/json`: enough JSON for the application protocol
 - [x] `node`: the container and its main loop
-- [x] `config`: PyDECnet's configuration syntax, `@file` includes
+- [x] `config`: the Python's configuration syntax, `@file` includes
 - [x] Test harness
 
 ### Phase 1, packet framework
@@ -91,7 +91,7 @@ Green is finished, yellow is working but incomplete, grey is untouched.
 
 ### Phase 4, NSP
 - [x] `nsp/packets`: every message type, checked byte for byte against
-      PyDECnet's output for the same values
+      The Python's output for the same values
 - [x] `nsp/nsp`: link addresses, the connection state machine,
       segmentation and reassembly, retransmission with a retry limit
 - [x] Outbound flow control: segment and message modes, link service
@@ -106,7 +106,7 @@ Green is finished, yellow is working but incomplete, grey is untouched.
 - [x] `session/session`: object database, connect/accept/reject, the
       application interface
 - [x] `session/process`: objects that run as separate programs, over a
-      protocol byte-compatible with PyDECnet's
+      protocol byte-compatible with the Python's
 - [x] `mirror`: object 25, NCP LOOP NODE, working in both directions
 - [x] `object` configuration lines, which override a built-in of the same
       number or name
@@ -122,21 +122,21 @@ window of `qmax` segments applies whatever the mode. Segments arriving
 ahead of their turn are held rather than dropped.
 
 - [ ] Ask for flow control on our own inbound data, which means sending
-      link service messages as a receiver. PyDECnet asks for `SVC_NONE`
+      link service messages as a receiver. The Python asks for `SVC_NONE`
       too, so this is a gap rather than an incompatibility
 - [ ] Offer interrupt credit to the far end, so a peer that waits for it
-      is not stuck. PyDECnet has the same gap
+      is not stuck. The Python has the same gap
 - [ ] Delayed acknowledgement: the `dly` flag and the holdoff timer, which
       cut the number of bare acknowledgements on a busy link
 - [ ] Phase II connections, which have no connect acknowledgement
 
 ### Session control: the rest
-- [ ] Access control is carried but not checked; PyDECnet uses PAM
-- [ ] Run an object as a different user, as PyDECnet does with a uid and
+- [ ] Access control is carried but not checked; the Python uses PAM
+- [ ] Run an object as a different user, as the Python does with a uid and
       gid set before exec
 - [ ] Outbound connections from an application, and the `bind` request the
       API server uses
-- [x] `nml` (19) and `evl` (26), two of the three objects pydecnet enables
+- [x] `nml` (19) and `evl` (26), two of the three objects the Python enables
       by default
 - [ ] `pmr` (123), the poor man's routing relay, which is the third
 - [ ] Finish `tools/dnping`, which can now be written against session
@@ -157,7 +157,7 @@ ahead of their turn are held rather than dropped.
 - [x] DDCMP message framing: the three start bytes, the eight byte header
       with its own CRC, data and maintenance messages, the five control
       messages, and the header-CRC resynchronisation a receiver uses after
-      an error. Checked byte for byte against pydecnet's own encoder
+      an error. Checked byte for byte against the Python's own encoder
 - [x] DDCMP protocol: the startup handshake, sequence numbers,
       acknowledgement, the REP/NAK exchange, retransmission, the send
       window and maintenance mode. Transport independent, and tested by
@@ -193,9 +193,9 @@ ahead of their turn are held rather than dropped.
       listener NCP talks to. READ INFORMATION for every entity, at all four
       levels of detail, and LOOP NODE through MIRROR
 - [x] `nice_coding` parameter group and the counter types (CTR/CTM)
-- [x] SET: refused with "unrecognized function", which is what pydecnet
+- [x] SET: refused with "unrecognized function", which is what the Python
       answers. Not a gap -- upstream does not implement it either
-- [ ] ZERO COUNTERS: refused with a privilege violation. pydecnet
+- [ ] ZERO COUNTERS: refused with a privilege violation. The Python
       implements it and refuses it that way only when read-only. Wants the
       access control decision in `NOTDONE.md`, and a zeroing path through
       the layers that hold the counters
@@ -207,7 +207,7 @@ ahead of their turn are held rather than dropped.
 - [x] `http` and `html`: the monitoring pages. An index naming the node,
       and a page per NICE entity at each level of detail, served from the
       same `nice_read` the network management protocol answers
-- [ ] The pages pydecnet has that these do not: the per-connection NSP
+- [ ] The pages the Python has that these do not: the per-connection NSP
       detail, the event display, and the bridge page
 - [ ] HTTPS. The `--https-port` option is accepted and ignored
 - [ ] `apiserver`: the JSON API over a Unix socket
@@ -223,16 +223,16 @@ ahead of their turn are held rather than dropped.
 
 Small, independent, worth picking up whenever.
 
-- [ ] Run more than one node per process. PyDECnet builds one `Node` per
+- [ ] Run more than one node per process. The Python builds one `Node` per
       configuration file, which is how a whole test network fits in one
       program. `src/main/main.cc`
-- [ ] Background name resolution. PyDECnet re-resolves peer names on a
+- [ ] Background name resolution. The Python re-resolves peer names on a
       helper thread; ours resolves inline on the receive thread.
       `include/decnet/common/socket.h`
 - [ ] Configuration commands not yet claimed by a layer sit in
       `unhandled()`; each layer should claim its own as it lands
 - [ ] Restrict which packet types each circuit state accepts, the way
-      PyDECnet's `setpackets` builds a per-state sub-index. Today the
+      The Python's `setpackets` builds a per-state sub-index. Today the
       states check the type after parsing, which is equivalent but parses
       first. The router running substates (`ru4l1`, `ru4l2`, `ru3r`) belong
       here too

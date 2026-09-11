@@ -117,7 +117,7 @@ private:
     Word value_;
 };
 
-// The variants pydecnet defines, with the names it uses.
+// The variants the Python defines, with the names it uses.
 
 // DDCMP header and data block check: CRC-16, reflected, seed 0.
 using CRC16 = Crc<std::uint16_t, 0x8005, 16, 0, true, 0>;

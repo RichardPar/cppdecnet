@@ -13,7 +13,7 @@ source means "not written yet", not "broken".
 
 ### 1. An endnode originates ShortData -- checked, not a defect
 
-`EndnodeRouting::send` builds a `ShortData` where PyDECnet builds a
+`EndnodeRouting::send` builds a `ShortData` where the Python builds a
 `LongData`, on the grounds that an endnode's one circuit may be an Ethernet
 and the long header is what carries the Ethernet addresses.
 
@@ -25,7 +25,7 @@ and it is wrong. Every LAN send path goes through
 the port. The short form is an internal representation; the wire is long
 and correct.
 
-Left here rather than deleted because the divergence from PyDECnet is real,
+Left here rather than deleted because the divergence from the Python is real,
 even though the consequence claimed for it was not. Kept at number 1 so the
 numbering other documents refer to does not shift.
 
@@ -56,7 +56,7 @@ a circuit silently ignoring its peer. Worth at least logging.
 Outbound flow control is done: a peer that asks for segment or message mode
 gets it, and link service messages carry the credit. Our own connect
 message still asks for `SVC_NONE`, so a peer sends to us without credit.
-PyDECnet does the same, so this interoperates, but it means we cannot slow
+The Python does the same, so this interoperates, but it means we cannot slow
 a fast sender down. Doing it needs us to send link service messages as a
 receiver, which is the other half of the same machinery.
 
@@ -68,20 +68,20 @@ Dead code in `src/datalink/multinet.cc`. It calls the base and returns.
 
 `LanCircuit::wants_updates` returns false unless a router adjacency is up,
 so a circuit whose only neighbour is an endnode never carries a routing
-message. pydecnet has no such test: it sends to ALL_ROUTERS every `t1`
+message. The Python has no such test: it sends to ALL_ROUTERS every `t1`
 regardless (`routing.py`, `Update.dispatch`).
 
 The gate looks wrong on its own terms -- a router that has just come up and
 has not yet heard a peer stays silent, and a peer waiting to hear from it
 waits for the message being withheld.
 
-It was removed on 10-Sep-2026 to match pydecnet and put back the same day.
+It was removed on 10-Sep-2026 to match the Python and put back the same day.
 Against the real PDP-11 on the wired segment, the gated build flapped its
 adjacency and the ungated build did not bring one up at all -- five extra
 frames per ten seconds at that machine's Ethernet controller is the
 suspicion, unproven. So the change is not simply correct, and the reason it
 was attempted -- that it was the last difference between our frames and
-pydecnet's -- had already lapsed, because pydecnet flaps against BAJI too.
+The Python's -- had already lapsed, because the Python flaps against BAJI too.
 
 Retest with a second *router* on the segment rather than an endnode, where
 the traffic is wanted and the receiver is not a PDP-11.
@@ -167,7 +167,7 @@ the first lookup.
 
 `RoutingLanCircuit::handle` recorded a neighbour's address as
 `Macaddr::from_nodeid (id)`, the Phase IV derived `AA-00-04-00-xx-xx`.
-pydecnet does exactly the same -- `Adjacency.macid = Macaddr (self.nodeid)`
+The Python does exactly the same -- `Adjacency.macid = Macaddr (self.nodeid)`
 -- so this was faithful to the port's source rather than a transcription
 slip. The specification agrees with both: a Phase IV node programs its
 derived address into its card.
@@ -196,7 +196,7 @@ so every LAN adjacency was recorded against an all zeroes address the
 moment anything believed it. The datalink knew the address -- `bc.cc`
 parses it into `ParsedFrame::src` and uses it to drop our own echoed
 frames -- but `Received` had nowhere to put it, so it was dropped on the
-way up. pydecnet carries it as `work.src`; that part had not been ported.
+way up. The Python carries it as `work.src`; that part had not been ported.
 
 `Received` now carries the source address, `BcDatalink::receive_frame`
 passes it, and the LAN circuits address neighbours by it. `decode` lost the
@@ -229,20 +229,20 @@ has been heard from. Fixed 11-Sep-2026.
 ### A hello identical in every field was still rejected, for its padding
 
 An Ethernet frame shorter than 60 bytes has to be padded. We padded with
-zeros; pydecnet pads with 0x42 (`FILL = b'\x42' * 60` in `ethernet.py`).
+zeros; the Python pads with 0x42 (`FILL = b'\x42' * 60` in `ethernet.py`).
 That cannot matter, because DEC's padded format puts the payload length two
 bytes into the frame and a receiver has no business reading past it.
 
 It mattered. A PDP-11 running RSX, sent our router hello, built an
 adjacency to node **21.426** -- an address that exists nowhere on the
-network and appears nowhere in our packet. Sent pydecnet's, it built a
+network and appears nowhere in our packet. Sent the Python's, it built a
 correct one to 1.20. The two hellos were identical for all 27 payload
 bytes; the fill was the only difference. So that end reads past the length
 it is given, and what it finds there becomes part of an address.
 
-Found by A/B: pydecnet was run as the level 1 router on the same segment
+Found by A/B: the Python was run as the level 1 router on the same segment
 with the same node number and circuit, which is the one test that says
-whether a difference is ours. Then pydecnet's own `RouterHello` class was
+whether a difference is ours. Then the Python's own `RouterHello` class was
 used to generate the message offline and diff it against the captured
 bytes, which is what narrowed it to the fill.
 
@@ -262,7 +262,7 @@ that was lost. Losing it does not stop routes converging; it stops them
 converging again after a drop, which is the failure that looks like a
 network with a long memory for stale routes.
 
-pydecnet schedules the next update after a triggered one at the time
+The Python schedules the next update after a triggered one at the time
 elapsed since the last *full* update, capped at `t1`, and only a full
 update restarts the interval (`Update.dispatch`). A full update therefore
 follows a triggered one within at most another `t1`, so the sweep happens
@@ -345,7 +345,7 @@ symmetric configuration worked.
 
 UDP sockets are now bound but never connected. Sends use `sendto`,
 receives use `recvfrom` with the sender checked against the configured
-peer, as PyDECnet does. A poll error on a datagram socket is logged and
+peer, as the Python does. A poll error on a datagram socket is logged and
 ignored: a dropped packet is not a dead circuit. The same hazard was live
 in Multinet's UDP mode and is fixed there too.
 
@@ -401,12 +401,12 @@ to load.
 
 Node and circuit names were not validated. DECnet node names are at most
 six characters and must contain a letter. Accepting anything else only
-deferred the failure to the far end: PyDECnet rejected our first interop
+deferred the failure to the far end: the Python rejected our first interop
 configuration for exactly this. Porting `common.nodename` and `circname`
 promptly caught two invalid names in our own tests.
 
 The TLV tolerant path left a runt item unconsumed, tripping the enclosing
-packet's extra-data check. PyDECnet swallows it.
+packet's extra-data check. The Python swallows it.
 
 ### Layers were stopped from the wrong thread
 
@@ -490,6 +490,6 @@ corner case: the mirror's function code is zero, the first byte of every
 request it receives. Any JSON library with a C-string interface has the
 same problem; one that reports an explicit length would be fine.
 
-Where the port behaves differently from PyDECnet by choice, the reasoning
+Where the port behaves differently from the Python by choice, the reasoning
 is in [NOTDONE.md](NOTDONE.md) and repeated in a comment at the site. None
 of it is accidental.

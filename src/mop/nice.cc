@@ -30,7 +30,7 @@ namespace {
 
 constexpr const char *configurator = "CONFIGURATOR";
 
-// The functions bitmap, as a list of the bit numbers that are set.  pydecnet
+// The functions bitmap, as a list of the bit numbers that are set.  the Python
 // builds the same list by walking the seven service flags in order.
 Value functions_value (const SysId &s)
 {

@@ -78,7 +78,7 @@ void register_mop_packets ()
     idx.add (CONSOLE_COMMAND,  &ConsoleCommand::make,  "ConsoleCommand");
     idx.add (CONSOLE_RESPONSE, &ConsoleResponse::make, "ConsoleResponse");
     // PORT: the load and dump messages (codes 0 to 4, 6, 8, 10) are not
-    // defined.  pydecnet does not implement load or dump either.
+    // defined.  the Python does not implement load or dump either.
 }
 
 }   // namespace decnet::mop

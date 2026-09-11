@@ -1,6 +1,6 @@
 // tests/test_ddcmp.cc -- DDCMP message framing.
 //
-// The encoded forms are checked against bytes pydecnet's own ddcmp module
+// The encoded forms are checked against bytes the Python's own ddcmp module
 // produced for the same values, which is the practice the rest of this
 // port follows: a format we only agree with ourselves about is not worth
 // much.  The vectors were generated with:
@@ -50,9 +50,9 @@ Bytes bytes_of (const char *s)
 
 }   // namespace
 
-// ------------------------------------------------- against pydecnet
+// ------------------------------------------------- against the Python
 
-DN_TEST (ddcmp, control_messages_match_pydecnet)
+DN_TEST (ddcmp, control_messages_match_python)
 {
     DN_ASSERT_EQ (make_start ().encode (), hex ("05 06 c0 00 00 01 75 95"));
     DN_ASSERT_EQ (make_stack ().encode (), hex ("05 07 c0 00 00 01 48 55"));
@@ -64,14 +64,14 @@ DN_TEST (ddcmp, control_messages_match_pydecnet)
                   hex ("05 03 00 00 09 01 83 c5"));
 }
 
-DN_TEST (ddcmp, a_data_message_matches_pydecnet)
+DN_TEST (ddcmp, a_data_message_matches_python)
 {
     Message m = make_data (Seq (1), Seq (0), bytes_of ("hello"));
     DN_ASSERT_EQ (m.encode (),
                   hex ("81 05 00 00 01 01 12 41 68 65 6c 6c 6f d2 34"));
 }
 
-DN_TEST (ddcmp, a_maintenance_message_matches_pydecnet)
+DN_TEST (ddcmp, a_maintenance_message_matches_python)
 {
     // A maintenance message carries no sequence numbers and always says
     // "no synchronisation needed", which is why its flag byte is c0.
@@ -474,7 +474,7 @@ bool wait_until (P pred, std::chrono::milliseconds timeout
 
 }   // namespace
 
-DN_TEST (ddcmp, the_device_string_is_parsed_like_pydecnet)
+DN_TEST (ddcmp, the_device_string_is_parsed_like_python)
 {
     DdcmpDevice d = DdcmpDevice::parse ("udp:1234:localhost:5678");
     DN_ASSERT (d.mode == DdcmpDevice::Mode::udp);

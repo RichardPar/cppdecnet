@@ -1,7 +1,7 @@
 // decnet/common/element.h -- the layer object base class.
 //
 // Port of common.Element: every protocol layer object knows its parent and,
-// through it, the node it belongs to, which is how pydecnet reaches the
+// through it, the node it belongs to, which is how the Python reaches the
 // work queue, the timer wheel and the event logger from anywhere.
 
 #ifndef DECNET_COMMON_ELEMENT_H

@@ -53,7 +53,7 @@ void AckNumField::decode (Decoder &d, value_type &v)
     unsigned qual = (w >> 12) & 7;
     if (qual > 3) {
         // A reserved qualifier: skip the field rather than inventing a
-        // meaning for it, which is what pydecnet does.
+        // meaning for it, which is what the Python does.
         return;
     }
     AckNum a;
@@ -73,7 +73,7 @@ void register_nsp_packets ()
     idx.add (AckConn::flag,  &AckConn::make,  "AckConn");
 
     // A data segment's flags byte carries the begin and end of message
-    // bits, so every combination of them is the same class.  pydecnet
+    // bits, so every combination of them is the same class.  the Python
     // enumerates the four; a mask says the same thing.
     idx.add_masked (DataSeg::flag, 0x9f, &DataSeg::make, "DataSeg");
 
@@ -88,7 +88,7 @@ void register_nsp_packets ()
     idx.add (DiscConf::flag, &DiscConf::make, "DiscConf");
     idx.add (DiscInit::flag, &DiscInit::make, "DiscInit");
 
-    // PORT: a NOP control message (subtype 0) is accepted by pydecnet and
+    // PORT: a NOP control message (subtype 0) is accepted by the Python and
     // ignored.  Nothing sends one to us yet.
 }
 

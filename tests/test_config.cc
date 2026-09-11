@@ -1,4 +1,4 @@
-// Port of tests/test_config.py: reading a pydecnet configuration file.
+// Port of tests/test_config.py: reading a the Python configuration file.
 
 #include "harness.h"
 
@@ -47,7 +47,7 @@ DN_TEST (config, routing_and_node_lines)
         "routing 9.54 --type l2router\n"
         "node 9.54 SAMPLE\n"
         "node 9.55 OTHER --inbound-verification secret\n"
-        "system --ident \"Sample PyDECnet configuration\"\n");
+        "system --ident \"Sample Python configuration\"\n");
 
     DN_ASSERT (c.routing ().has_value ());
     DN_ASSERT_EQ (c.routing ()->id, Nodeid::parse ("9.54"));
@@ -57,7 +57,7 @@ DN_TEST (config, routing_and_node_lines)
     DN_ASSERT_EQ (c.nodes ()[0].name, std::string ("SAMPLE"));
     DN_ASSERT_EQ (c.nodes ()[1].inbound_verification, std::string ("secret"));
     DN_ASSERT_EQ (c.identification (),
-                  std::string ("Sample PyDECnet configuration"));
+                  std::string ("Sample Python configuration"));
 }
 
 DN_TEST (config, option_equals_form)
@@ -81,7 +81,7 @@ DN_TEST (config, unknown_commands_are_kept_not_rejected)
 DN_TEST (config, names_are_validated)
 {
     // A node name is at most six characters and must contain a letter; a
-    // real pydecnet node rejects anything else, so accepting it here would
+    // real the Python node rejects anything else, so accepting it here would
     // only defer the failure.
     DN_ASSERT_THROWS (std::runtime_error,
                       Config::from_string ("node 1.1 TOOLONGNAME\n"));

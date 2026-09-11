@@ -21,10 +21,12 @@ std::string ident ()
 
 std::string banner ()
 {
-    // The port carries the upstream attribution: the protocol work and the
-    // reference implementation this is derived from are Paul Koning's.
-    return ident () + " © 2013-" + cyear + " by " + authors
-        + "; C++ port derived from PyDECnet";
+    // This string is what the node tells other nodes about itself, so it
+    // stays short.  The copyright is the port author's; the credit is to
+    // the author of the Python this was ported from, whose own copyright
+    // and licence are in LICENSE.
+    return ident () + " © " + cyear + " by " + authors
+        + "; after Paul Koning's Python";
 }
 
 }   // namespace decnet::version

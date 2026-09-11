@@ -1,6 +1,6 @@
 // decnet/http/server.h -- the monitoring pages.
 //
-// Port of http.py and html.py.  pydecnet serves a small set of read only
+// Port of http.py and html.py.  the Python serves a small set of read only
 // pages describing what the node is doing: the layers, the circuits, the
 // adjacencies, the routing table and the counters.
 //

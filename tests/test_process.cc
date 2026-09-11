@@ -1,9 +1,9 @@
 // Objects implemented as separate processes.
 //
-// The protocol is deliberately byte-compatible with pydecnet's, so an
-// application written for pydecnet runs unchanged here.  These tests use a
-// small program written inline rather than depending on a pydecnet
-// checkout; the interop test that runs pydecnet's own
+// The protocol is deliberately byte-compatible with the Python's, so an
+// application written for the Python runs unchanged here.  These tests use a
+// small program written inline rather than depending on a the Python
+// checkout; the interop test that runs the Python's own
 // applications/mirror.py is done by hand and recorded in the README.
 
 #include "harness.h"
@@ -56,9 +56,9 @@ bool wait_until (P pred, std::chrono::milliseconds timeout
     return pred ();
 }
 
-// A mirror written the way an application for pydecnet is written: read
+// A mirror written the way an application for the Python is written: read
 // JSON objects from standard input, write them to standard output.  This
-// is the same shape as pydecnet's applications/mirror.py, deliberately.
+// is the same shape as the Python's applications/mirror.py, deliberately.
 const char *const mirror_program = R"PROG(#!/usr/bin/env python3
 import sys, json
 encode = json.JSONEncoder ().encode

@@ -170,7 +170,7 @@ bool PtpCircuit::validate (Work &w)
         return false;
     }
     // Decode once, here, so each state works with a typed packet -- which
-    // is what pydecnet's validate does before dispatching to the state.
+    // is what the Python's validate does before dispatching to the state.
     decoded_ = RoutingPacketBase::parse_frame (r->packet ());
     if (!decoded_) {
         DN_DEBUG ("undecodable routing packet on {}: {}", name_,
@@ -278,7 +278,7 @@ PtpCircuit::State PtpCircuit::ri (Work &w)
         info_.timer   = init->timer;
         info_.ntype   = init->ntype;
         // Obey the smaller of the two block sizes: some implementations
-        // send silly values, so pydecnet clamps to its own MTU too.
+        // send silly values, so the Python clamps to its own MTU too.
         info_.blksize = std::min (init->blksize, MTU);
         info_.tiver   = init->tiver;
 

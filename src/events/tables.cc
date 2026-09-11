@@ -1,7 +1,7 @@
 // The event catalogue: what each event is called, how loudly it is logged,
 // and what its parameters mean.
 //
-// This is the part of events.py that is pure data.  pydecnet expresses it
+// This is the part of events.py that is pure data.  the Python expresses it
 // as a class hierarchy because Python classes are cheap and inheritance
 // gives it the shared parameter tables for free; here the sharing is a
 // named span that several rows point at, which comes to the same thing.

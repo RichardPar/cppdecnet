@@ -7,11 +7,11 @@
 //
 // This state machine is smaller than the spec's.  The NSP spec models
 // session control as polling NSP for things it needs to hear, so it needs
-// a state for each "waiting to be polled".  Here, as in pydecnet, session
+// a state for each "waiting to be polled".  Here, as in the Python, session
 // control is told rather than polled, so the O, DN, RJ, NC, NR, DRC, CN,
 // DIC and DR states do not exist.
 //
-// Flow control here is outbound only, which is what pydecnet does too.
+// Flow control here is outbound only, which is what the Python does too.
 // Our own connect message asks for SVC_NONE, so a peer sends to us without
 // credit; what the peer asks for in its connect message governs what we
 // send, and we honour segment and message modes and the link service
@@ -118,7 +118,7 @@ public:
 
     // ------------------------------------------- the session control API
     // fcopt is the flow control this end wants for data coming to it.
-    // SVC_NONE, the default, is what pydecnet asks for.
+    // SVC_NONE, the default, is what the Python asks for.
     void accept (Bytes data = {}, std::uint8_t fcopt = SVC_NONE);
     void reject (unsigned reason = 0, Bytes data = {});
     void send_data (Bytes data);

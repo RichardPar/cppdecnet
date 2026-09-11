@@ -1,7 +1,7 @@
 # Things left undone on purpose
 
 Three lists. What will not be done at all, what is postponed and why, and
-where the port behaves differently from PyDECnet by choice.
+where the port behaves differently from the Python by choice.
 
 This is not the same as [TASKS.md](TASKS.md), which is the queue of work
 still to do, or [BUGS.md](BUGS.md), which is defects. Everything here is a
@@ -22,11 +22,11 @@ Sites in the code carry a `PORT:` comment saying what is missing there.
 
 It is a HECnet-specific map server. Upstream asks people not to run more
 instances of it without coordinating first, and it has no bearing on the
-protocol stack. Anyone who wants a map can keep running PyDECnet for it.
+protocol stack. Anyone who wants a map can keep running the Python for it.
 
 ### Objects loaded in-process
 
-PyDECnet objects declared with `--module` are Python modules imported into
+The Python objects declared with `--module` are Python modules imported into
 the daemon. The equivalent here would be a shared object with a known entry
 point, and it is not obviously worth the machinery: built-in objects are
 registered in code (MIRROR is), and anything else can be a program declared
@@ -45,7 +45,7 @@ Our connect message asks for `SVC_NONE`, so a peer sends to us without
 credit. Outbound flow control is done: a peer that asks for segment or
 message mode gets it.
 
-PyDECnet asks for `SVC_NONE` too, so this is not an incompatibility. It
+The Python asks for `SVC_NONE` too, so this is not an incompatibility. It
 does mean a fast sender cannot be throttled. Doing it needs us to send link
 service messages as a receiver, which is the other half of machinery that
 already exists.
@@ -56,7 +56,7 @@ Interrupts work in both directions, and the far end starts with permission
 to send us one. We never send a link service message granting another, so a
 peer that sends one interrupt and waits for credit will wait forever.
 
-PyDECnet has the same gap and says so: it accepts more than one inbound
+The Python has the same gap and says so: it accepts more than one inbound
 interrupt without policing credit, on the grounds that nothing it talks to
 depends on being throttled. We do the same, and for the same reason. It
 belongs with the other half of inbound flow control, above.
@@ -74,7 +74,7 @@ Phase III needs eight bit address handling throughout: answering a
 `PtpInit3` with our own, and supplying the home area on packets that arrive
 without one. Phase II additionally needs `NodeInit` and `NodeVerify`,
 routing by name rather than address, and the intercept machinery, which
-PyDECnet itself only implements in part.
+The Python itself only implements in part.
 
 Both are ported at the site in `ri` where they attach. Few people run
 either today, which is why they are behind Phase IV work rather than in
@@ -83,11 +83,11 @@ front of it.
 ### Access control is carried but not checked
 
 The request id, password and account travel in the connect message and an
-object can look at them. Nothing authenticates them. PyDECnet uses PAM for
+object can look at them. Nothing authenticates them. The Python uses PAM for
 this and refuses to start with authentication configured if the PAM module
 is missing.
 
-Related: PyDECnet can run an object as a different user, setting a uid and
+Related: the Python can run an object as a different user, setting a uid and
 gid in the child before exec. Ours runs everything as the daemon's user.
 Both belong together, and both want a decision about what the daemon's
 security posture should be rather than a quick implementation.
@@ -128,19 +128,19 @@ carrier message from another node is recognised rather than discarded, but
 nothing implements the reservation, the sequencing or the client and server
 ends.
 
-It is a state machine of its own, roughly 350 lines in PyDECnet across the
+It is a state machine of its own, roughly 350 lines in the Python across the
 client and server, and it is the one MOP function that is interactive
 rather than a request and a reply. System ID, counters and loopback are
 what maintenance tools use to see and test a node, and those are done.
 
-MOP load and dump are not implemented here either. PyDECnet does not
+MOP load and dump are not implemented here either. The Python does not
 implement them.
 
 ### DDCMP
 
 A real datalink protocol with its own framing, sequencing and
 retransmission, and the only one here that needs all three. About 1,650
-lines in PyDECnet, plus four transports: TCP, UDP, a serial port and a
+lines in the Python, plus four transports: TCP, UDP, a serial port and a
 synchronous framer.
 
 It deserves its own pass rather than being rushed in behind Multinet and
@@ -169,18 +169,18 @@ cannot transmit with a source address that is not its own.
 
 ### Per-state packet type filtering
 
-PyDECnet's `setpackets` builds a sub-index per circuit state, so a packet
+The Python's `setpackets` builds a sub-index per circuit state, so a packet
 that cannot occur in the current state is rejected before it is parsed. The
 states here check the type after parsing. The effect is the same and the
 cost is one parse of a packet that will be discarded.
 
 This is also where the router running substates (`ru4l1`, `ru4l2`, `ru3r`)
-belong. They exist in PyDECnet only to control which packet types each
+belong. They exist in the Python only to control which packet types each
 accepts, so there is nothing to port until the filtering is.
 
 ### One node per process
 
-PyDECnet builds one `Node` per configuration file and runs them all in one
+The Python builds one `Node` per configuration file and runs them all in one
 process, which is how a whole test network fits in one program. `decnetd`
 starts the first configuration file and warns about the rest.
 
@@ -190,7 +190,7 @@ design.
 
 ### Background name resolution
 
-PyDECnet re-resolves peer names on a helper thread, so a peer on a dynamic
+The Python re-resolves peer names on a helper thread, so a peer on a dynamic
 address is followed without blocking anything. Ours keeps the re-resolution
 interval but does the lookup inline on the datalink's receive thread, which
 is already allowed to block.
@@ -207,14 +207,14 @@ LOOP NODE loops through MIRROR.
 
 What is left is deliberate rather than unfinished:
 
-**SET is not implemented**, and neither is it in pydecnet: its `nml` falls
+**SET is not implemented**, and neither is it in the Python: its `nml` falls
 through to "Unsupported NICE request" and answers -1, unrecognized
 function. We answer the same. Saying "privilege violation" instead would
 imply some credential makes it work, and none does. This is not a gap
 against upstream; it is upstream's behaviour.
 
 **ZERO COUNTERS is refused** with -3, privilege violation. Here there *is*
-a small gap: pydecnet implements it, and refuses it the same way only when
+a small gap: the Python implements it, and refuses it the same way only when
 its own read-only flag is set. Ours is read-only permanently, because
 zeroing counters is a write and the request's user name, password and
 account are carried but not authenticated -- the decision the access
@@ -237,7 +237,7 @@ generally: behind the Phase IV work because few people run it.
 ### The monitoring pages are a subset
 
 The pages serve an index and one page per NICE entity, at each level of
-detail. pydecnet's `http.py` and `html.py` also offer a per-connection NSP
+detail. The Python's `http.py` and `html.py` also offer a per-connection NSP
 view, an event display and a bridge page, and none of those is here.
 
 They are served from the same `nice_read` the network management protocol
@@ -247,7 +247,7 @@ drift. It also means the pages can never show something NCP cannot read,
 which is a constraint worth having rather than a limitation to remove.
 
 HTTPS is not offered. `--https-port` is accepted and ignored so that a real
-pydecnet configuration file still loads.
+a real Python configuration file still loads.
 
 ---
 
@@ -268,7 +268,7 @@ would rather not have an exception thrown at it gets a usable answer.
 
 ### The NSP flags byte is carried raw
 
-PyDECnet describes the first byte of an NSP packet as one bitmap whose
+The Python describes the first byte of an NSP packet as one bitmap whose
 fields overlap: `subtype` is bits 4 to 6, while `int_ls` is bit 4, `bom`
 bit 5 and `eom` bit 6, and which reading applies depends on the message
 type. That works in Python because each packet class supplies only the
@@ -277,11 +277,11 @@ attributes that mean something for it.
 In a struct with every field present at once, encoding would have to
 reconcile two names for one bit. The byte is stored raw with an accessor
 for each reading, so the two cannot disagree. The wire forms are identical,
-and a regression test checks that against PyDECnet's output.
+and a regression test checks that against the Python's output.
 
 ### A LAN neighbour is addressed by the source it sent from
 
-pydecnet addresses a LAN neighbour by the Phase IV derived address,
+The Python addresses a LAN neighbour by the Phase IV derived address,
 `Adjacency.macid = Macaddr (self.nodeid)`. We use the source address of the
 frame the neighbour actually sent, and fall back to the derived address only
 when nothing has been heard from a destination and a node id is all there is.
@@ -290,13 +290,13 @@ This is a deliberate departure from "follow the Python, because the Python
 interoperates". Here it demonstrably does not: a real PDP-11 on the test
 segment announces a derived id of `aa-00-04-00-13-04` while transmitting
 from `08-00-2b-11-22-33`, and answers a loopback probe on the second
-address and not at all on the first. pydecnet would send it traffic it
+address and not at all on the first. The Python would send it traffic it
 cannot receive. See `BUGS.md` for the measurement.
 
 ### The level 2 attached flag follows the spec, not the better definition
 
 An area router is "attached" when it can reach an area other than its own.
-PyDECnet's own comment points out this is not the best definition: it makes
+The Python's own comment points out this is not the best definition: it makes
 every area router in an area look attached as soon as the area is attached
 at all, so out of area traffic can be drawn to a router that has no out of
 area link and has to pass it on again.
@@ -317,7 +317,7 @@ reports an explicit length would be fine, and would be worth switching to.
 
 ### Packet classes register through an explicit function
 
-PyDECnet registers each packet class in its family index when the class is
+The Python registers each packet class in its family index when the class is
 created. Doing the same with static initialisers does not work inside a
 static library: the linker pulls in an archive member only when something
 already needed references it.
@@ -342,8 +342,8 @@ months at a time.
 
 An object declared with `--file` gets a new process for each connection.
 The protocol supports several connections on one process, keyed by handle,
-and PyDECnet's own applications exit when their connection closes because
-that is how PyDECnet drives them too.
+and the Python's own applications exit when their connection closes because
+that is how the Python drives them too.
 
-Matching that behaviour is what lets PyDECnet's applications run here
+Matching that behaviour is what lets the Python's applications run here
 unchanged, which was the point.

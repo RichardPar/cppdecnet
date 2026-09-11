@@ -4,7 +4,7 @@
 // action returns the next state, or None to stay put.  The C++ equivalent
 // is a pointer to member function paired with its name, so that ported
 // state functions read almost like their originals and trace output still
-// names states the way pydecnet's does:
+// names states the way the Python's does:
 //
 //     State Circuit::ds (Work &w) {
 //         if (is<DlUp> (w)) return DN_STATE (Circuit, ri);

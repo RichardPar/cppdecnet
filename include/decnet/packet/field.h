@@ -1,6 +1,6 @@
 // decnet/packet/field.h -- field codecs.
 //
-// Port of the field classes in packet.py.  A pydecnet layout row is
+// Port of the field classes in packet.py.  A the Python layout row is
 //
 //     ( packet.B, "srcnode", 2 )
 //
@@ -96,7 +96,7 @@ struct BV {
             throw FieldOverflow ("value too long for BV<"
                                  + std::to_string (N) + ">");
         e.raw (ByteView (v.data (), v.size ()));
-        e.zeros (N - v.size ());     // BV pads on the right, as pydecnet does
+        e.zeros (N - v.size ());     // BV pads on the right, as the Python does
     }
 
     static void decode (Decoder &d, value_type &v)
@@ -224,7 +224,7 @@ struct Payload {
 // ---------------------------------------------------- self-coding types
 //
 // Nodeid, Macaddr and Version know their own wire format, so they act as
-// their own codec.  This matches pydecnet, where they subclass Field.
+// their own codec.  This matches the Python, where they subclass Field.
 struct NodeidField {
     using value_type = Nodeid;
     static void encode (Encoder &e, const value_type &v) { e.uint (v.value (), 2); }
@@ -327,7 +327,7 @@ constexpr auto reserved (const char *name = "reserved")
 template <typename... F>
 constexpr auto fields (F... f) { return std::tuple<F...> (f...); }
 
-// Layout inheritance: pydecnet subclasses append their _layout to the base
+// Layout inheritance: the Python subclasses append their _layout to the base
 // class's.  extend (Base::layout, ...) does the same thing here.
 template <typename... B, typename... F>
 constexpr auto extend (const std::tuple<B...> &base, F... f)

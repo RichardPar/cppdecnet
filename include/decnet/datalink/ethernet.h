@@ -1,6 +1,6 @@
 // decnet/datalink/ethernet.h -- Ethernet circuits.
 //
-// Port of ethernet.py.  Three ways to reach a LAN, matching pydecnet's
+// Port of ethernet.py.  Three ways to reach a LAN, matching the Python's
 // device syntax:
 //
 //   udp:<localport>:<host>:<remoteport>   Ethernet frames in UDP datagrams,

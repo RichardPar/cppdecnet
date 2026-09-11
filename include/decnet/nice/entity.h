@@ -6,7 +6,7 @@
 // one byte kind followed by a body whose shape depends on the kind, and
 // every one of them formats as "Label = value".
 //
-// pydecnet gives each kind a class and indexes the classes on the code
+// the Python gives each kind a class and indexes the classes on the code
 // byte, generating a class on the fly for a code it has not seen.  A kind
 // enumeration and a body that is either a string, a node or an area number
 // says the same thing with less machinery, and an unrecognised code needs

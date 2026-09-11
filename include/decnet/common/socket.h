@@ -4,7 +4,7 @@
 // port, create connected, listening and UDP sockets, and check whether an
 // inbound connection came from the address we expect.
 //
-// PORT: pydecnet resolves names on a background thread and re-resolves
+// PORT: the Python resolves names on a background thread and re-resolves
 // periodically, so a peer on a dynamic address is followed.  The interval
 // is kept here, but the lookup runs inline on the datalink's receive
 // thread, which is already allowed to block.  A background resolver only
@@ -172,7 +172,7 @@ Socket create_connection (HostAddress &dest, const SourceAddress &src);
 // POLLERR.  A datalink that treated that as fatal would die because a
 // datagram bounced, which is precisely what a datagram service does not
 // promise.  So we bind only, send with send_datagram and check the sender
-// on receive, as pydecnet does with sendto and recvfrom.
+// on receive, as the Python does with sendto and recvfrom.
 Socket create_udp (HostAddress &dest, const SourceAddress &src);
 
 // Send one datagram.  Returns false on error, which callers generally

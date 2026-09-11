@@ -1,7 +1,7 @@
 // Tests for the BM and TLV field groups (packet.BM, packet.TLV).
 //
 // The TLV cases are modelled on MOP's System ID message, which is the
-// richest user of the encoding in pydecnet: two byte tags, one byte
+// richest user of the encoding in the Python: two byte tags, one byte
 // lengths, unknown tags accepted, and one item whose value is a bitmap.
 
 #include "harness.h"
@@ -217,7 +217,7 @@ DN_TEST (tlv, item_not_fully_parsed_is_rejected_when_strict)
 
 DN_TEST (tlv, tolerant_ignores_a_truncated_trailing_item)
 {
-    // A tolerant packet stops at a runt item instead of failing; pydecnet
+    // A tolerant packet stops at a runt item instead of failing; the Python
     // marks MOP System ID tolerant because real implementations send these.
     Bytes wire = bytes_of ({ 0, 0, 1, 0, 3, 4, 0, 0, 7 });
     SysId t = SysId::parse (wire);

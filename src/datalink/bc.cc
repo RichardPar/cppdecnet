@@ -35,19 +35,19 @@ Bytes build_frame (Macaddr dest, Macaddr src, std::uint16_t proto,
     }
     f.insert (f.end (), payload.begin (), payload.end ());
     // Ethernet will not carry a frame shorter than 60 bytes.  Fill with
-    // 0x42 rather than zero, which is what pydecnet does (`FILL = b'\x42'
+    // 0x42 rather than zero, which is what the Python does (`FILL = b'\x42'
     // * 60` in ethernet.py).
     //
     // This looks like it cannot matter, since the DEC padded format gives
     // the payload length two bytes into the frame and a receiver has no
     // business reading past it.  On 10-Sep-2026 it mattered. Against a
-    // PDP-11 running RSX, our hello and pydecnet's were identical for
+    // PDP-11 running RSX, our hello and the Python's were identical for
     // every one of the 27 payload bytes and differed only in this fill.
-    // pydecnet's was accepted and ours produced an adjacency to a node
+    // the Python's was accepted and ours produced an adjacency to a node
     // that does not exist -- the PDP recorded its designated router as
     // 21.426, from bytes we never sent. So something on that end reads
     // beyond the length it was given, and the fill is what it finds.
-    // Matching pydecnet costs nothing and is what interoperates.
+    // Matching the Python costs nothing and is what interoperates.
     if (f.size () < ETH_MIN_FRAME) f.resize (ETH_MIN_FRAME, 0x42);
     return f;
 }
@@ -144,7 +144,7 @@ namespace {
 Macaddr random_macaddr ()
 {
     // A locally administered unicast address: bit 0 of the first byte
-    // clear (individual), bit 1 set (local).  pydecnet does the same, so
+    // clear (individual), bit 1 set (local).  the Python does the same, so
     // that several nodes sharing one host do not collide.
     static thread_local std::mt19937_64 gen { std::random_device {} () };
     std::uint64_t r = gen ();

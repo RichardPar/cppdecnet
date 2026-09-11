@@ -398,7 +398,7 @@ DN_TEST (nml, set_is_unrecognized_and_zero_is_a_privilege_violation)
     // The two writes are refused differently, and the difference is not
     // cosmetic: NCP prints the reason.
     //
-    // SET is not implemented at all, here or in pydecnet, whose nml falls
+    // SET is not implemented at all, here or in the Python, whose nml falls
     // through to "Unsupported NICE request" and answers -1.  Saying
     // "privilege violation" would suggest some credential would make it
     // work, and none would.
@@ -411,7 +411,7 @@ DN_TEST (nml, set_is_unrecognized_and_zero_is_a_privilege_violation)
     DN_ASSERT_EQ (NiceReply::parse_header (ncp->at (0)).retcode,
                   rc_unrecognized_function);
 
-    // ZERO is a different case: pydecnet implements it and refuses it with
+    // ZERO is a different case: the Python implements it and refuses it with
     // -3 when its read-only flag is set, which is our permanent posture
     // until the access control question is settled.
 

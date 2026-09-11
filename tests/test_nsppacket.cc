@@ -274,9 +274,9 @@ DN_TEST (nsppkt, version_and_phase_mapping)
     DN_ASSERT_EQ (phase_of_version (VER_41), 4u);
 }
 
-DN_TEST (nsppkt, wire_forms_match_pydecnet_byte_for_byte)
+DN_TEST (nsppkt, wire_forms_match_python_byte_for_byte)
 {
-    // Each expected value here was produced by pydecnet V1.1.1 building the
+    // Each expected value here was produced by the Python V1.1.1 building the
     // same message.  A format this port agreed with only itself would be
     // worth very little.
     struct Case { const char *what; Bytes ours; Bytes theirs; };

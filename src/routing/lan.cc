@@ -120,7 +120,7 @@ bool LanCircuit::send_to (ShortData &pkt, const Adjacency &adj)
     // answers on 08-00-2b-11-22-33, so forwarding to the derived address
     // loses every packet while the adjacency stays up.  The derived address
     // is the fallback for a neighbour we have somehow not heard from, which
-    // is all pydecnet ever uses (`Adjacency.macid`).
+    // is all the Python ever uses (`Adjacency.macid`).
     auto it = adjacencies_.find (adj.nodeid ().value ());
     Macaddr mac = adj.macid ();
     if (it != adjacencies_.end () && it->second.macaddr != Macaddr {})
@@ -139,7 +139,7 @@ bool LanCircuit::wants_updates (unsigned level) const
     // Send only if somebody on this LAN would use it: any router for
     // level 1, an area router for level 2.
     //
-    // pydecnet has no such test -- it sends to ALL_ROUTERS every t1
+    // the Python has no such test -- it sends to ALL_ROUTERS every t1
     // regardless (`routing.py`, Update.dispatch) -- and this was changed to
     // match it on 10-Sep-2026. That made things worse against the real
     // PDP-11 on the wired segment: with the gate the adjacency flapped,
@@ -206,7 +206,7 @@ void LanCircuit::adjacency_down (std::uint16_t key)
 void LanCircuit::send_to_mac (ShortData &pkt, Macaddr nexthop)
 {
     // A LAN carries the long header, which is what holds the Ethernet
-    // addresses.  pydecnet converts here for the same reason.
+    // addresses.  the Python converts here for the same reason.
     LongData ld;
     ld.rqr     = pkt.rqr;
     ld.rts     = pkt.rts;
@@ -251,7 +251,7 @@ void EndnodeLanCircuit::handle (RoutingPacketBase &pkt, Macaddr src)
     // Address a neighbour by the source of the frame it sent, not by the
     // address derived from its node id.  The specification says the two are
     // the same -- a Phase IV node programs AA-00-04-00-xx-xx into its card
-    // -- and pydecnet relies on that (`Adjacency.macid = Macaddr (nodeid)`).
+    // -- and the Python relies on that (`Adjacency.macid = Macaddr (nodeid)`).
     // A real PDP-11, BAJI on the test segment, does not: it announces
     // id aa-00-04-00-13-04 while transmitting from 08-00-2b-11-22-33, and a
     // loopback probe gets no answer at all on the derived address.  Since
@@ -344,7 +344,7 @@ bool EndnodeLanCircuit::send (ShortData &pkt, bool tryhard)
     // is no source address to prefer.  A neighbour that does not listen on
     // its derived address is unreachable this way until it sends us
     // something and the cache above picks up where it really lives.
-    // pydecnet has the same fallback.
+    // the Python has the same fallback.
     send_to_mac (pkt, Macaddr::from_nodeid (pkt.dstnode));
     return true;
 }

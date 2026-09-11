@@ -5,7 +5,7 @@
 // blocking I/O, and turns everything that thread sees into work items so
 // the states run on the node thread.
 //
-// States, with pydecnet's labels:
+// States, with the Python's labels:
 //
 //   s0           "Halted"        a Start item connects and starts the thread
 //   connecting   "Connecting"    waiting for the thread to report Connected
@@ -84,7 +84,7 @@ public:
     bool is_up () const noexcept { return is_up_; }
 
 protected:
-    // Report to the port owner.  Both are idempotent, as in pydecnet.
+    // Report to the port owner.  Both are idempotent, as in the Python.
     void report_up ();
     void report_down ();
 

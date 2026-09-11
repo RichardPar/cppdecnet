@@ -97,7 +97,7 @@ public:
 
 // -------------------------------------------------------------- counters
 
-// The subset of the architected counters pydecnet keeps for a point to
+// The subset of the architected counters the Python keeps for a point to
 // point circuit.
 struct PtpCounters {
     std::uint64_t bytes_sent = 0, pkts_sent = 0;

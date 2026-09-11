@@ -27,7 +27,7 @@ using nice::Value;
 
 namespace {
 
-// Add the traffic counters a datalink keeps.  pydecnet's counters.copy
+// Add the traffic counters a datalink keeps.  the Python's counters.copy
 // walks the counter object and copies whatever it holds; ours are a fixed
 // struct, so this is the same list written out.
 void copy_counters (const PtpCounters &c, NiceReply &r)

@@ -62,7 +62,7 @@ EthernetDevice EthernetDevice::parse (const std::string &device)
 
     if (api == "udp" || api == "bridge") {
         // udp:<localport>:<host>:<remoteport>.  SIMH calls this "udp",
-        // pydecnet also accepts "bridge"; they mean the same thing.
+        // the Python also accepts "bridge"; they mean the same thing.
         if (parts.size () != 4)
             throw std::invalid_argument ("Ethernet " + api
                                          + " needs localport:host:remoteport in "
@@ -142,7 +142,7 @@ void Ethernet::close ()
 
 void Ethernet::run ()
 {
-    // Name the thread node.circuit, as pydecnet does, so two nodes in one
+    // Name the thread node.circuit, as the Python does, so two nodes in one
     // process can be told apart in the log.
     logging::set_thread_name ((node () ? node ()->name () + "." : "") + name_);
     DN_TRACE ("Ethernet receive thread started for {}", name_);
@@ -401,7 +401,7 @@ void BridgeEthernet::receive_loop ()
         // Anything shorter than a header cannot be a frame.
         if (n <= static_cast<ssize_t> (ETH_HDR_LEN)) continue;
         // A source routed frame is not something DECnet uses; drop it, as
-        // pydecnet does with the same check on the source address.
+        // the Python does with the same check on the source address.
         if (buf[6] & 1) continue;
         receive_frame (ByteView (buf, static_cast<std::size_t> (n)));
     }

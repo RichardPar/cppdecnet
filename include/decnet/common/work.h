@@ -1,6 +1,6 @@
 // decnet/common/work.h -- work items and the node work queue.
 //
-// pydecnet's concurrency model: one thread per node pulling Work objects
+// the Python's concurrency model: one thread per node pulling Work objects
 // off a queue and dispatching them to their owner, with helper threads
 // (datalink receive, HTTP, timers) doing blocking I/O and posting work
 // back.  It ports directly, and it is what makes the single-threaded
@@ -64,7 +64,7 @@ public:
 
     // On a broadcast medium the frame's source address matters to the layer
     // above: it is the address that neighbour demonstrably receives on,
-    // which is not always the one derived from its node id.  pydecnet
+    // which is not always the one derived from its node id.  the Python
     // carries the same thing as work.src.  Left empty by a datalink that
     // has no such notion, a point to point circuit being the obvious one.
     Received (Element *owner, Bytes packet, Macaddr src) noexcept

@@ -94,7 +94,7 @@ struct NodePair {
 
 DN_TEST (routing, endnode_needs_exactly_one_circuit)
 {
-    // The architecture allows an endnode one circuit, and pydecnet enforces
+    // The architecture allows an endnode one circuit, and the Python enforces
     // it at startup rather than misbehaving later.
     Config none = Config::from_string (
         "routing 1.1 --type endnode\nnode 1.1 SOLO\n");

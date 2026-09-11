@@ -47,7 +47,7 @@ using EventSet = std::set<EventId>;
 
 // Parse an event list: "3.1,4.1-12,5.2,4,7" or "*.*".  This accepts what
 // the Network Management specification calls an event-list, plus the
-// extension pydecnet allows of naming several classes in one list.  Throws
+// extension the Python allows of naming several classes in one list.  Throws
 // std::invalid_argument on anything else.
 EventSet parse_events (const std::string &s);
 

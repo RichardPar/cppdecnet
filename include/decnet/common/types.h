@@ -1,6 +1,6 @@
 // decnet/common/types.h -- the small value types shared by every layer.
 //
-// Port of the corresponding classes in pydecnet's decnet/common.py.  In
+// Port of the corresponding classes in the Python's decnet/common.py.  In
 // Python these all subclass Field so they can appear directly in a packet
 // layout; here they instead satisfy the Codec concept in
 // decnet/packet/field.h, which the layout machinery picks up by ADL-free
@@ -18,7 +18,7 @@
 
 namespace decnet {
 
-// A packet under construction or being parsed.  pydecnet passes bytes and
+// A packet under construction or being parsed.  the Python passes bytes and
 // memoryview objects around; we use a vector for owned data and a span for
 // borrowed slices, which keeps the decoders allocation free.
 using Bytes     = std::vector<std::uint8_t>;
@@ -103,7 +103,7 @@ struct Version {
     friend bool operator== (Version, Version) noexcept = default;
 };
 
-// The version numbers pydecnet reports; kept here so every layer agrees.
+// The version numbers the Python reports; kept here so every layer agrees.
 inline constexpr Version tiver_ph2 { 3, 1, 0 };
 inline constexpr Version tiver_ph3 { 1, 3, 0 };
 inline constexpr Version tiver_ph4 { 2, 0, 0 };
@@ -115,7 +115,7 @@ inline constexpr Version nspver_ph4 { 4, 1, 0 };
 
 // Validate and canonicalise a node name: alphanumeric, at least one letter,
 // at most six characters, upper cased.  Port of common.nodename.  A real
-// pydecnet node rejects a longer name at config read-in, so accepting one
+// the Python node rejects a longer name at config read-in, so accepting one
 // here would only defer the failure to the far end.
 std::string nodename (std::string_view s);
 

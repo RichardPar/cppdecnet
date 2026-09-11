@@ -74,7 +74,7 @@ void SysIdHandler::send_id (Macaddr dest, std::uint16_t receipt)
     s.hwaddr = Bytes (b.begin (), b.end ());
 
     // Device 9 is PCL-11: a real code, but obviously not an Ethernet
-    // controller, which is the point.  pydecnet picks it for the same
+    // controller, which is the point.  the Python picks it for the same
     // reason.
     s.device    = 9;
     s.datalink  = 1;                 // Ethernet

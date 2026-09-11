@@ -121,7 +121,7 @@ public:
         case fn_read: read (req); return;
         case fn_test: loop (req); return;
         case fn_set:
-            // Not implemented, and pydecnet does not implement it either:
+            // Not implemented, and the Python does not implement it either:
             // its nml falls through to "Unsupported NICE request" and
             // answers -1.  Match that rather than claiming a privilege
             // problem, because the two make NCP print different things and
@@ -132,7 +132,7 @@ public:
         case fn_zero:
             // Zeroing counters is a write, and refusing a write for want
             // of authentication is exactly a privilege violation.  This is
-            // what pydecnet answers when its own read-only flag is set.
+            // what the Python answers when its own read-only flag is set.
             // See NOTDONE.md: the credentials a request carries are not
             // authenticated, so nothing here may act on them.
             send (NiceReply::error (rc_privilege_violation));
@@ -291,7 +291,7 @@ private:
             return;
         }
 
-        // Argument validation, in pydecnet's order so the same bad request
+        // Argument validation, in the Python's order so the same bad request
         // gets the same complaint.
         std::uint8_t fill = 0x55;
         unsigned badarg = 0;

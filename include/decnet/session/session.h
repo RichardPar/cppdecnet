@@ -7,8 +7,8 @@
 //
 // PORT: access control is parsed but not enforced -- the request id,
 // password and account travel, and an object may look at them, but nothing
-// authenticates them. pydecnet uses PAM for that. Objects implemented as
-// separate processes (pydecnet runs them over a JSON protocol on a pipe)
+// authenticates them. the Python uses PAM for that. Objects implemented as
+// separate processes (the Python runs them over a JSON protocol on a pipe)
 // are not here either; see TASKS.md, where keeping that protocol
 // byte-compatible is called out as worth doing.
 

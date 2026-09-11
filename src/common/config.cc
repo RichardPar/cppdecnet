@@ -64,7 +64,7 @@ std::vector<std::string> split_config_line (const std::string &line)
             continue;
         }
         if (c == '"' || c == '\'') { quote = c; in_word = true; continue; }
-        // A '#' outside quotes starts a comment, as in pydecnet's files.
+        // A '#' outside quotes starts a comment, as in the Python's files.
         if (c == '#') break;
         if (c == ' ' || c == '\t') {
             if (in_word) { words.push_back (cur); cur.clear (); in_word = false; }
@@ -184,7 +184,7 @@ void Config::apply (ConfigLine line)
     }
 
     if (line.command == "http") {
-        // pydecnet's http command carries both ports; https is not offered
+        // the Python's http command carries both ports; https is not offered
         // here, so it is accepted and ignored rather than rejected, which
         // keeps a real configuration file loading.
         if (has (line, "http-port"))

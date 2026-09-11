@@ -96,7 +96,7 @@ DN_TEST (rpacket, ptp_init_phase4)
     p.timer   = 60;
 
     Bytes wire = p.encode ();
-    // The exact bytes a pydecnet endnode sends.
+    // The exact bytes a the Python endnode sends.
     DN_ASSERT_EQ (wire, bytes_of ({ 0x01, 0x01, 0x04, 0x03, 0x40, 0x02,
                                     0x02, 0x00, 0x00, 0x3c, 0x00, 0x00 }));
 

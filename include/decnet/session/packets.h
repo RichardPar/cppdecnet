@@ -53,7 +53,7 @@ struct EndUser {
     { EndUser e; e.fmt = by_name; e.name = std::move (n); return e; }
 
     // A format 0 end user must have a non-zero number -- zero is not an
-    // object number -- and a format 1 must have a name.  pydecnet rejects
+    // object number -- and a format 1 must have a name.  the Python rejects
     // the invalid combinations, so a message built with one will be
     // refused by a real node.
     bool valid () const noexcept;

@@ -71,7 +71,7 @@ struct PtpInit : RoutingBase {
 };
 DN_REGISTER_NESTED_MASKED (RoutingBase, PtpInit, 0x01, 0x8f);
 
-// The fields PtpInit34 shares, spelled once.  In pydecnet these come from
+// The fields PtpInit34 shares, spelled once.  In the Python these come from
 // the CtlHdr and PtpInit34 layouts that both phases inherit.
 #define PTP_INIT_COMMON(Cls)                                                  \
     bm<Cls> (bmf (&Cls::control,  "control",  0, 1),                          \
@@ -220,9 +220,9 @@ DN_TEST (indexed, empty_buffer_is_a_decode_error_not_a_crash)
                == nullptr);
 }
 
-DN_TEST (indexed, decodes_a_real_pydecnet_init_message)
+DN_TEST (indexed, decodes_a_real_python_init_message)
 {
-    // Captured from a live pydecnet V1.1.1 node (configured as node 1.1,
+    // Captured from a live the Python V1.1.1 node (configured as node 1.1,
     // endnode) over a Multinet TCP circuit.  A wire form produced by the
     // implementation we have to interoperate with is worth more than any
     // number of packets this port made up for itself.
@@ -244,7 +244,7 @@ DN_TEST (indexed, decodes_a_real_pydecnet_init_message)
     DN_ASSERT_EQ (init->timer, 60);                     // hello timer
     DN_ASSERT (init->reserved.empty ());
 
-    // And it re-encodes to exactly the bytes pydecnet sent.
+    // And it re-encodes to exactly the bytes the Python sent.
     DN_ASSERT_EQ (p->encode_packet (), wire);
 }
 

@@ -115,7 +115,7 @@ bool ProcessApplication::spawn ()
     ::fcntl (exec_pipe[1], F_SETFD, FD_CLOEXEC);
 
     // Build the argument list.  A Python file is run under an interpreter,
-    // as pydecnet does, so that a program does not have to be executable
+    // as the Python does, so that a program does not have to be executable
     // or carry a hash-bang line.
     std::vector<std::string> argv;
     if (program_.size () > 3

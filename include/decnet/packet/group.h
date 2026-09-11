@@ -1,6 +1,6 @@
 // decnet/packet/group.h -- field groups: BM and TLV.
 //
-// Port of packet.BM and packet.TLV, which pydecnet calls FieldGroups
+// Port of packet.BM and packet.TLV, which the Python calls FieldGroups
 // because one layout row produces several named attributes.  A plain
 // FieldSpec binds one codec to one member; these bind one codec to several,
 // so they carry their own tuple of sub-entries.
@@ -182,7 +182,7 @@ constexpr auto tlvf (std::optional<Member> Packet::*m, const char *name)
 }
 
 // A TLV item whose value is a bitmap group rather than a single field --
-// MOP's System ID "services" item, for example.  As in pydecnet, a group
+// MOP's System ID "services" item, for example.  As in the Python, a group
 // item has no presence flag and is always emitted.
 template <unsigned Tag, typename Group>
 struct TlvGroupEntry {

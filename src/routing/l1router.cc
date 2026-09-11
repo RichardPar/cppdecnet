@@ -466,7 +466,7 @@ void L2Router::compute_areas (unsigned first, unsigned last)
     // Re-derive the attached flag: can we reach any area other than our
     // own?
     //
-    // This is the DNA Routing 2.0.0 definition.  pydecnet notes it is not
+    // This is the DNA Routing 2.0.0 definition.  the Python notes it is not
     // the best one: it makes every area router look attached as soon as
     // the area is attached at all, so out of area traffic can be drawn to
     // a router with no out of area link, which then has to pass it on.
@@ -612,7 +612,7 @@ void Update::send_now ()
     // this used to do.  The sweep is what recovers from a lost triggered
     // update, so losing it is not harmless.
     //
-    // pydecnet schedules the next one at the time elapsed since the last
+    // the Python schedules the next one at the time elapsed since the last
     // full update, capped at t1 (Update.dispatch).  The effect is that a
     // full update follows a triggered one within at most another t1, so
     // the sweep happens every t1 to 2*t1 however busy the circuit is.

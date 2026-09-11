@@ -13,7 +13,7 @@
 // adds a two byte bitmap of qualifiers before the value, saying which
 // specific errors contributed to the count.
 //
-// pydecnet drives decoding from a per-message table of parameter
+// the Python drives decoding from a per-message table of parameter
 // definitions.  In a response -- which is what an event record is -- it
 // does not have to: every value says what type it is.  So decoding here
 // needs no table at all, and the definitions are used only for display, to
@@ -59,7 +59,7 @@ struct Param {
 
 // How a parameter is displayed when the type code alone does not say.  A
 // node address is a two byte number on the wire and "1.2" on the screen; a
-// version is three numbers joined by dots rather than by spaces.  pydecnet
+// version is three numbers joined by dots rather than by spaces.  the Python
 // expresses this by subclassing the data type (DUNode, CMNode, CMVersion)
 // and overriding format; here it is a property of the parameter, which is
 // the only place that knows.
@@ -94,7 +94,7 @@ public:
     bool empty () const noexcept { return params_.empty (); }
     std::size_t size () const noexcept { return params_.size (); }
 
-    // Iteration is in the order pydecnet formats in: by number, with the
+    // Iteration is in the order the Python formats in: by number, with the
     // counters after the plain parameters because of their bit 15.
     auto begin () const noexcept { return params_.begin (); }
     auto end   () const noexcept { return params_.end (); }
@@ -112,7 +112,7 @@ public:
 
 private:
     // Keyed by number with bit 15 set for counters, which is both how the
-    // wire encodes it and the order pydecnet displays in.
+    // wire encodes it and the order the Python displays in.
     std::map<std::uint16_t, Param> params_;
 };
 

@@ -390,7 +390,7 @@ struct EndnodeHello : IndexedBody<EndnodeHello, RoutingPacketBase> {
 // then a one's complement checksum word.  Its body is not a fixed list of
 // fields, so unlike every other packet here these classes do their own
 // encoding rather than describing a layout -- which is what RoutingMessage
-// does in pydecnet too.
+// does in the Python too.
 //
 // The interesting part is how the class is chosen.  Code point 0x07 is
 // *either* a Phase III routing message or a Phase IV level 1 one, and

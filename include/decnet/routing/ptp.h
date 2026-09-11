@@ -2,7 +2,7 @@
 //
 // Port of route_ptp.PtpCircuit: the routing sublayer for a non-Ethernet
 // circuit.  The state machine is the one in the Phase IV routing spec,
-// with the three deviations pydecnet documents:
+// with the three deviations the Python documents:
 //
 //  1. Circuit up and down notification is synchronous, so the states that
 //     exist only to deliver those notifications are omitted.
@@ -13,7 +13,7 @@
 //  3. Multinet in UDP mode cannot report a remote restart, so the port
 //     says so through start_works().
 //
-// States, with pydecnet's labels:
+// States, with the Python's labels:
 //
 //   ha  "Halted"          -- a Start item opens the datalink
 //   ds  "Datalink started"-- waiting for the datalink to come up
@@ -22,7 +22,7 @@
 //   ru  "Running"         -- the adjacency is up; hellos flow
 //
 // PORT: Phase II neighbours (Node Init/Verify, the intercept machinery and
-// the ru2 state) are not ported.  Nor are the router substates: pydecnet
+// the ru2 state) are not ported.  Nor are the router substates: the Python
 // splits Running into ru4l2/ru4l1/ru4e/ru3r/ru3e purely to control which
 // packet types each accepts, which only matters once this node can be a
 // router.  One running state covers the endnode case.
@@ -106,7 +106,7 @@ public:
     bool running () const noexcept;
 
     // The NICE substate for the circuit's current state, or -1 when there
-    // is none.  pydecnet attaches these to the state functions with
+    // is none.  the Python attaches these to the state functions with
     // @setcode: ha and ds are "Synchronizing", ri and rv are "Starting",
     // and ru -- Running -- has no substate at all, which is what tells a
     // circuit read that there is a neighbour worth naming.

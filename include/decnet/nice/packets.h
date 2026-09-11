@@ -158,7 +158,7 @@ struct ReqEntity {
 // ----------------------------------------------------------- NiceRequest
 
 // A decoded request.  One class rather than the class-per-function tree
-// pydecnet builds, because the functions share nearly all of their fields
+// the Python builds, because the functions share nearly all of their fields
 // and the ones they do not are cheap to carry.
 class NiceRequest {
 public:

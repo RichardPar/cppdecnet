@@ -1,7 +1,7 @@
 // src/nice/nicedefs.cc -- what each NICE parameter means.
 //
 // Port of the parameter tables in nicepackets.py: the _layout of each reply
-// class, plus the counter tables from nice_coding.py.  pydecnet uses these
+// class, plus the counter tables from nice_coding.py.  the Python uses these
 // both to decode a request (where the type code is missing) and to format a
 // reply; here decoding never needs them -- a reply is self describing -- so
 // they exist for display, and for the reply builders to know which number
@@ -316,7 +316,7 @@ constexpr ParamDef circuit_defs[] = {
     C (1041, "Local buffer errors", local_buffer_errors),
     C (1050, "Selection intervals elapsed"),
     C (1065, "User buffer unavailable"),
-    // pydecnet's own: how long the circuit has been up, which is not
+    // the Python's own: how long the circuit has been up, which is not
     // architected but is the first thing anyone wants to know.
     C (3900, "Seconds since last circuit up"),
 };

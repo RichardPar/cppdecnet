@@ -15,7 +15,7 @@
 namespace decnet::packet {
 
 // Whether a packet class tolerates bytes left over after its last field.
-// pydecnet allows them only when the class declares a payload attribute.
+// the Python allows them only when the class declares a payload attribute.
 enum class Extra { reject, allow };
 
 template <typename Derived, Extra ExtraPolicy = Extra::reject>

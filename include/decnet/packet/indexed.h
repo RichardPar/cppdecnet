@@ -2,7 +2,7 @@
 //
 // Port of packet.Indexed / packet.IndexedPacket and the "indexer"
 // metaclass.  A family of packet formats shares a header; a field in that
-// header says which format this is.  pydecnet registers each subclass in a
+// header says which format this is.  the Python registers each subclass in a
 // class index at class creation time and picks the class straight from the
 // raw buffer before parsing.
 //
@@ -54,7 +54,7 @@ public:
         const char  *name    = "";
     };
 
-    // limit is the size of pydecnet's nlist (n) index; zero means the index
+    // limit is the size of the Python's nlist (n) index; zero means the index
     // is a dictionary with no range check.
     PacketIndex (KeyFn keyfn, std::size_t limit) noexcept
         : keyfn_ (keyfn), limit_ (limit) {}
@@ -147,7 +147,7 @@ public:
     // Every class in the family, including the roots of nested index
     // levels, decodes to a pointer of this type -- which is why a nested
     // level is a PacketIndex over the same Root, differing only in the
-    // field its key function reads.  In pydecnet this falls out of
+    // field its key function reads.  In the Python this falls out of
     // PtpInit34 being both an index root and a RoutingPacketBase subclass.
     using family_root = Root;
 

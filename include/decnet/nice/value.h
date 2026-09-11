@@ -3,7 +3,7 @@
 // Port of the data type classes in nice_coding.py (DU, DS, H, O, AI, HI, C
 // and CM).  A NICE data value carries its own type code, so unlike every
 // other field in DECnet the reader learns the type from the data rather
-// than from the layout.  pydecnet models that with a class per type code
+// than from the layout.  the Python models that with a class per type code
 // and an index that maps a code to its class, generating classes on the fly
 // for byte counts it has not seen.
 //

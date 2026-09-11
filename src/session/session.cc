@@ -176,7 +176,7 @@ void Session::connect_received (nsp::Connection &c, ByteView payload)
     }
 
     // Which object is being asked for?  By number if it has one, else by
-    // name; that is the order pydecnet checks in.
+    // name; that is the order the Python checks in.
     const Object *obj = nullptr;
     if (cd.dstname.fmt == EndUser::by_number && cd.dstname.num)
         obj = find_object (cd.dstname.num);
@@ -353,7 +353,7 @@ void add_default_objects (Session &s)
         Node *n = s.node ();
         s.add_object (19, "NML", [n] { return nice::make_nml (n); });
     }
-    // PORT: pmr (123) is the other object pydecnet enables by default.
+    // PORT: pmr (123) is the other object the Python enables by default.
 }
 
 }   // namespace decnet::session

@@ -6,11 +6,11 @@
 // one per line back on its standard output carrying what it wants done,
 // and its standard error going to the log.
 //
-// The protocol is byte-compatible with pydecnet's, so an application
-// written for pydecnet runs unchanged here.  Verified by running
-// pydecnet's own applications/mirror.py as an object of this daemon.
+// The protocol is byte-compatible with the Python's, so an application
+// written for the Python runs unchanged here.  Verified by running
+// the Python's own applications/mirror.py as an object of this daemon.
 //
-// One process serves one connection.  That is what pydecnet does, since it
+// One process serves one connection.  That is what the Python does, since it
 // builds a connector per inbound connect, and it is why an application
 // like mirror.py exits when its connection closes.
 

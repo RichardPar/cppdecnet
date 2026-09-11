@@ -203,7 +203,7 @@ EndnodeRouting::EndnodeRouting (Element *parent, const Config &config)
 
 void EndnodeRouting::send (Bytes data, Nodeid dest, bool rqr)
 {
-    // pydecnet originates LongData here because an endnode's circuit may
+    // the Python originates LongData here because an endnode's circuit may
     // be an Ethernet.  On a point to point circuit the short form carries
     // the same information, and the circuit would convert it anyway.
     ShortData pkt;

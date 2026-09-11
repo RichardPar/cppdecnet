@@ -2,7 +2,7 @@
 //
 // Port of node.py.  A Node owns the work queue, the timer wheel and the
 // per-layer objects, and runs the main loop that gives the whole system its
-// single threaded semantics.  As in pydecnet, more than one Node can exist
+// single threaded semantics.  As in the Python, more than one Node can exist
 // in one process, which is how a whole test network fits in one program.
 
 #ifndef DECNET_NODE_H
@@ -36,7 +36,7 @@ namespace events   { class Event; class EventLogger; }
 namespace http     { class Server; }
 
 // Per node database entry for a remote node.  Port of node.Nodeinfo; the
-// NSP and routing state that pydecnet mixes in here will be added as those
+// NSP and routing state that the Python mixes in here will be added as those
 // layers are ported.
 struct Nodeinfo {
     Nodeid      id;

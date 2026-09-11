@@ -1,6 +1,6 @@
 // decnet/common/logging.h -- leveled logging.
 //
-// pydecnet leans on the Python logging module, including its own TRACE
+// the Python leans on the Python logging module, including its own TRACE
 // level and the deferred "{}" formatting that keeps trace calls cheap when
 // tracing is off.  We keep the same levels and the same laziness: the
 // arguments to DN_TRACE are not evaluated unless the level is enabled.
@@ -32,7 +32,7 @@ bool set_level (std::string_view name) noexcept;   // "trace", "debug", ...
 // opened, leaving the previous destination in place.
 bool set_logfile (const std::string &path);
 
-// Prefix every line with this thread's name, the way pydecnet names each
+// Prefix every line with this thread's name, the way the Python names each
 // system's thread after the node.
 void set_thread_name (std::string name);
 

@@ -69,7 +69,7 @@ struct EndnodesRouteInfo : RouteInfo {
 class Update : public Element, public Timer {
 public:
     // level is 1 or 2: which routing table this process advertises, and so
-    // which message type it builds.  pydecnet keeps one Update per circuit
+    // which message type it builds.  the Python keeps one Update per circuit
     // per type for the same reason.
     Update (Circuit *circuit, L1Router *router, double t1,
             unsigned level = 1);

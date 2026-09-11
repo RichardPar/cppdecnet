@@ -18,7 +18,7 @@ not a permanent document -- delete it once the open item below is closed.
 - `include/decnet/events/logger.h`, `src/events/logger.cc` -- event lists,
   filters, console/file/monitor sinks, remote sinks over object 26, and
   the receiving end
-- `tests/test_event.cc` (16 tests, against pydecnet's own byte vectors)
+- `tests/test_event.cc` (16 tests, against the Python's own byte vectors)
   and `tests/test_eventlog.cc` (19 tests, including a record crossing a
   real circuit between two nodes)
 
@@ -80,13 +80,13 @@ written up in `BUGS.md`:
 
 - a LAN neighbour was addressed by its derived MAC, which BAJI does not
   listen on
-- short frames were padded with zeros rather than pydecnet's 0x42, which
+- short frames were padded with zeros rather than the Python's 0x42, which
   was enough for BAJI to build an adjacency to a node that does not exist
 - a level 1 router sent no routing messages at all to a LAN whose only
   neighbour was an endnode
 
-Our router hello is now byte for byte identical to pydecnet's, verified by
-generating pydecnet's own message offline and diffing it against captured
+Our router hello is now byte for byte identical to the Python's, verified by
+generating the Python's own message offline and diffing it against captured
 bytes.
 
 **The adjacency flaps, and that is not ours.** BAJI holds the adjacency for
@@ -96,7 +96,7 @@ three or four hello intervals and then reports
     Adjacency listener receive timeout, Adjacent node = 1.20
 
 while our hellos continue without a gap -- every 10 seconds, both
-multicasts, `0 packets dropped by kernel`. pydecnet does the same thing
+multicasts, `0 packets dropped by kernel`. The Python does the same thing
 against BAJI, which is what settles it: the flap is on the PDP-11 side.
 Chasing it further belongs with BAJI's DECnet or its Ethernet controller,
 not here.
@@ -111,12 +111,12 @@ Still to do:
 
 Method worth keeping, because it is what actually resolved this:
 
-- **A/B against pydecnet on the same wire.** `pydecnet` is in
-  `../pydecnet`; a config with the same node number, node type, hello timer
+- **A/B against the Python on the same wire.** `the Python` is in
+  The Python source tree beside this one; a config with the same node number, node type, hello timer
   and interface makes the running stack the only variable. It said
   immediately whether a symptom was ours, and twice the answer was not what
   was expected.
-- **Generate the reference message offline.** Importing pydecnet's own
+- **Generate the reference message offline.** Importing the Python's own
   packet classes and diffing their bytes against a capture found the
   padding difference in one step, with no wire access needed.
 
@@ -129,7 +129,7 @@ its four transports is.
 `include/decnet/datalink/ddcmp.h`, `src/datalink/ddcmp_packets.cc` and
 `src/datalink/ddcmp.cc`, with 25 tests in `tests/test_ddcmp.cc`.
 
-The seven message forms encode byte for byte as pydecnet's own `ddcmp`
+The seven message forms encode byte for byte as the Python's own `ddcmp`
 module encodes them; the vectors and how to regenerate them are in the
 test file. The protocol engine has no transport in it -- what carries the
 bytes arrives as callbacks -- so the tests wire two engines to each other

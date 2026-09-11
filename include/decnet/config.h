@@ -1,8 +1,8 @@
 // decnet/config.h -- the configuration file.
 //
-// Port of config.py.  pydecnet reuses argparse: each line of the config
+// Port of config.py.  the Python reuses argparse: each line of the config
 // file is a command word followed by Unix style options, and each layer
-// registers a subparser.  We keep the syntax exactly -- existing pydecnet
+// registers a subparser.  We keep the syntax exactly -- existing the Python
 // configuration files must work unchanged -- but parse it with a small
 // hand written option parser rather than dragging in a dependency.
 //
@@ -77,7 +77,7 @@ struct NodeConfig {
 
 // object --number N --name X --file PROG [--argument A]...
 //
-// An object implemented as a separate process.  pydecnet also supports
+// An object implemented as a separate process.  the Python also supports
 // --module for one implemented inside the daemon; here the built-in
 // objects are registered in code, so only --file is read.
 struct ObjectConfig {
@@ -112,7 +112,7 @@ struct LoggingConfig {
 
 class Config {
 public:
-    // Read a pydecnet configuration file.  Throws std::runtime_error with a
+    // Read a the Python configuration file.  Throws std::runtime_error with a
     // file:line prefix on a syntax error, as config.py does.
     static Config from_file (const std::string &path);
 
@@ -131,7 +131,7 @@ public:
     const std::string &node_name () const noexcept { return node_name_; }
 
     // The monitoring server.  Zero means "not configured", which is also
-    // what "--http-port 0" means to pydecnet: the port is how the feature
+    // what "--http-port 0" means to the Python: the port is how the feature
     // is turned on and off.
     unsigned http_port () const noexcept { return http_port_; }
 

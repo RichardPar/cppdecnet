@@ -7,7 +7,7 @@
 // file, and down a logical link to a remote sink, so there is one encoding
 // and three ways of presenting it.
 //
-// pydecnet writes one Python class per event, several hundred of them, and
+// the Python writes one Python class per event, several hundred of them, and
 // leans on the class hierarchy for the shared parameter definitions.  That
 // does not port: a class per event in C++ buys nothing, because none of
 // them add behaviour, only a number, a sentence and a parameter table.  So

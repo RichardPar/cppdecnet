@@ -79,7 +79,7 @@ int main (int argc, char **argv)
     DN_INFO ("{} starting", decnet::version::ident ());
 
     try {
-        // PORT: pydecnet builds one Node per config file and runs them all
+        // PORT: the Python builds one Node per config file and runs them all
         // in one process.  Only the first is started here so far.
         decnet::Config cfg = decnet::Config::from_file (config_files.front ());
         if (config_files.size () > 1)

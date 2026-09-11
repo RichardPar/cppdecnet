@@ -10,7 +10,7 @@ namespace decnet::datalink::ddcmp {
 
 namespace {
 
-// Which counter a NAK reason belongs to.  pydecnet's nak_map; R_OVER and
+// Which counter a NAK reason belongs to.  the Python's nak_map; R_OVER and
 // R_FMT are deliberately unmapped there and here.
 bool is_data_error (std::uint8_t reason)
 {
@@ -153,7 +153,7 @@ void Protocol::receive (const Message &m)
         if (m.kind == MsgKind::maintenance) {
             DN_TRACE ("DDCMP maintenance message, {} bytes", m.payload.size ());
             // Nothing opens a maintenance port yet, so this is counted and
-            // dropped.  pydecnet does the same, with the same comment.
+            // dropped.  the Python does the same, with the same comment.
         } else if (m.kind == MsgKind::start) {
             do_restart ();
         }

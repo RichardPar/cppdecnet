@@ -25,7 +25,7 @@
 //
 // Sequence numbers are modulo 256, and deliberately not RFC 1982: DDCMP
 // allows up to modulus - 1 messages outstanding, where RFC 1982 comparison
-// needs the window to stay under half the modulus.  pydecnet says the same
+// needs the window to stay under half the modulus.  the Python says the same
 // thing in a comment on its Seq class.  So these are compared by the
 // protocol's own rules, not by common/modulo.
 
@@ -51,7 +51,7 @@
 
 namespace decnet::datalink::ddcmp {
 
-// The start bytes, in the octal pydecnet writes them in.
+// The start bytes, in the octal the Python writes them in.
 inline constexpr std::uint8_t SOH = 0201;   // a data message
 inline constexpr std::uint8_t ENQ = 0005;   // a control message
 inline constexpr std::uint8_t DLE = 0220;   // a maintenance message
@@ -128,7 +128,7 @@ private:
 // What a decoded message turned out to be.
 enum class MsgKind { data, maintenance, ack, nak, rep, start, stack };
 
-// One decoded DDCMP message.  pydecnet gives each kind a class and indexes
+// One decoded DDCMP message.  the Python gives each kind a class and indexes
 // them on the start byte; here they share a struct, because the header is
 // one shape with two readings and the fields that differ are two bytes.
 // Which reading applies is what `kind` says.
@@ -220,7 +220,7 @@ std::optional<std::size_t> find_header (ByteView buf);
 // NAK and a wrapped sequence number with no sockets, no timers and no
 // scheduling -- and those are the parts that are hard to get right.
 //
-// States are pydecnet's, and its names: Istart after we have sent a Start,
+// States are the Python's, and its names: Istart after we have sent a Start,
 // Astart after we have answered one, Running, and Maintenance.  See the
 // DDCMP spec V4.1 table 3, the startup state table.
 class Protocol {
@@ -304,7 +304,7 @@ namespace decnet::datalink {
 // ------------------------------------------------------------ the datalink
 
 // The parsed --device argument: proto:lport:host:rport, where proto is
-// "udp", "tcp" or "telnet", as pydecnet takes it.  A serial line is
+// "udp", "tcp" or "telnet", as the Python takes it.  A serial line is
 // serial:devname[:speed] instead.
 struct DdcmpDevice {
     enum class Mode { udp, tcp, telnet, serial };

@@ -41,7 +41,7 @@ inline constexpr std::uint8_t nice_version[3] = { 4, 0, 0 };
 //
 // Access creates: asking for the reply for circuit ETH-0 makes an empty one
 // if there is not one already, which is what lets each layer add what it
-// knows without any of them having to go first.  That is pydecnet's
+// knows without any of them having to go first.  That is the Python's
 // ReplyDict, whose __getitem__ does the same.
 class ReplyDict {
 public:

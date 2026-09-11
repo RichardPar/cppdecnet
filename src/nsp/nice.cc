@@ -5,7 +5,7 @@
 // the whole node database: by the time routing runs, the entry for every
 // node it wants to add reachability to already exists.
 //
-// PORT: pydecnet's Nodeinfo carries a round trip delay estimate and a set
+// PORT: the Python's Nodeinfo carries a round trip delay estimate and a set
 // of per node counters, and read_node reports both.  Ours does not have
 // them yet, so "active nodes" here means nodes with a link rather than
 // nodes with a link or a delay estimate, and the node counters are absent.
@@ -46,7 +46,7 @@ unsigned NSP::links_to (Nodeid dest) const
 void NSP::read_node (const NiceRequest &req, Nodeid id, ReplyDict &resp,
                      unsigned links)
 {
-    // Asking for the entry is what creates it, as in pydecnet.
+    // Asking for the entry is what creates it, as in the Python.
     NiceReply &r = resp.node_entry (id);
 
     if (req.sumstat ()) {

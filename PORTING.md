@@ -1,4 +1,4 @@
-# Porting PyDECnet to C++
+# Porting the Python to C++
 
 Notes on how this port is put together. Mostly it records the handful of
 places where C++ and Python differ enough that the decision is worth
@@ -6,7 +6,7 @@ writing down, so nobody has to work it out twice.
 
 ## Scope
 
-PyDECnet is about 27,000 lines of Python implementing DECnet Phase II, III
+The Python is about 27,000 lines implementing DECnet Phase II, III
 and IV: data links, routing, NSP, session control, MOP, NICE, event logging
 and an HTTP monitoring interface.
 
@@ -20,7 +20,7 @@ are in scope but last. FAL is not enabled by default upstream either.
 
 ## Why C++ and not C
 
-The packet layouts. PyDECnet describes them declaratively:
+The packet layouts. The Python describes them declaratively:
 
 ```python
 _layout = (( packet.B, "srcnode", 2 ),
@@ -87,7 +87,7 @@ state from another thread.
 
 ### 1. Packet layouts become templates
 
-A PyDECnet layout row is a tuple of (field class, attribute name,
+A Python layout row is a tuple of (field class, attribute name,
 arguments). Here the field class is a template argument, the attribute name
 a pointer to member, and the arguments template parameters:
 
@@ -107,7 +107,7 @@ struct Simple : Packet<Simple> {
 ```
 
 `encode` and `decode` are `std::apply` over that tuple, so the loop unrolls
-and each codec inlines. Subclassing works the way PyDECnet's does, through
+and each codec inlines. Subclassing works the way the Python's does, through
 `extend (Base::layout, ...)`.
 
 ```mermaid
@@ -130,7 +130,7 @@ lists, using `std::optional` members where Python used `None` for absence.
 ### 2. Class lookup by code needs an explicit registry
 
 Several packet families share a header, with a field in that header saying
-which format this is. PyDECnet registers each subclass in a class index
+which format this is. The Python registers each subclass in a class index
 when the class is created. C++ has no equivalent hook, so registration is a
 function call:
 
@@ -231,7 +231,7 @@ stateDiagram-v2
 There is deliberately no timeout in `ds`. The data link guarantees it will
 keep trying and will report when it comes up, so a timeout here would only
 let two layers fight each other. That is one of three deviations from the
-spec that PyDECnet documents, and all three are ported.
+spec that the Python documents, and all three are ported.
 
 An NSP logical link:
 
@@ -261,9 +261,9 @@ stateDiagram-v2
 
 This is smaller than the spec's state machine. The NSP spec models session
 control as polling NSP for things it needs to hear, so it needs a state for
-each "waiting to be polled". Here, as in PyDECnet, session control is told
+each "waiting to be polled". Here, as in the Python, session control is told
 rather than polled, and each of those states collapses into the one that
-followed it. PyDECnet's comment lists them: O, DN, RJ, NC, NR, DRC, CN, DIC
+followed it. The Python's comment lists them: O, DN, RJ, NC, NR, DRC, CN, DIC
 and DR do not exist.
 
 ## Applications as separate programs
@@ -273,7 +273,7 @@ it over three pipes.
 
 ```mermaid
 sequenceDiagram
-    participant P as PyDECnet node
+    participant P as Python node
     participant D as decnetd
     participant A as program (mirror.py)
 
@@ -290,11 +290,11 @@ sequenceDiagram
     A-->>D: exits
 ```
 
-This protocol is byte-compatible with PyDECnet's, which was one of the
-goals set when the port started: an application written for PyDECnet works
-here unchanged. It is verified by running PyDECnet's own
+This protocol is byte-compatible with the Python's, which was one of the
+goals set when the port started: an application written for the Python works
+here unchanged. It is verified by running the Python's own
 `decnet/applications/mirror.py` as an object of this daemon and looping
-through it with PyDECnet's own `dnping`.
+through it with the Python's own `dnping`.
 
 One detail mattered more than expected. The protocol tunnels arbitrary
 bytes through JSON strings as latin-1, and NUL is not a corner case: the
@@ -308,7 +308,7 @@ test checks explicitly.
 ## Phases
 
 Each phase is testable on its own, and each ports its Python unit tests
-along with the code. The PyDECnet tests (13,700 lines) are the
+along with the code. The Python tests (13,700 lines) are the
 specification. Where the Python behaviour and the DNA spec appear to
 disagree, the Python is what interoperates, so follow it and leave a
 comment.
@@ -328,7 +328,7 @@ comment.
 Order follows dependencies, with one deliberate exception: phase 2 came
 before phase 3, even though routing is the more interesting layer, because
 a working Multinet link is what lets every later phase be tested against a
-live PyDECnet node. That paid off repeatedly.
+live Python node. That paid off repeatedly.
 
 ## Two traps
 
@@ -385,12 +385,12 @@ Sanitizers. ASan and UBSan on by default in debug. Python cannot corrupt
 memory; this can. Both have found real bugs, including one in session
 control that Python could not have had at all.
 
-Wire format checks against bytes a real PyDECnet node produced. Cheap to
+Wire format checks against bytes a real Python node produced. Cheap to
 write, and worth more than any packet invented for the purpose.
 
 Ported unit tests, module by module.
 
-Live interop against a running PyDECnet node. Not automated, but run at
+Live interop against a running Python node. Not automated, but run at
 every milestone and recorded in the README.
 
 ## Next

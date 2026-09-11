@@ -37,7 +37,7 @@ bool to_port (std::string_view s, std::uint16_t &out)
 
 MultinetDevice MultinetDevice::parse (const std::string &device)
 {
-    // pydecnet's regex is (.*?):(\d*)(?:(:connect)|(:listen)|(:\d+))?$ --
+    // the Python's regex is (.*?):(\d*)(?:(:connect)|(:listen)|(:\d+))?$ --
     // a non-greedy host, then a port, then an optional mode or local port.
     // Splitting from the right is the same thing and is easier to read.
     MultinetDevice d;
@@ -118,7 +118,7 @@ std::unique_ptr<Datalink> Multinet::create (Element *owner,
     case MultinetDevice::Mode::listen:
         return std::make_unique<ListenMultinet> (owner, name, dev, source_host);
     case MultinetDevice::Mode::udp:
-        // pydecnet warns here, and it is right to: UDP Multinet violates
+        // the Python warns here, and it is right to: UDP Multinet violates
         // most of the point to point datalink requirements.
         DN_WARN ("Multinet UDP mode is not recommended: it violates the "
                  "DECnet architecture");

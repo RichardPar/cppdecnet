@@ -86,7 +86,7 @@ DN_TEST (eth, device_udp)
     DN_ASSERT_EQ (d.destination, std::string ("127.0.0.1"));
     DN_ASSERT_EQ (d.dest_port, 4742);
 
-    // SIMH says "udp", pydecnet also accepts "bridge"; they are the same.
+    // SIMH says "udp", the Python also accepts "bridge"; they are the same.
     EthernetDevice b = EthernetDevice::parse ("bridge:4711:host:4742");
     DN_ASSERT (b.mode == Mode::udp);
     DN_ASSERT_EQ (b.dest_port, 4742);

@@ -536,7 +536,7 @@ void EventLogger::nice_read (const nice::NiceRequest &, nice::ReplyDict &)
     // architected answer is a logging entity carrying an event list per
     // sink.  The parameter encoding for that -- the event list format in a
     // NICE reply, which is not the same as the one in an event record --
-    // is not implemented in pydecnet either, so there is nothing here to
+    // is not implemented in the Python either, so there is nothing here to
     // port and no wire format to check a guess against.  Answering nothing
     // makes the listener report "unrecognized component", which is honest:
     // we do not have this information in the form NCP asked for it.

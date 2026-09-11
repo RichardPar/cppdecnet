@@ -1,6 +1,6 @@
 // tests/harness.h -- a small unit test harness.
 //
-// pydecnet's tests use unittest.  Rather than take on a dependency for the
+// the Python's tests use unittest.  Rather than take on a dependency for the
 // port, this provides the same shape: test cases register themselves, the
 // runner runs them all and reports failures, and each assertion macro
 // prints the file, line and the values involved.

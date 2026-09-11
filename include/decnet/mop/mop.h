@@ -11,7 +11,7 @@
 // PORT: the console carrier, both client and server, is not here.  Its
 // messages parse, but reserving a console and carrying a terminal session
 // over it is a state machine of its own.  Load and dump are not here
-// either, and pydecnet does not implement them.
+// either, and the Python does not implement them.
 
 #ifndef DECNET_MOP_MOP_H
 #define DECNET_MOP_MOP_H

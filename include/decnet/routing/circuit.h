@@ -6,7 +6,7 @@
 // none of what an Adjacency needs from its circuit depends on which kind
 // it is.
 //
-// pydecnet gets this from duck typing.  Here it is a base class, which is
+// the Python gets this from duck typing.  Here it is a base class, which is
 // what lets one Adjacency type serve both.
 
 #ifndef DECNET_ROUTING_CIRCUIT_H

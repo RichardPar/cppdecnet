@@ -1,6 +1,6 @@
 // Tests for event records, ported from tests/test_event.py.
 //
-// The byte strings are pydecnet's own test vectors, so these check the
+// The byte strings are the Python's own test vectors, so these check the
 // encoding against a second implementation rather than against ourselves.
 // Each one is decoded, inspected, formatted and encoded again: an event
 // that survives a round trip has not quietly lost a field.
@@ -151,7 +151,7 @@ DN_TEST (event, unknown_parameters)
     DN_ASSERT (has (s, "Parameter #9 = 252"));
     DN_ASSERT (has (s, "Parameter #258 = 18 aa-00-04-00-12-08"));
 
-    // pydecnet cannot re-encode unknown parameters in the right order;
+    // the Python cannot re-encode unknown parameters in the right order;
     // this port keeps them in a map keyed by number, so it can.
     DN_ASSERT_EQ (e.encode (), buf);
 }
@@ -253,7 +253,7 @@ DN_TEST (event, routing_event_decode)
 DN_TEST (event, routing_event_encode)
 {
     // The same event built from scratch, to check that what we generate
-    // matches what pydecnet generates for the same values.
+    // matches what the Python generates for the same values.
     Event e { { 4, 7 }, nice::Entity::make_circuit ("DMC-0") };
     e.halfday = e.seconds = e.milliseconds = 0;
     e.ms_absent = true;

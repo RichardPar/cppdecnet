@@ -11,7 +11,7 @@
 // a sequence number that the receiver ignores.  The remaining two bytes are
 // zero either way.
 //
-// Device syntax, unchanged from pydecnet:
+// Device syntax, unchanged from the Python:
 //
 //     host[:port][:connect]    active end of a TCP connection
 //     host[:port][:listen]     passive end of a TCP connection

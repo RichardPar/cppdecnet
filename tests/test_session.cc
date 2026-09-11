@@ -73,9 +73,9 @@ DN_TEST (session, end_user_formats)
     DN_ASSERT (!EndUser::named ("").valid ());
 }
 
-DN_TEST (session, connect_message_matches_pydecnet)
+DN_TEST (session, connect_message_matches_python)
 {
-    // The exact bytes pydecnet builds for a connect to object 25 from a
+    // The exact bytes the Python builds for a connect to object 25 from a
     // named source, which is what its own client sends.
     ConnectData c;
     c.dstname = EndUser::number (25);
@@ -120,7 +120,7 @@ DN_TEST (session, connect_message_with_data_and_access_control)
 
 DN_TEST (session, malformed_connect_messages_are_rejected)
 {
-    // A source that names nothing, which pydecnet also refuses.
+    // A source that names nothing, which the Python also refuses.
     DN_ASSERT_THROWS (DecodeError,
                       ConnectData::parse_message (
                           Bytes { 0x00, 0x19, 0x00, 0x00, 0x00 }));

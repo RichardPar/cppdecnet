@@ -4,7 +4,7 @@ namespace decnet::routing {
 
 // Register every routing packet class.
 //
-// In pydecnet these are class attributes the metaclass picks up as each
+// In the Python these are class attributes the metaclass picks up as each
 // class is defined.  Here they are one explicit function, called once
 // before the first lookup, because static initializers in a static library
 // only run if the linker had another reason to pull the object file in --
@@ -58,7 +58,7 @@ const char *ntype_string (unsigned t) noexcept
 
 bool PtpHello::testdata_valid () const noexcept
 {
-    // pydecnet matches the field against ^\252*$, so an empty field passes
+    // the Python matches the field against ^\252*$, so an empty field passes
     // too.  Anything else means the neighbour is confused or the link is
     // corrupting data, and the circuit is taken down.
     for (std::uint8_t b : testdata)

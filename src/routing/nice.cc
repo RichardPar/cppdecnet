@@ -6,7 +6,7 @@
 // NCP prints for SHOW NODE, SHOW CIRCUIT and SHOW AREA, and each of them is
 // only meaningful next to the others.
 //
-// The division of labour follows pydecnet's.  The router answers about
+// The division of labour follows the Python's.  The router answers about
 // nodes and areas, because it owns the routing table; each circuit answers
 // about itself and about the neighbour at its far end, because that is
 // where the adjacency lives.
@@ -386,7 +386,7 @@ void LanCircuit::nice_read (const NiceRequest &req, ReplyDict &resp,
     // One reply per adjacency, or one bare reply if there are none.  Take
     // every adjacency for status and characteristics; for a summary take
     // them only if there is exactly one and nothing was asked for by name.
-    // That last rule is pydecnet's, and it exists to keep a summary of a
+    // That last rule is the Python's, and it exists to keep a summary of a
     // busy LAN down to one line per circuit.
     bool all = req.stat () || req.chars ()
         || (!adj_qual && adjacencies_.size () == 1);

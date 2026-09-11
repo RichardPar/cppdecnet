@@ -83,7 +83,7 @@ Datalink *DatalinkLayer::circuit (const std::string &name) const
 {
     // Circuit names are canonicalised to upper case when the configuration
     // is read, so canonicalise the lookup too rather than making every
-    // caller remember.  pydecnet does the same thing at its NICE entry
+    // caller remember.  the Python does the same thing at its NICE entry
     // point, with an explicit .upper ().
     std::string key;
     try {
