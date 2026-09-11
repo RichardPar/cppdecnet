@@ -11,7 +11,7 @@ reasoning. Anything listed there is a decision, not an oversight.
 Unfinished spots in the code carry a `PORT:` comment; `make todo` lists
 them.
 
-Done so far: 43 library sources, 316 tests in 26 binaries, clean under ASan
+Done so far: 47 library sources, 348 tests in 27 binaries, clean under ASan
 and UBSan and at `-Wall -Wextra -Wpedantic` plus a dozen more.
 
 ```mermaid
@@ -154,10 +154,22 @@ ahead of their turn are held rather than dropped.
       point to point circuit
 
 ### Data links: what is left
-- [ ] DDCMP. A real datalink protocol with its own framing, sequencing and
-      retransmission, and the only one here that needs all three. The
-      CRC-16 it uses is already done
-- [ ] DDCMP transports: TCP, UDP, a serial port, the synchronous framer
+- [x] DDCMP message framing: the three start bytes, the eight byte header
+      with its own CRC, data and maintenance messages, the five control
+      messages, and the header-CRC resynchronisation a receiver uses after
+      an error. Checked byte for byte against pydecnet's own encoder
+- [x] DDCMP protocol: the startup handshake, sequence numbers,
+      acknowledgement, the REP/NAK exchange, retransmission, the send
+      window and maintenance mode. Transport independent, and tested by
+      running two engines against each other
+- [x] The UDP transport, where one datagram is exactly one message, and
+      the device string `udp:lport:host:rport`
+- [x] Wired into the circuit factory: `circuit ddc-0 DDCMP udp:...` works,
+      and two nodes bring a routing adjacency up over it
+- [ ] The TCP and telnet transports. A byte stream needs
+      `ddcmp::find_header` on receive, which is written and tested; telnet
+      additionally escapes the all-ones byte
+- [ ] The serial transport, and the synchronous framer
 - [x] pcap circuits, where the library is present (the build already probes
       for it; `make features` reports it)
 - [ ] `datalink/gre`: GRE encapsulation

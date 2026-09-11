@@ -10,12 +10,14 @@ flowchart TB
       SC["Session control<br/><small>object database, connect / accept / reject</small>"]
       NSP["NSP<br/><small>logical links, segmentation, retransmission</small>"]
       RT["Routing<br/><small>endnode, level 1 router, level 2 router</small>"]
-      DL["Data links<br/><small>Multinet (TCP, UDP), Ethernet (UDP frames, TAP, pcap)</small>"]
+      DL["Data links<br/><small>Multinet (TCP, UDP), Ethernet (UDP frames, TAP, pcap), DDCMP (UDP)</small>"]
       APP --- SC --- NSP --- RT --- DL
       MOP["MOP<br/><small>system id, counters, loopback</small>"]
       MOP --- DL
       EV["Event logging<br/><small>filters, console / file / monitor, remote sinks</small>"]
       EV --- SC
+      NM["Network management<br/><small>NICE over object 19, monitoring pages over HTTP</small>"]
+      NM --- SC
     end
     DL --- WIRE(["the wire"])
 ```
@@ -27,10 +29,13 @@ rather than above or below them:
 - NSP does not ask for flow control on its own inbound data
 - session control carries access control data but does not check it
 - the data link and physical event classes are never raised
-- the only data links are Multinet and Ethernet
+- DDCMP has its protocol and its UDP transport; TCP, telnet and serial
+  are not written yet
+- network management is read only: NICE serves READ INFORMATION and
+  LOOP NODE, and refuses SET and ZERO
 
-DDCMP, the HTTP and NICE monitoring interfaces, and Phase II and Phase III
-neighbours are still to do.
+Phase II and Phase III neighbours, the JSON API over a Unix socket, the
+bridge and the DAP file access listener are still to do.
 
 Other documents: [STATE.md](STATE.md) where work stopped and what is
 unverified, [PORTING.md](PORTING.md) how the port is structured,
@@ -135,10 +140,10 @@ A circuit line names the circuit, the kind of data link, and the device
 string that says where it goes:
 
 ```
-circuit <name> <Multinet|Ethernet> <device> [options]
+circuit <name> <Multinet|Ethernet|DDCMP> <device> [options]
 ```
 
-There are four device forms, and choosing between them is mostly a question
+There are five device forms, and choosing between them is mostly a question
 of what is on the other end and how much privilege you are willing to give
 the daemon.
 
@@ -149,6 +154,7 @@ the daemon.
 | `Ethernet udp:<lp>:<host>:<rp>` | a two station LAN | no | one other host, anywhere IP goes |
 | `Ethernet tap:<dev>` | a real LAN | yes (or a preconfigured device) | whatever the tap is bridged to |
 | `Ethernet pcap:<iface>` | a real LAN | yes (`CAP_NET_RAW`) | real hardware on a real segment |
+| `DDCMP udp:<lp>:<host>:<rp>` | a synchronous line | no | one other host, with DDCMP doing the work IP would otherwise do |
 
 Options common to all of them: `--cost`, `--t1`, `--t3` (hello interval),
 `--mop` to enable the maintenance protocol on the circuit. Broadcast
@@ -197,6 +203,31 @@ violates the DECnet architecture, because a data link is supposed to
 deliver packets in order or not at all, and UDP promises neither. Routing
 above it will mistake reordering for loss. Use TCP unless something at the
 far end can only do UDP.
+
+### DDCMP — the protocol a real synchronous line used
+
+Multinet and Ethernet both lean on what carries them: IP delivers the
+bytes, in order, or says it could not. DDCMP assumes none of that. It was
+written for a modem and a piece of wire, so it does its own framing, its
+own sequence numbers, its own acknowledgement and its own retransmission.
+
+That makes it the one data link here that is a protocol rather than a
+frame format, and the one worth having if you ever want to reach a real
+DEC machine over a serial line rather than over Ethernet.
+
+```
+# two DDCMP nodes over UDP, each naming its own port and the other's
+circuit ddc-0 DDCMP udp:27801:192.168.1.50:27802 --t3 10
+```
+
+One datagram is exactly one DDCMP message, so over UDP there is no framing
+to do and a lost datagram is simply a lost message -- which the protocol
+already expects and recovers from.
+
+Only the UDP transport is written. The device string accepts `tcp:`,
+`telnet:` and `serial:` forms and the protocol engine is independent of
+what carries it, so those are a matter of moving bytes rather than of
+protocol; [TASKS.md](TASKS.md) has them.
 
 ### Ethernet over UDP — a LAN with two stations on it
 
@@ -508,12 +539,13 @@ are listed in [TASKS.md](TASKS.md).
 include/decnet/     public headers, mirroring src/
   common/           types, logging, timers, work queue, state machine, CRC, JSON
   packet/           the layout framework
-  datalink/         datalink layer, Multinet, Ethernet
+  datalink/         datalink layer, Multinet, Ethernet, DDCMP
   routing/          packets, adjacencies, circuits, routers
   nsp/ session/     transport and above
   mop/              maintenance protocol: system id, counters, loopback
-  nice/             NICE data values, entities and parameter lists
+  nice/             NICE values, entities, parameters, messages, the NML object
   events/           event records, filters and sinks
+  http/             the monitoring pages
 src/                implementations
 tools/              command line tools, one binary per .cc
 tests/              one binary per test_*.cc
@@ -526,7 +558,13 @@ Incomplete spots are marked `PORT:` with the reason; `make todo` lists them.
 
 ## Testing
 
-`make check` runs the lot. Three kinds of test:
+`make check` runs the lot: 348 tests in 27 binaries. Note that `BUILD`
+defaults to **release**, so a plain `make check` is the optimised build and
+`make check BUILD=debug` is the sanitizer one. Running a binary by hand out
+of `build/debug/bin` after a plain `make` runs whatever was there last,
+which is a convincing way to debug a failure that no longer exists.
+
+Four kinds of test:
 
 Unit tests ported alongside each module. The PyDECnet test suite is the
 specification here.
@@ -537,6 +575,12 @@ only agree with ourselves about is not worth much.
 End to end tests that stand two nodes up in one process, joined by a real
 TCP or UDP circuit, and run the whole stack. These catch the ordering
 mistakes that unit tests cannot see.
+
+Protocol engines run against each other with no transport underneath.
+DDCMP is tested this way: two engines, a vector for a wire, and a message
+is lost by not delivering it. The startup handshake, a NAK, a REP, a full
+window and three hundred messages through the sequence number wrap are all
+straight line tests with no sockets, no threads and no timers in them.
 
 `make BUILD=debug` builds under ASan and UBSan. Python could not corrupt
 memory; this can, and the receive paths parsing untrusted input are where

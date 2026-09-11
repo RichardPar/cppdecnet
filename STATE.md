@@ -122,24 +122,44 @@ Method worth keeping, because it is what actually resolved this:
 
 ## Next in the queue
 
-NICE and the monitoring pages landed on 11-Sep-2026. `nicepackets`, `nml`
-(object 19, which is what NCP connects to) and an HTTP server serving one
-page per NICE entity are in, with 316 tests in 26 binaries passing in both
-flavours.
+DDCMP was started on 11-Sep-2026. The protocol is done and one of
+its four transports is.
 
-What that leaves, in the order it is worth doing:
+**In, and tested:** the message layer and the protocol engine.
+`include/decnet/datalink/ddcmp.h`, `src/datalink/ddcmp_packets.cc` and
+`src/datalink/ddcmp.cc`, with 25 tests in `tests/test_ddcmp.cc`.
 
-- **NICE SET and ZERO**, which are refused today. They want the access
-  control decision first; see `NOTDONE.md`.
-- **LOOP CIRCUIT and LOOP LINE**, which drive MOP loopback. The loopback
-  works; nothing connects NICE to it.
-- **`apiserver`**, the JSON API over a Unix socket, which is the rest of
-  phase 7.
+The seven message forms encode byte for byte as pydecnet's own `ddcmp`
+module encodes them; the vectors and how to regenerate them are in the
+test file. The protocol engine has no transport in it -- what carries the
+bytes arrives as callbacks -- so the tests wire two engines to each other
+and exercise the startup handshake, a lost message, a NAK, a REP, the send
+window, a stale acknowledgement, a restart, and 300 messages through the
+sequence number wrap, with no sockets and no timers.
 
-One trap found while doing this, worth knowing before the next session:
-`BUILD` now defaults to **release**, not debug (`mk/config.mk`). A plain
-`make` builds `build/release`, so running `build/debug/bin/test_*` out of
-habit runs whatever was there last. That produced a convincing failure in
-`test_nml` that did not exist -- the binary was three hours stale. Run
-`make check` for release and `make check BUILD=debug` for the sanitizer
-build, and do not run the binaries by hand from the wrong tree.
+**Also in:** the UDP transport and the wiring. A configuration line
+
+    circuit ddc-0 DDCMP udp:27801:127.0.0.1:27802 --t3 2
+
+builds a DDCMP circuit, and two nodes bring a routing adjacency up over
+it -- the first time the protocol runs on real sockets, real threads and
+real timers rather than against another engine in the same test.
+
+**Not in yet:** the remaining transports.
+
+- TCP and telnet, then serial and the synchronous framer. Each is a
+  matter of moving bytes: the engine already says what to send and what
+  it was given. A stream needs `ddcmp::find_header` on the receive side,
+  which is written and tested; telnet additionally escapes the all-ones
+  byte. `Ddcmp::create` carries a `PORT:` note where they attach.
+- TCP is the one to do next, because SIMH speaks it and that is a real
+  peer to test against rather than another copy of ourselves.
+
+Also open, from the bug work earlier the same day:
+
+- `test_eventlog` hangs about one run in 26 under heavy load. Not
+  diagnosed. `tools/catch-eventlog-hang.sh` loads the machine, runs the
+  test until one hangs and dumps its thread stacks; it needs root,
+  because `ptrace_scope` is 1 here and gdb cannot otherwise attach to a
+  process that is not its own child. `BUGS.md` item 8 has the detail.
+

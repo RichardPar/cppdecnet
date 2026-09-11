@@ -100,7 +100,8 @@ Seen once in twelve runs with every core spinning; then not once in the
 following seventy-five runs under the same load, so it is rarer than one in
 twenty and has not been caught in the act.
 
-Not diagnosed. A stack trace is what it needs, and the recipe is:
+Not diagnosed. A stack trace is what it needs.
+`tools/catch-eventlog-hang.sh` does the whole thing; by hand it is:
 
     for i in $(seq 1 $(nproc)); do (timeout 300 yes > /dev/null &); done
     ./build/release/bin/test_eventlog & pid=$!

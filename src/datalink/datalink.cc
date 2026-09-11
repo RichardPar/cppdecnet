@@ -3,6 +3,7 @@
 #include "decnet/common/logging.h"
 #include "decnet/config.h"
 #include "decnet/datalink/ethernet.h"
+#include "decnet/datalink/ddcmp.h"
 #include "decnet/datalink/multinet.h"
 #include "decnet/node.h"
 
@@ -51,7 +52,9 @@ std::unique_ptr<Datalink> DatalinkLayer::create (Element *owner,
         if (c.type == "Ethernet")
             return Ethernet::create (owner, c.name, c.device,
                                      c.random_address);
-        // PORT: DDCMP and GRE join this switch as they are ported.
+        if (c.type == "DDCMP")
+            return Ddcmp::create (owner, c.name, c.device);
+        // PORT: GRE joins this switch as it is ported.
         DN_ERROR ("invalid datalink type {} for circuit {}", c.type, c.name);
     } catch (const std::exception &e) {
         DN_ERROR ("error initializing {} datalink {}: {}",
