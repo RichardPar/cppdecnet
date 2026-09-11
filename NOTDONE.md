@@ -104,7 +104,8 @@ displays properly -- but nothing raises one.
 They describe things a real data link reports: state changes, error
 thresholds, tributary selection, carrier and modem transitions. Multinet
 and Ethernet-over-UDP have none of that. The circuits that would raise them
-are DDCMP and a real synchronous line, and neither is ported.
+are DDCMP and a real synchronous line. DDCMP is now ported, so
+these events are reachable and simply are not raised yet.
 
 Class 0, network management, is in the same position: the automatic counter
 events belong with the NICE protocol, which is the next piece of work.
@@ -136,16 +137,25 @@ what maintenance tools use to see and test a node, and those are done.
 MOP load and dump are not implemented here either. The Python does not
 implement them.
 
-### DDCMP
+### The DDCMP synchronous framer
 
-A real datalink protocol with its own framing, sequencing and
-retransmission, and the only one here that needs all three. About 1,650
-lines in the Python, plus four transports: TCP, UDP, a serial port and a
-synchronous framer.
+DDCMP itself is ported: the message layer, the protocol, and the UDP, TCP,
+telnet and serial transports.
 
-It deserves its own pass rather than being rushed in behind Multinet and
-Ethernet, which are enough to test everything above them. The CRC-16 it
-needs is already written and tested.
+What is left is the framer -- a board that does the framing in hardware and
+hands the host headers with the CRC already checked. The message layer has
+the hooks for it (a header can be decoded with the check suppressed, which
+is exactly what a framer wants), but nothing drives one, and there is no
+hardware here to drive.
+
+A caveat worth keeping in front of anyone who reads the checkmarks: nothing
+in DDCMP has yet talked to another implementation. The framing is checked
+byte for byte against the Python's encoder, and the protocol is exercised
+by running two of our own engines against each other over real sockets and
+a real serial line -- but that is this implementation agreeing with itself.
+SIMH speaks DDCMP over TCP and is the first real peer available. The
+padding and neighbour-address defects found against a real PDP-11 both
+passed every self-test we had at the time.
 
 ### GRE circuits
 

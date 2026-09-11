@@ -317,7 +317,7 @@ comment.
 |---|-------|----------------|--------|
 | **0** | **Foundation** | `common`, `timers`, `statemachine`, `logging`, `config`, `node`, `crc`, `packet` (core) | ~2,000 |
 | **1** | **Packet framework** | `packet` (BM/TLV/indexed), `modulo`, `nice_coding` (values) | ~1,600 |
-| **2** | **Data links** | `datalink`, `multinet`, `ethernet`; `ddcmp`, `gre`, `pcap` remain | ~3,800 |
+| **2** | **Data links** | `datalink`, `multinet`, `ethernet`, `pcap`, `ddcmp` bar its framer; `gre` remains | ~3,800 |
 | **3** | **Routing** | `routing_packets`, `route_ptp`, `route_eth`, `routing`, `adjacency` | ~4,300 |
 | **4** | **NSP** | `nsp_packets`, `nsp` | ~1,900 |
 | **5** | **Session control** | `session`; some applications remain | ~2,000 |
@@ -395,8 +395,17 @@ every milestone and recorded in the README.
 
 ## Next
 
-NSP, MOP and event logging are done bar the parts noted in
-[NOTDONE.md](NOTDONE.md). Next: the NICE protocol messages, then the
-monitoring interfaces.
+NSP, MOP, event logging, NICE, the monitoring pages and DDCMP are all done
+bar the parts noted in [NOTDONE.md](NOTDONE.md).
+
+What is left divides into two kinds. There is work that adds something the
+port does not have: Phase II and Phase III neighbours, the JSON API, the
+bridge, DAP. And there is the thing none of the rest can substitute for --
+running against another implementation. Every layer that has been tested
+that way has yielded a defect the self-tests could not see, twice now
+against a real PDP-11, so the checkmarks in [TASKS.md](TASKS.md) should be
+read as "agrees with itself" until a second implementation has disagreed
+with it.
+
 [TASKS.md](TASKS.md) has the detail, and [NOTDONE.md](NOTDONE.md) says what
 is being left out and why.

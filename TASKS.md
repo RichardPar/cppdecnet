@@ -11,7 +11,7 @@ reasoning. Anything listed there is a decision, not an oversight.
 Unfinished spots in the code carry a `PORT:` comment; `make todo` lists
 them.
 
-Done so far: 47 library sources, 348 tests in 27 binaries, clean under ASan
+Done so far: 47 library sources, 354 tests in 27 binaries, clean under ASan
 and UBSan and at `-Wall -Wextra -Wpedantic` plus a dozen more.
 
 ```mermaid

@@ -78,6 +78,17 @@ public:
     // "unreachable", so this always succeeds.
     void send_to_mac (ShortData &pkt, Macaddr nexthop);
 
+    // Who the designated router on this LAN is, and what priority we bring
+    // to electing one.  Both kinds of circuit can answer, but they are
+    // answering different questions: an endnode reports the router it
+    // chose, a router reports the one it believes won, which may be
+    // itself.  Virtual so that a caller holding a LanCircuit -- the
+    // monitoring pages do -- does not have to know which it has.
+    virtual Nodeid designated_router () const noexcept { return Nodeid (); }
+
+    // Zero for an endnode, which does not stand in the election.
+    virtual std::uint8_t priority () const noexcept { return 0; }
+
     // The Circuit spelling: address the frame to that neighbour.
     bool send_to (ShortData &pkt, const Adjacency &adj) override;
 
@@ -150,6 +161,7 @@ public:
     bool have_dr () const noexcept { return dr_.has_value (); }
     Nodeid dr () const noexcept
     { return dr_ ? dr_->first : Nodeid (); }
+    Nodeid designated_router () const noexcept override { return dr (); }
 
     std::size_t cache_size () const noexcept { return cache_.size (); }
 
@@ -173,10 +185,10 @@ public:
     void start () override;
     void stop () override;
 
-    std::uint8_t priority () const noexcept { return prio_; }
+    std::uint8_t priority () const noexcept override { return prio_; }
     bool is_dr () const noexcept { return isdr_; }
     // Who we currently believe is the designated router.
-    Nodeid designated_router () const noexcept { return dr_; }
+    Nodeid designated_router () const noexcept override { return dr_; }
 
     // Is this neighbour confirmed two-way?
     bool two_way (Nodeid id) const;

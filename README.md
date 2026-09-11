@@ -12,7 +12,7 @@ flowchart TB
       SC["Session control<br/><small>object database, connect / accept / reject</small>"]
       NSP["NSP<br/><small>logical links, segmentation, retransmission</small>"]
       RT["Routing<br/><small>endnode, level 1 router, level 2 router</small>"]
-      DL["Data links<br/><small>Multinet (TCP, UDP), Ethernet (UDP frames, TAP, pcap), DDCMP (UDP)</small>"]
+      DL["Data links<br/><small>Multinet (TCP, UDP), Ethernet (UDP frames, TAP, pcap), DDCMP (UDP, TCP, serial)</small>"]
       APP --- SC --- NSP --- RT --- DL
       MOP["MOP<br/><small>system id, counters, loopback</small>"]
       MOP --- DL
@@ -31,8 +31,8 @@ rather than above or below them:
 - NSP does not ask for flow control on its own inbound data
 - session control carries access control data but does not check it
 - the data link and physical event classes are never raised
-- DDCMP has its protocol and its UDP transport; TCP, telnet and serial
-  are not written yet
+- DDCMP has everything but its synchronous framer, and has not yet run
+  against anything other than itself
 - network management is read only: NICE serves READ INFORMATION and
   LOOP NODE, and refuses SET and ZERO
 
@@ -588,7 +588,7 @@ Incomplete spots are marked `PORT:` with the reason; `make todo` lists them.
 
 ## Testing
 
-`make check` runs the lot: 348 tests in 27 binaries. Note that `BUILD`
+`make check` runs the lot: 354 tests in 27 binaries. Note that `BUILD`
 defaults to **release**, so a plain `make check` is the optimised build and
 `make check BUILD=debug` is the sanitizer one. Running a binary by hand out
 of `build/debug/bin` after a plain `make` runs whatever was there last,

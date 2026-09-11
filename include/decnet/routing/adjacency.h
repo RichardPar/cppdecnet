@@ -52,6 +52,9 @@ public:
     std::uint16_t blksize () const noexcept { return info_.blksize; }
     Version       tiver  () const noexcept { return info_.tiver; }
     double        listen_time () const noexcept { return t4_; }
+    // Only meaningful on a broadcast circuit, where it decides the
+    // designated router election; zero everywhere else.
+    unsigned      priority () const noexcept { return info_.priority; }
 
     // The cost of the circuit this adjacency is on; zero for the self
     // adjacency, which costs nothing to reach.
