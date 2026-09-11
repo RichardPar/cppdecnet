@@ -157,6 +157,8 @@ the daemon.
 | `Ethernet tap:<dev>` | a real LAN | yes (or a preconfigured device) | whatever the tap is bridged to |
 | `Ethernet pcap:<iface>` | a real LAN | yes (`CAP_NET_RAW`) | real hardware on a real segment |
 | `DDCMP udp:<lp>:<host>:<rp>` | a synchronous line | no | one other host, with DDCMP doing the work IP would otherwise do |
+| `DDCMP tcp:<lp>:<host>:<rp>` | the same, over a stream | no | one other host; what SIMH speaks |
+| `DDCMP serial:<dev>[:<speed>]` | a real serial line | no (group `dialout`) | whatever is on the other end of the cable |
 
 Options common to all of them: `--cost`, `--t1`, `--t3` (hello interval),
 `--mop` to enable the maintenance protocol on the circuit. Broadcast
@@ -218,18 +220,44 @@ frame format, and the one worth having if you ever want to reach a real
 DEC machine over a serial line rather than over Ethernet.
 
 ```
-# two DDCMP nodes over UDP, each naming its own port and the other's
+# over UDP, each end naming its own port and the other's
 circuit ddc-0 DDCMP udp:27801:192.168.1.50:27802 --t3 10
+
+# over TCP, which is what SIMH speaks
+circuit ddc-0 DDCMP tcp:27801:192.168.1.50:27802 --t3 10
 ```
 
-One datagram is exactly one DDCMP message, so over UDP there is no framing
-to do and a lost datagram is simply a lost message -- which the protocol
-already expects and recovers from.
+The two differ only in what they have to do about framing. One datagram is
+exactly one DDCMP message, so over UDP there is nothing to frame and a lost
+datagram is simply a lost message, which the protocol already expects. A
+TCP connection is a byte stream with no message boundaries in it, so the
+receiver slides along the stream a byte at a time until eight of them pass
+the header CRC. That is the only thing worth trusting: after a loss of
+sync, a length field would have come out of the noise that caused it.
 
-Only the UDP transport is written. The device string accepts `tcp:`,
-`telnet:` and `serial:` forms and the protocol engine is independent of
-what carries it, so those are a matter of moving bytes rather than of
-protocol; [TASKS.md](TASKS.md) has them.
+Over TCP both ends listen and dial at the same time and the first
+connection to arrive is the one used, so neither end has to be told which
+it is. SIMH does the same, in `sim_tmxr.c`.
+
+`telnet:` is TCP with the all-ones byte doubled, for reaching a SIMH
+terminal port that is not in raw mode.
+
+```
+# a real serial line, which is the medium DDCMP was written for
+circuit ser-0 DDCMP serial:/dev/ttyUSB0:38400 --t3 10
+```
+
+The line is set raw, 8 bits, no parity, one stop bit, and no flow control
+of any kind. DDCMP does its own framing and its own error detection, so
+anything the line discipline might helpfully do to the bytes is damage.
+Each frame is followed by one all-ones byte, as the spec says; no SYN bytes
+go in front, because those are for synchronous lines and the spec says not
+to send them on an async one.
+
+This is the transport where nothing underneath does any of the work -- no
+connection to establish, no delivery guarantee, no ordering beyond the
+order bits arrive in. It is what makes the protocol's framing, sequencing
+and retransmission worth having rather than redundant.
 
 ### Ethernet over UDP — a LAN with two stations on it
 

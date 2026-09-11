@@ -137,7 +137,8 @@ and exercise the startup handshake, a lost message, a NAK, a REP, the send
 window, a stale acknowledgement, a restart, and 300 messages through the
 sequence number wrap, with no sockets and no timers.
 
-**Also in:** the UDP transport and the wiring. A configuration line
+**Also in:** every transport except the synchronous framer -- UDP, TCP,
+telnet and a real serial line -- and the wiring. A configuration line
 
     circuit ddc-0 DDCMP udp:27801:127.0.0.1:27802 --t3 2
 
@@ -147,13 +148,12 @@ real timers rather than against another engine in the same test.
 
 **Not in yet:** the remaining transports.
 
-- TCP and telnet, then serial and the synchronous framer. Each is a
-  matter of moving bytes: the engine already says what to send and what
-  it was given. A stream needs `ddcmp::find_header` on the receive side,
-  which is written and tested; telnet additionally escapes the all-ones
-  byte. `Ddcmp::create` carries a `PORT:` note where they attach.
-- TCP is the one to do next, because SIMH speaks it and that is a real
-  peer to test against rather than another copy of ourselves.
+- The synchronous framer, a board that frames in hardware and hands over
+  headers with the CRC already checked. `Ddcmp::create` carries a `PORT:`
+  note where it attaches.
+- Nothing has yet run against SIMH, which speaks DDCMP over TCP and is
+  the first real peer available for this datalink -- everything so far
+  has been this implementation talking to itself.
 
 Also open, from the bug work earlier the same day:
 

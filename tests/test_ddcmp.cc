@@ -16,11 +16,18 @@
 #include "decnet/node.h"
 #include "decnet/routing/routing.h"
 
+#include <atomic>
 #include <chrono>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <thread>
 #include <vector>
+
+#include <fcntl.h>
+#include <poll.h>
+#include <stdlib.h>
+#include <unistd.h>
 
 using namespace decnet;
 using namespace decnet::datalink;
@@ -537,5 +544,191 @@ DN_TEST (ddcmp, a_bad_device_string_costs_its_circuit_and_no_more)
     Node n (c);
     n.start ();
     DN_ASSERT_EQ (n.routing ()->circuits ().size (), 1u);
+    n.stop ();
+}
+
+DN_TEST (ddcmp, two_nodes_come_up_over_a_tcp_ddcmp_circuit)
+{
+    // TCP is a byte stream, so unlike UDP there is framing to do: the
+    // receiver hunts for a header that passes its own CRC and then reads
+    // the payload that header describes.  Both ends listen and dial at
+    // once and the first connection wins, so neither is told which it is.
+    int pa = 27821, pb = 27822;
+    Config ca = Config::from_string (
+        "routing 1.1 --type l1router\nnode 1.1 NODEA\nnode 1.2 NODEB\n"
+        "circuit ddc-0 DDCMP tcp:" + std::to_string (pa) + ":127.0.0.1:"
+        + std::to_string (pb) + " --t3 2\n");
+    Config cb = Config::from_string (
+        "routing 1.2 --type l1router\nnode 1.2 NODEB\nnode 1.1 NODEA\n"
+        "circuit ddc-0 DDCMP tcp:" + std::to_string (pb) + ":127.0.0.1:"
+        + std::to_string (pa) + " --t3 2\n");
+
+    Node a (ca), b (cb);
+    a.start ();
+    b.start ();
+
+    DN_ASSERT (wait_until ([&] {
+        return a.routing ()->adjacency_count () == 1
+            && b.routing ()->adjacency_count () == 1;
+    }, std::chrono::seconds (30)));
+
+    b.stop ();
+    a.stop ();
+}
+
+DN_TEST (ddcmp, a_stream_receiver_frames_on_the_header_crc)
+{
+    // The framing rule, exercised the way a stream meets it: rubbish, then
+    // a real message.  find_header is what the TCP receive path slides
+    // along the stream with, one byte at a time.
+    Bytes stream;
+    // Rubbish that contains all three start bytes, so framing on the byte
+    // alone would pick the wrong place and read a length out of noise.
+    for (std::uint8_t b : { 0x81, 0x05, 0x90, 0x00, 0xff, 0x81, 0x81 })
+        stream.push_back (b);
+    std::size_t at = stream.size ();
+
+    Message m = make_data (Seq (9), Seq (4), bytes_of ("stream payload"));
+    Bytes wire = m.encode ();
+    stream.insert (stream.end (), wire.begin (), wire.end ());
+
+    auto found = find_header (ByteView (stream.data (), stream.size ()));
+    DN_ASSERT (found.has_value ());
+    DN_ASSERT_EQ (*found, at);
+
+    Message out;
+    DN_ASSERT (decode_header (ByteView (stream.data () + *found,
+                                        stream.size () - *found), out)
+               == HdrError::none);
+    DN_ASSERT_EQ (out.num.value (), 9u);
+    DN_ASSERT_EQ (out.count, 14u);
+}
+
+DN_TEST (ddcmp, the_telnet_device_form_is_accepted)
+{
+    // Telnet is TCP with the all-ones byte doubled, so that a DDCMP
+    // message containing one is not read as a telnet command.  SIMH uses
+    // it for terminal ports that are not in raw mode.
+    DdcmpDevice d = DdcmpDevice::parse ("telnet:1:host:2");
+    DN_ASSERT (d.mode == DdcmpDevice::Mode::telnet);
+}
+
+// --------------------------------------------------------------- serial
+//
+// A serial line is the medium DDCMP was written for, and the one where
+// nothing underneath does any of the work.  Two pseudo-terminals with a
+// thread copying bytes between them stand in for the wire: no socat, no
+// hardware, and the same code path a real UART takes -- open the tty, set
+// it raw at 8N1, frame the stream by header CRC.
+
+namespace {
+
+// A pair of pseudo-terminals, cross connected by a relay thread.
+class TtyPair {
+public:
+    TtyPair ()
+    {
+        ma_ = open_master (a_);
+        mb_ = open_master (b_);
+        if (ma_ < 0 || mb_ < 0) return;
+        relay_ = std::thread ([this] { relay (); });
+    }
+
+    ~TtyPair ()
+    {
+        stop_ = true;
+        if (relay_.joinable ()) relay_.join ();
+        if (ma_ >= 0) ::close (ma_);
+        if (mb_ >= 0) ::close (mb_);
+    }
+
+    bool ok () const { return ma_ >= 0 && mb_ >= 0; }
+    const std::string &a () const { return a_; }
+    const std::string &b () const { return b_; }
+
+private:
+    static int open_master (std::string &slave_name)
+    {
+        int m = ::posix_openpt (O_RDWR | O_NOCTTY);
+        if (m < 0) return -1;
+        if (::grantpt (m) != 0 || ::unlockpt (m) != 0) { ::close (m); return -1; }
+        const char *n = ::ptsname (m);
+        if (!n) { ::close (m); return -1; }
+        slave_name = n;
+        return m;
+    }
+
+    void relay ()
+    {
+        // Everything written to one side appears on the other, which is
+        // all a piece of wire does.
+        while (!stop_) {
+            pollfd fds[2] = { { ma_, POLLIN, 0 }, { mb_, POLLIN, 0 } };
+            if (::poll (fds, 2, 50) <= 0) continue;
+            char buf[512];
+            if (fds[0].revents & POLLIN) {
+                ssize_t n = ::read (ma_, buf, sizeof buf);
+                if (n > 0) (void) ::write (mb_, buf, static_cast<std::size_t> (n));
+            }
+            if (fds[1].revents & POLLIN) {
+                ssize_t n = ::read (mb_, buf, sizeof buf);
+                if (n > 0) (void) ::write (ma_, buf, static_cast<std::size_t> (n));
+            }
+        }
+    }
+
+    int ma_ = -1, mb_ = -1;
+    std::string a_, b_;
+    std::atomic<bool> stop_ { false };
+    std::thread relay_;
+};
+
+}   // namespace
+
+DN_TEST (ddcmp, two_nodes_come_up_over_a_serial_line)
+{
+    TtyPair tty;
+    DN_ASSERT (tty.ok ());
+
+    Config ca = Config::from_string (
+        "routing 1.1 --type l1router\nnode 1.1 NODEA\nnode 1.2 NODEB\n"
+        "circuit ser-0 DDCMP serial:" + tty.a () + ":38400 --t3 2\n");
+    Config cb = Config::from_string (
+        "routing 1.2 --type l1router\nnode 1.2 NODEB\nnode 1.1 NODEA\n"
+        "circuit ser-0 DDCMP serial:" + tty.b () + ":38400 --t3 2\n");
+
+    Node a (ca), b (cb);
+    a.start ();
+    b.start ();
+
+    DN_ASSERT (wait_until ([&] {
+        return a.routing ()->adjacency_count () == 1
+            && b.routing ()->adjacency_count () == 1;
+    }, std::chrono::seconds (30)));
+
+    b.stop ();
+    a.stop ();
+}
+
+DN_TEST (ddcmp, an_unsupported_serial_speed_is_refused)
+{
+    // A line running at a speed termios has no name for would be set to
+    // whatever it was already at, and the result is noise that looks
+    // exactly like a cable fault.  Better to refuse the configuration.
+    DN_ASSERT_THROWS (std::invalid_argument,
+                      Ddcmp::create (nullptr, "x", "serial:/dev/null:12345"));
+}
+
+DN_TEST (ddcmp, a_serial_device_that_will_not_open_costs_its_circuit_only)
+{
+    Config c = Config::from_string (
+        "routing 1.1 --type l1router\nnode 1.1 NODEA\n"
+        "circuit good-0 Multinet 127.0.0.1:27831:connect\n"
+        "circuit ser-0 DDCMP serial:/dev/nonexistent-tty:9600\n");
+    Node n (c);
+    n.start ();
+    // The circuit is built -- the device is opened at start, not at
+    // construction -- but the node stays up on the other one.
+    DN_ASSERT (n.routing ()->circuits ().size () >= 1u);
     n.stop ();
 }

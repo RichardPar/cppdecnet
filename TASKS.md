@@ -166,10 +166,17 @@ ahead of their turn are held rather than dropped.
       the device string `udp:lport:host:rport`
 - [x] Wired into the circuit factory: `circuit ddc-0 DDCMP udp:...` works,
       and two nodes bring a routing adjacency up over it
-- [ ] The TCP and telnet transports. A byte stream needs
-      `ddcmp::find_header` on receive, which is written and tested; telnet
-      additionally escapes the all-ones byte
-- [ ] The serial transport, and the synchronous framer
+- [x] The TCP and telnet transports. Both ends listen and dial at once and
+      the first connection wins, as SIMH's sim_tmxr does, so neither end
+      has to be told which it is. The stream is framed by sliding along it
+      until eight bytes pass the header CRC; telnet doubles the all-ones
+      byte and the receive path collapses it again
+- [x] The serial transport: a real tty at 8N1, raw, no flow control of any
+      kind -- DDCMP does its own framing and error detection, so anything
+      the line discipline might do to the bytes is damage. Tested over a
+      pair of pseudo-terminals, which is the same code path a UART takes
+- [ ] The synchronous framer: a board that frames in hardware and hands
+      over headers with the CRC already checked
 - [x] pcap circuits, where the library is present (the build already probes
       for it; `make features` reports it)
 - [ ] `datalink/gre`: GRE encapsulation

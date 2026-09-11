@@ -7,7 +7,12 @@
 #include "decnet/common/work.h"
 #include "decnet/node.h"
 
+#include <cerrno>
+#include <cstring>
+#include <fcntl.h>
 #include <sstream>
+#include <termios.h>
+#include <unistd.h>
 #include <stdexcept>
 
 namespace decnet::datalink {
@@ -139,14 +144,15 @@ std::unique_ptr<Datalink> Ddcmp::create (Element *owner,
     switch (d.mode) {
     case DdcmpDevice::Mode::udp:
         return std::make_unique<UdpDdcmp> (owner, name, d);
-    default:
-        // PORT: tcp, telnet and serial follow.  The protocol engine is
-        // transport independent, so each is a matter of moving bytes:
-        // a stream needs ddcmp::find_header on receive, which is written
-        // and tested, and telnet additionally escapes the all-ones byte.
-        throw std::invalid_argument ("DDCMP " + d.str ()
-                                     + ": only udp is implemented so far");
+    case DdcmpDevice::Mode::tcp:
+    case DdcmpDevice::Mode::telnet:
+        return std::make_unique<TcpDdcmp> (owner, name, d);
+    case DdcmpDevice::Mode::serial:
+        return std::make_unique<SerialDdcmp> (owner, name, d);
     }
+    // PORT: the synchronous framer, which is a board that does the framing
+    // in hardware and hands over headers with the CRC already checked.
+    throw std::invalid_argument ("DDCMP " + d.str () + ": unknown mode");
 }
 
 Ddcmp::State Ddcmp::connected ()
@@ -212,6 +218,30 @@ Ddcmp::State Ddcmp::running (Work &w)
     return nullptr;
 }
 
+Bytes Ddcmp::read_framed_message (
+    const std::function<Bytes (std::size_t)> &readn)
+{
+    // Slide along the stream a byte at a time until eight of them are a
+    // header that passes its own CRC.  Nothing else is trusted: after a
+    // loss of sync, a length field would have come out of the noise that
+    // caused it.
+    Bytes hdr = readn (ddcmp::HDRLEN);
+    ddcmp::Message m;
+    while (ddcmp::decode_header (ByteView (hdr.data (), hdr.size ()), m)
+           != ddcmp::HdrError::none) {
+        hdr.erase (hdr.begin ());
+        Bytes one = readn (1);
+        hdr.insert (hdr.end (), one.begin (), one.end ());
+    }
+
+    if (m.is_data ()) {
+        // The payload and its own CRC follow the header.
+        Bytes rest = readn (m.count + 2u);
+        hdr.insert (hdr.end (), rest.begin (), rest.end ());
+    }
+    return hdr;
+}
+
 // ------------------------------------------------------------------ UDP
 
 UdpDdcmp::UdpDdcmp (Element *owner, std::string name, DdcmpDevice dev)
@@ -260,6 +290,314 @@ void UdpDdcmp::transmit (const Message &m)
     if (!to) return;
     Bytes wire = m.encode ();
     send_datagram (socket_.fd (), ByteView (wire.data (), wire.size ()), *to);
+}
+
+// ------------------------------------------------------------------ TCP
+
+TcpDdcmp::TcpDdcmp (Element *owner, std::string name, DdcmpDevice dev)
+    : Ddcmp (owner, std::move (name), std::move (dev))
+{
+    telnet_ = dev_.mode == DdcmpDevice::Mode::telnet;
+}
+
+void TcpDdcmp::connect ()
+{
+    // Listen and dial at the same time; the first connection to arrive is
+    // the one used.  Neither end has to be told which it is, which is what
+    // the Python does and what SIMH's sim_tmxr does.
+    listener_ = source_.create_server ();
+    if (!listener_)
+        DN_DEBUG ("{}: cannot listen on {}", name_, source_.str ());
+
+    if (!dev_.destination.empty ()) {
+        SourceAddress any ("", 0);
+        connecting_ = create_connection (dest_, any);
+    }
+}
+
+void TcpDdcmp::disconnect ()
+{
+    listener_.close ();
+    connecting_.close ();
+    socket_.close ();
+}
+
+bool TcpDdcmp::check_connection ()
+{
+    for (;;) {
+        if (stopping ()) return false;
+
+        // The outbound attempt finishing shows up as writable; an inbound
+        // one as readable on the listener.
+        if (connecting_) {
+            PollResult p = poll_socket (connecting_.fd (), false, true, 50);
+            if (p.error) {
+                connecting_.close ();
+            } else if (p.writable) {
+                int err = connecting_.socket_error ();
+                if (err) {
+                    DN_TRACE ("{} connect failed: {}", name_,
+                              std::strerror (err));
+                    connecting_.close ();
+                } else {
+                    DN_DEBUG ("{} connected outbound to {}", name_,
+                              dest_.str ());
+                    socket_ = std::move (connecting_);
+                    listener_.close ();
+                    socket_.set_nodelay ();
+                    return true;
+                }
+            }
+        }
+
+        if (listener_) {
+            PollResult p = poll_socket (listener_.fd (), true, false, 50);
+            if (p.error) {
+                listener_.close ();
+            } else if (p.readable) {
+                Socket conn (::accept (listener_.fd (), nullptr, nullptr));
+                if (conn) {
+                    Endpoint peer = peer_of (conn.fd ());
+                    if (!dest_.any () && !dest_.valid (peer)) {
+                        // Someone else dialled us.  A point to point link
+                        // has exactly one peer, so this is not it.
+                        DN_TRACE ("{}: connection from unexpected address {}",
+                                  name_, peer.str ());
+                        continue;       // conn closes here
+                    }
+                    DN_DEBUG ("{} accepted inbound connection", name_);
+                    socket_ = std::move (conn);
+                    listener_.close ();
+                    connecting_.close ();
+                    socket_.set_nodelay ();
+                    return true;
+                }
+            }
+        }
+
+        if (!listener_ && !connecting_) return false;   // nothing left to wait on
+    }
+}
+
+Bytes TcpDdcmp::unescape_read (std::size_t n)
+{
+    if (!telnet_) return recvall (n);
+
+    // Telnet doubles the all-ones byte.  Read until n real bytes have been
+    // recovered, collapsing each pair as it appears.
+    Bytes out;
+    out.reserve (n);
+    while (out.size () < n) {
+        Bytes b = recvall (n - out.size ());
+        std::size_t ff = 0;
+        for (std::uint8_t c : b) if (c == ddcmp::DEL) ++ff;
+        if (ff & 1) {
+            // A pair was split across this read; take its other half.
+            Bytes more = recvall (1);
+            b.insert (b.end (), more.begin (), more.end ());
+        }
+        for (std::size_t i = 0; i < b.size (); ++i) {
+            out.push_back (b[i]);
+            if (b[i] == ddcmp::DEL && i + 1 < b.size () && b[i + 1] == ddcmp::DEL)
+                ++i;                    // skip the doubled one
+        }
+    }
+    out.resize (n);
+    return out;
+}
+
+Bytes TcpDdcmp::escape (const Bytes &b)
+{
+    Bytes out;
+    out.reserve (b.size ());
+    for (std::uint8_t c : b) {
+        out.push_back (c);
+        if (c == ddcmp::DEL) out.push_back (c);
+    }
+    return out;
+}
+
+void TcpDdcmp::receive_loop ()
+{
+    for (;;) {
+        if (stopping ()) return;
+        try {
+            Bytes msg = read_framed_message (
+                [this] (std::size_t n) { return unescape_read (n); });
+            if (node ())
+                node ()->add_work (std::make_unique<Received> (this,
+                                                               std::move (msg)));
+        } catch (const std::exception &) {
+            return;                     // connection gone, or stop requested
+        }
+    }
+}
+
+void TcpDdcmp::transmit (const Message &m)
+{
+    if (!socket_) return;
+    Bytes wire = m.encode ();
+    if (telnet_) wire = escape (wire);
+
+    std::size_t sent = 0;
+    while (sent < wire.size ()) {
+        ssize_t n = ::send (socket_.fd (), wire.data () + sent,
+                            wire.size () - sent, MSG_NOSIGNAL);
+        if (n <= 0) return;
+        sent += static_cast<std::size_t> (n);
+    }
+}
+
+// --------------------------------------------------------------- serial
+
+namespace {
+
+// The baud rates termios has names for.  A speed it does not know is an
+// error rather than a silent fallback: a line running at the wrong rate
+// produces noise that looks exactly like a cable fault.
+speed_t termios_speed (unsigned baud)
+{
+    switch (baud) {
+    case 300:    return B300;
+    case 600:    return B600;
+    case 1200:   return B1200;
+    case 2400:   return B2400;
+    case 4800:   return B4800;
+    case 9600:   return B9600;
+    case 19200:  return B19200;
+    case 38400:  return B38400;
+    case 57600:  return B57600;
+    case 115200: return B115200;
+    case 230400: return B230400;
+    default:     return 0;
+    }
+}
+
+}   // namespace
+
+SerialDdcmp::SerialDdcmp (Element *owner, std::string name, DdcmpDevice dev)
+    : Ddcmp (owner, std::move (name), std::move (dev))
+{
+    if (!termios_speed (dev_.speed))
+        throw std::invalid_argument ("DDCMP serial: unsupported speed "
+                                     + std::to_string (dev_.speed));
+}
+
+void SerialDdcmp::connect ()
+{
+    fd_ = ::open (dev_.destination.c_str (), O_RDWR | O_NOCTTY | O_NONBLOCK);
+    if (fd_ < 0) {
+        DN_ERROR ("{}: cannot open {}: {}", name_, dev_.destination,
+                  std::strerror (errno));
+        return;
+    }
+
+    termios t {};
+    if (::tcgetattr (fd_, &t) != 0) {
+        DN_ERROR ("{}: {} is not a terminal: {}", name_, dev_.destination,
+                  std::strerror (errno));
+        ::close (fd_);
+        fd_ = -1;
+        return;
+    }
+
+    // Raw, 8 bits, no parity, one stop bit, no flow control of any kind.
+    // DDCMP does its own framing and its own error detection, so anything
+    // the line discipline might helpfully do to the bytes is damage.
+    ::cfmakeraw (&t);
+    t.c_cflag |= CLOCAL | CREAD;        // ignore modem lines, enable receive
+    t.c_cflag &= ~static_cast<tcflag_t> (CSTOPB | PARENB | CRTSCTS);
+    t.c_cflag = (t.c_cflag & ~static_cast<tcflag_t> (CSIZE)) | CS8;
+    t.c_iflag &= ~static_cast<tcflag_t> (IXON | IXOFF | IXANY);
+    t.c_cc[VMIN] = 0;
+    t.c_cc[VTIME] = 0;
+
+    speed_t sp = termios_speed (dev_.speed);
+    ::cfsetispeed (&t, sp);
+    ::cfsetospeed (&t, sp);
+
+    if (::tcsetattr (fd_, TCSANOW, &t) != 0) {
+        DN_ERROR ("{}: cannot configure {}: {}", name_, dev_.destination,
+                  std::strerror (errno));
+        ::close (fd_);
+        fd_ = -1;
+        return;
+    }
+    ::tcflush (fd_, TCIOFLUSH);
+    DN_DEBUG ("{}: opened {} at {} baud", name_, dev_.destination, dev_.speed);
+}
+
+void SerialDdcmp::disconnect ()
+{
+    if (fd_ >= 0) { ::close (fd_); fd_ = -1; }
+}
+
+bool SerialDdcmp::check_connection ()
+{
+    // A serial line has nothing to establish.  Either the port opened or
+    // it did not; there is no peer to agree with until DDCMP's own startup
+    // handshake runs, which is the point of having one.
+    return fd_ >= 0;
+}
+
+Bytes SerialDdcmp::read_line (std::size_t n)
+{
+    Bytes out;
+    out.reserve (n);
+    while (out.size () < n) {
+        if (stopping ()) throw std::runtime_error ("stop requested");
+        PollResult p = poll_socket (fd_, true, false, poll_timeout_ms);
+        if (p.error) throw std::runtime_error ("serial line error");
+        if (p.timeout || !p.readable) continue;
+
+        std::uint8_t buf[512];
+        std::size_t want = std::min (n - out.size (), sizeof buf);
+        ssize_t got = ::read (fd_, buf, want);
+        if (got < 0) {
+            if (errno == EINTR || errno == EAGAIN) continue;
+            throw std::runtime_error ("serial read failed");
+        }
+        if (got == 0) continue;         // nothing yet; a tty is not a socket
+        out.insert (out.end (), buf, buf + got);
+    }
+    return out;
+}
+
+void SerialDdcmp::receive_loop ()
+{
+    for (;;) {
+        if (stopping ()) return;
+        try {
+            Bytes msg = read_framed_message (
+                [this] (std::size_t n) { return read_line (n); });
+            if (node ())
+                node ()->add_work (std::make_unique<Received> (this,
+                                                               std::move (msg)));
+        } catch (const std::exception &) {
+            return;
+        }
+    }
+}
+
+void SerialDdcmp::transmit (const Message &m)
+{
+    if (fd_ < 0) return;
+    Bytes wire = m.encode ();
+    // One all-ones byte after the trailer, as the spec says.  No SYN bytes
+    // in front: they are for synchronous lines and the spec says not to
+    // send them on an async one.  The far end's framing slides past the
+    // pad the same way it slides past any other byte that is not a header.
+    wire.push_back (ddcmp::DEL);
+
+    std::size_t sent = 0;
+    while (sent < wire.size ()) {
+        ssize_t n = ::write (fd_, wire.data () + sent, wire.size () - sent);
+        if (n < 0) {
+            if (errno == EINTR || errno == EAGAIN) continue;
+            return;
+        }
+        sent += static_cast<std::size_t> (n);
+    }
 }
 
 }   // namespace decnet::datalink

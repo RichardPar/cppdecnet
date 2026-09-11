@@ -356,6 +356,18 @@ protected:
 
     void make_protocol ();
 
+    // Read one whole message from a byte stream, given something that
+    // reads exactly n bytes or throws.  Slides along the stream a byte at
+    // a time until eight of them pass the header CRC, then reads the
+    // payload that header describes.
+    //
+    // Shared by TCP and serial because the framing problem is the same
+    // one, and it is the part that is easy to get subtly wrong: looking
+    // for a start byte and taking seven more fails, because a control
+    // message repeated while sync is lost can carry one of the three
+    // start bytes at another offset.
+    Bytes read_framed_message (const std::function<Bytes (std::size_t)> &readn);
+
     DdcmpDevice                       dev_;
     std::unique_ptr<ddcmp::Protocol>  proto_;
     SourceAddress                     source_;
@@ -376,6 +388,60 @@ protected:
     bool check_connection () override;
     void receive_loop () override;
     void transmit (const ddcmp::Message &m) override;
+};
+
+// A byte stream, so there is framing to do: the receiver hunts for a header
+// that passes its own CRC, then reads the payload the header describes.
+//
+// Both ends listen and dial at once, and whichever connection arrives first
+// is the one used.  That is what the Python does and what SIMH does in
+// sim_tmxr.c, and it means neither end has to be told which it is.
+class TcpDdcmp : public Ddcmp {
+public:
+    TcpDdcmp (Element *owner, std::string name, DdcmpDevice dev);
+
+protected:
+    void connect () override;
+    void disconnect () override;
+    bool check_connection () override;
+    void receive_loop () override;
+    void transmit (const ddcmp::Message &m) override;
+
+private:
+    // Telnet mode carries the all-ones byte doubled, so a DDCMP message
+    // containing one is not mistaken for a telnet command.
+    Bytes unescape_read (std::size_t n);
+    static Bytes escape (const Bytes &b);
+
+    bool   telnet_ = false;
+    Socket listener_;       // inbound
+    Socket connecting_;     // outbound, until one of them wins
+};
+
+// A real serial line: the medium DDCMP was written for.
+//
+// Nothing underneath does any of the work here.  There is no connection to
+// establish, no delivery guarantee and no ordering beyond the order bits
+// arrive in, which is why this is the transport that makes the protocol's
+// framing, sequencing and retransmission worth having rather than
+// redundant.
+class SerialDdcmp : public Ddcmp {
+public:
+    SerialDdcmp (Element *owner, std::string name, DdcmpDevice dev);
+
+protected:
+    void connect () override;
+    void disconnect () override;
+    bool check_connection () override;
+    void receive_loop () override;
+    void transmit (const ddcmp::Message &m) override;
+
+private:
+    // Exactly n bytes from the line, or a throw if a stop was asked for.
+    // A tty is not a socket, so this cannot use PtpDatalink::recvall.
+    Bytes read_line (std::size_t n);
+
+    int fd_ = -1;
 };
 
 }   // namespace decnet::datalink
