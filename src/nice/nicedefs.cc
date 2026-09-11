@@ -299,8 +299,15 @@ constexpr ParamDef circuit_defs[] = {
     C ( 900, "Peak adjacencies"),
     C (1000, "Bytes received"),
     C (1001, "Bytes sent"),
+    // A circuit read picks up the port's counters as well as routing's, so
+    // the two multicast counters the broadcast datalink keeps have to be
+    // named here too, not only under line.  Without them a circuit's
+    // counters read "Counter #1002", which is what the monitoring pages
+    // showed.
+    C (1002, "Multicast bytes received"),
     C (1010, "Data blocks received"),
     C (1011, "Data blocks sent"),
+    C (1012, "Multicast blocks received"),
     C (1020, "Data errors inbound", data_errors_in),
     C (1021, "Data errors outbound", data_errors_out),
     C (1030, "Remote reply timeouts"),

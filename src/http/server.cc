@@ -87,6 +87,39 @@ th { background: #eee; }
 .none { color: #777; font-style: italic; }
 )";
 
+// The formatter gives two shapes, and a page wants both as name and value.
+//
+// A parameter is "Name = value".  A counter is the count right aligned in
+// eleven columns, then its description -- value first, because that is how
+// NCP prints a counter block -- and it may carry a "including" list of
+// qualifiers on following lines.  Splitting everything on "=" turned a
+// counter into a name of "0 Bytes received" and an empty value, which is
+// how this was found.
+std::pair<std::string, std::string> split_param (const std::string &line)
+{
+    std::size_t eq = line.find (" = ");
+    if (eq != std::string::npos)
+        return { line.substr (0, eq), line.substr (eq + 3) };
+
+    // A counter: leading spaces, the count, a space, then the description.
+    std::size_t start = line.find_first_not_of (' ');
+    if (start == std::string::npos) return { line, std::string () };
+    std::size_t sp = line.find (' ', start);
+    if (sp == std::string::npos) return { line.substr (start), std::string () };
+    return { line.substr (sp + 1), line.substr (start, sp - start) };
+}
+
+// Newlines in a counter's qualifier list become line breaks.
+std::string breaks (const std::string &s)
+{
+    std::string out;
+    for (char c : s) {
+        if (c == '\n') out += "<br>";
+        else out += c;
+    }
+    return out;
+}
+
 std::string page (const std::string &title, const std::string &nav,
                   const std::string &body)
 {
@@ -279,7 +312,7 @@ Response Server::serve (const Request &req)
 
     for (const PageDef &pd : pages) {
         if (path != pd.slug) continue;
-        r.body = entity_page (pd.kind, info);
+        r.body = entity_page (pd.kind, info, !req.param ("all").empty ());
         return r;
     }
 
@@ -316,7 +349,8 @@ std::string Server::index_page () const
     return page (node_ ? node_->name () : "DECnet", std::string (), b);
 }
 
-std::string Server::entity_page (std::uint8_t kind, unsigned info) const
+std::string Server::entity_page (std::uint8_t kind, unsigned info,
+                                 bool all) const
 {
     const PageDef *pd = nullptr;
     for (const PageDef &d : pages) if (d.kind == kind) pd = &d;
@@ -370,9 +404,28 @@ std::string Server::entity_page (std::uint8_t kind, unsigned info) const
         return page (pd->title, nav, b);
     }
 
+    // A router's node list is every address in its routing table, which is
+    // a thousand entries of "Unreachable" around the handful that mean
+    // something.  NCP's SHOW KNOWN NODES really does mean all of them, so
+    // the page offers them -- but not first, and not by default.
+    std::size_t hidden = 0;
+    auto worth_showing = [&] (const nice::NiceReply *rep) {
+        if (all || kind != nice::Entity::node) return true;
+        const nice::NiceNode &n = rep->entity.as_node ();
+        if (n.executor || !n.name.empty ()) return true;
+        const nice::Param *state = rep->params.find (0);
+        // Unreachable and nameless: nothing a reader is looking for.  Any
+        // node carrying more than its state has something to say.
+        if (state && state->value.is_number () && state->value.as_uint () == 5
+            && rep->params.size () <= 1)
+            return false;
+        return true;
+    };
+
     for (const auto &group : groups) {
         for (const nice::NiceReply *rep : group) {
             if (!rep) continue;
+            if (!worth_showing (rep)) { ++hidden; continue; }
             b += "<h2 class=\"entity\">";
             b += escape (rep->entity.str ());
             b += "</h2>\n";
@@ -383,19 +436,29 @@ std::string Server::entity_page (std::uint8_t kind, unsigned info) const
             }
             b += "<table>\n";
             for (const std::string &line : lines) {
-                auto [k, v] = split_at (line, '=');
-                // The formatter gives "Name = value"; split it into columns
-                // so the pages line up, and keep anything unusual whole.
-                while (!k.empty () && k.back () == ' ') k.pop_back ();
-                while (!v.empty () && v.front () == ' ') v.erase (0, 1);
+                auto [k, v] = split_param (line);
                 b += "<tr><th>";
-                b += escape (k);
+                b += breaks (escape (k));
                 b += "</th><td>";
-                b += escape (v);
+                b += breaks (escape (v));
                 b += "</td></tr>\n";
             }
             b += "</table>\n";
         }
+    }
+    if (hidden) {
+        b += "<p class=\"none\">";
+        b += std::to_string (hidden);
+        b += " unreachable node";
+        b += hidden == 1 ? "" : "s";
+        b += " not shown &mdash; <a href=\"/";
+        b += pd->slug;
+        b += "?all=1";
+        if (info != nice::info_summary) {
+            for (const InfoDef &i : infos)
+                if (i.code == info) { b += "&amp;info="; b += i.slug; }
+        }
+        b += "\">show every node</a></p>\n";
     }
     return page (pd->title, nav, b);
 }

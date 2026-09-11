@@ -402,11 +402,20 @@ NCP> TELL CPPNOD SHOW EXECUTOR CHARACTERISTICS
 ```
 
 READ INFORMATION is served for every entity at all four levels of detail,
-and `LOOP NODE` loops through MIRROR. SET and ZERO are refused: nothing
-authenticates the credentials a request carries, and writing before
-authenticating is the wrong order. See [NOTDONE.md](NOTDONE.md).
+and `LOOP NODE` loops through MIRROR.
 
-A browser, if the configuration asks for one:
+Writes are refused, and the two are refused differently because NCP prints
+the reason. SET answers "unrecognized function", which is what pydecnet
+answers -- it does not implement SET either. ZERO COUNTERS answers
+"privilege violation": pydecnet implements it and refuses it that way when
+it is read-only, which is our permanent posture, because the user name,
+password and account a request carries are not authenticated.
+See [NOTDONE.md](NOTDONE.md).
+
+### The web pages
+
+A configuration line turns them on. The port is how the feature is enabled:
+leave it out and no server runs.
 
 ```
 http --http-port 8102
@@ -416,18 +425,82 @@ http --http-port 8102
 http://localhost:8102/
 ```
 
-An index naming the node, then a page per entity -- nodes, circuits, lines,
-areas, modules, logging -- each at summary, status, characteristics or
-counters:
+The index names the node and links to the rest:
 
 ```
+Node             1.20 (CPPNOD)
+Identification   DECnet/C++ V0.1.0
+Software         DECnet/C++ V0.1.0
+```
+
+One page per entity, the same six NCP knows about:
+
+| Page | Shows |
+|---|---|
+| `/nodes` | every node in the database, the executor first |
+| `/circuits` | the circuits, one block per adjacency |
+| `/lines` | the data links under the circuits |
+| `/areas` | the areas an area router can reach |
+| `/modules` | configuration modules |
+| `/logging` | the event sinks and what they are filtering |
+
+Each takes an `info` parameter, which is the same choice NCP offers after
+`SHOW`: `summary` (the default), `status`, `char` for characteristics, and
+`counters`.
+
+```
+http://localhost:8102/nodes
 http://localhost:8102/circuits?info=counters
+```
+
+```
+Node = 1.20 (CPPNOD)
+    State            On
+    Identification   DECnet/C++ V0.1.0
+
+Node = 1.1 (GATE)
+    State            Unreachable
+
+1020 unreachable nodes not shown - show every node
+```
+
+`SHOW KNOWN NODES` on a router means every address in its routing table,
+which is a thousand rows of "Unreachable" around the few that mean
+something. The page shows the executor, anything with a name and anything
+with something to say, and offers the rest behind a link rather than
+deciding for you:
+
+```
+http://localhost:8102/nodes?all=1
+```
+
+```
+Circuit = MUL-0
+    Bytes received        0
+    Bytes sent            0
+    Data blocks received  0
+    Data blocks sent      0
 ```
 
 The pages are built from the same `nice_read` the NICE protocol answers,
 rather than a second set of accessors into each layer. One description of
 what a circuit looks like, not two that drift apart -- and nothing can
 appear on a page that a remote NCP could not also read.
+
+They are read only. There is no form, no button and no request that changes
+anything, which is the same posture as the NICE listener above.
+
+Two things to know before putting this on a network. The server **listens
+on every interface**, not just the loopback, and there is **no
+authentication**: anyone who can reach the port can read the node's
+database. That is what pydecnet's monitoring does too, and it is fine on a
+private segment and wrong on a public one. Bind it behind whatever you
+already trust, or leave the line out.
+
+HTTPS is not offered. `--https-port` is accepted and ignored so that a real
+pydecnet configuration file still loads. The pages pydecnet has that these
+do not -- per-connection NSP detail, the event display, the bridge page --
+are listed in [TASKS.md](TASKS.md).
 
 ## Layout
 

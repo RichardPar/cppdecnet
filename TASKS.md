@@ -136,8 +136,9 @@ ahead of their turn are held rather than dropped.
       gid set before exec
 - [ ] Outbound connections from an application, and the `bind` request the
       API server uses
-- [ ] `nml` (19), `evl` (26) and `pmr` (123), the other objects PyDECnet
-      enables by default
+- [x] `nml` (19) and `evl` (26), two of the three objects pydecnet enables
+      by default
+- [ ] `pmr` (123), the poor man's routing relay, which is the third
 - [ ] Finish `tools/dnping`, which can now be written against session
       control
 
@@ -224,5 +225,6 @@ Small, independent, worth picking up whenever.
       first. The router running substates (`ru4l1`, `ru4l2`, `ru3r`) belong
       here too
 - [ ] `decnetd` has no daemon mode: no `--daemon`, pid file or log rotation
-- [ ] Counters are collected but nothing reports them. They want either the
-      NICE path or the HTTP one
+- [x] Counters are collected and reported, by NICE (`SHOW ... COUNTERS`)
+      and on the monitoring pages (`?info=counters`). Zeroing them is
+      still refused; see phase 6

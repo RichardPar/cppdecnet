@@ -126,6 +126,67 @@ DN_TEST (http, the_information_level_is_selectable)
     DN_ASSERT_NE (sum.body, cnt.body);
 }
 
+DN_TEST (http, counters_are_rendered_name_first_like_parameters)
+{
+    // The formatter gives two shapes: a parameter is "Name = value", a
+    // counter is the count right aligned and then its description, because
+    // that is how NCP prints a counter block.  A page wants both as name
+    // and value, in that order, or the columns disagree with each other.
+    //
+    // Splitting every line on "=" made a counter come out as a name of
+    // "0 Bytes received" with an empty value.  This is that bug.
+    Config c = Config::from_string (conf);
+    Node n (c);
+    Server s (&n, 0);
+
+    Response r = s.serve (get ("/circuits", "info=counters"));
+    DN_ASSERT_EQ (r.status, 200);
+    DN_ASSERT (contains (r.body, "<th>Bytes received</th><td>0</td>"));
+    // And the name must not have swallowed the count.
+    DN_ASSERT (!contains (r.body, "<th>0 Bytes received"));
+}
+
+DN_TEST (http, the_node_page_hides_the_unreachable_thousand)
+{
+    // A router's node list is every address in its routing table.  Almost
+    // all of them are "Unreachable" and nameless, and a page of a thousand
+    // of those buries the handful that mean something.
+    Config c = Config::from_string (
+        "routing 1.1 --type l1router\n"
+        "node 1.1 NODEA\nnode 1.9 FRIEND\n"
+        "circuit mul-0 Multinet 127.0.0.1:1:connect\n");
+    Node n (c);
+    Server s (&n, 0);
+
+    Response few = s.serve (get ("/nodes"));
+    Response all = s.serve (get ("/nodes", "all=1"));
+    DN_ASSERT_EQ (few.status, 200);
+    DN_ASSERT_EQ (all.status, 200);
+
+    // The executor and the named node survive the filter.
+    DN_ASSERT (contains (few.body, "NODEA"));
+    DN_ASSERT (contains (few.body, "FRIEND"));
+    // The full list is the longer one, and the short page says so and
+    // offers it rather than hiding the choice.
+    DN_ASSERT (all.body.size () > few.body.size ());
+    DN_ASSERT (contains (few.body, "not shown"));
+    DN_ASSERT (contains (few.body, "all=1"));
+}
+
+DN_TEST (http, other_entities_are_not_filtered)
+{
+    // The filter is about the node table's thousand empty rows.  Nothing
+    // else has that shape, and a circuit must never be hidden.
+    Config c = Config::from_string (conf);
+    Node n (c);
+    Server s (&n, 0);
+
+    Response few = s.serve (get ("/circuits"));
+    Response all = s.serve (get ("/circuits", "all=1"));
+    DN_ASSERT_EQ (few.body, all.body);
+    DN_ASSERT (!contains (few.body, "not shown"));
+}
+
 DN_TEST (http, an_unknown_page_is_a_404)
 {
     Config c = Config::from_string (conf);
