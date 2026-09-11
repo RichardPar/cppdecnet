@@ -87,7 +87,9 @@ void Session::start ()
 void Session::stop ()
 {
     DN_DEBUG ("stopping session control");
-    for (auto &[c, l] : live_) finished_.push_back (std::move (l));
+    for (auto &[c, l] : live_)
+        finished_.push_back (Retired { std::move (l),
+                                       std::chrono::steady_clock::now () });
     live_.clear ();
 }
 
@@ -137,8 +139,26 @@ void Session::retire (nsp::Connection &c)
 {
     auto it = live_.find (&c);
     if (it == live_.end ()) return;
-    finished_.push_back (std::move (it->second));
+    // Before, not after: see the note in NSP::close_connection.  The
+    // conversation being retired is retired from inside a callback into
+    // the application it owns, and must outlive this dispatch.
+    sweep_finished ();
+
+    finished_.push_back (Retired { std::move (it->second),
+                                   std::chrono::steady_clock::now () });
     live_.erase (it);
+}
+
+void Session::sweep_finished ()
+{
+    auto now = std::chrono::steady_clock::now ();
+    std::size_t before = finished_.size ();
+    std::erase_if (finished_, [&] (const Retired &r) {
+        return now - r.when >= finished_grace_;
+    });
+    if (std::size_t gone = before - finished_.size ())
+        DN_TRACE ("reclaimed {} finished conversation(s), {} still held",
+                  gone, finished_.size ());
 }
 
 // ---------------------------------------------------------------- inbound

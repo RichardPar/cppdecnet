@@ -19,6 +19,7 @@
 #ifndef DECNET_ROUTING_L1ROUTER_H
 #define DECNET_ROUTING_L1ROUTER_H
 
+#include <chrono>
 #include "decnet/common/timers.h"
 #include "decnet/events/events.h"
 #include "decnet/routing/routing.h"
@@ -89,6 +90,15 @@ public:
     // Exposed because it is the part worth testing directly.
     std::vector<Bytes> build (bool complete) const;
 
+    // The interval the last send scheduled, and whether that send carried
+    // the whole table.  Exposed for the same reason as build: the rule
+    // about not letting triggered updates starve the periodic sweep is
+    // arithmetic, and arithmetic is worth checking directly rather than
+    // by waiting out a timer.
+    double t1 () const noexcept { return t1_; }
+    double next_interval () const noexcept { return next_interval_; }
+    bool last_was_complete () const noexcept { return last_complete_; }
+
 private:
     void send_now ();
 
@@ -100,6 +110,14 @@ private:
     bool             any_srm_ = false;
     bool             holdoff_ = false;
     bool             running_ = false;
+
+    // When the last *full* update went out, as distinct from the last
+    // update of any kind.  A triggered update must not push the periodic
+    // sweep back by a whole t1, or a circuit with steady topology churn
+    // never sends one.  Port of Update.lastfull.
+    std::chrono::steady_clock::time_point lastfull_ {};
+    double           next_interval_ = 0.0;
+    bool             last_complete_ = false;
 };
 
 // One routing matrix: the columns, and the best route derived from them.

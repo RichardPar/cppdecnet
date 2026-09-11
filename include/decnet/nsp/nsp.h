@@ -32,6 +32,7 @@
 #ifndef DECNET_NSP_NSP_H
 #define DECNET_NSP_NSP_H
 
+#include <chrono>
 #include "decnet/common/element.h"
 #include "decnet/common/statemachine.h"
 #include "decnet/common/timers.h"
@@ -341,7 +342,37 @@ private:
     // Connections NSP has finished with.  A caller may still hold a
     // pointer to one, so they are kept rather than destroyed; each reports
     // itself closed.
-    std::vector<std::unique_ptr<Connection>> closed_;
+    // Connections that have closed.  They are not destroyed at once: a
+    // closed connection is retired from inside a callback into the
+    // application that owns it, so freeing it there is a use-after-free --
+    // see BUGS.md.  They are not kept forever either, which used to be the
+    // trade: a node that opens and closes many links grew without bound.
+    //
+    // Each carries the time it was retired, and the list is swept whenever
+    // another joins it.  Anything past the grace period is destroyed, by
+    // which time the dispatch that retired it has long returned.  Sweeping
+    // on arrival rather than on a timer means the work happens exactly
+    // when there is something to reclaim.
+    struct Closed {
+        std::unique_ptr<Connection>           conn;
+        std::chrono::steady_clock::time_point when;
+    };
+    std::vector<Closed> closed_;
+
+public:
+    // How many closed connections are still held, and how long they are
+    // kept.  Both are here for the tests: the reclamation rule is a
+    // question of counting and of elapsed time, and a test that had to
+    // wait out the real grace period would not be run.
+    std::size_t closed_count () const noexcept { return closed_.size (); }
+    void set_closed_grace (std::chrono::seconds g) noexcept
+    { closed_grace_ = g; }
+
+private:
+
+    std::chrono::seconds closed_grace_ { 60 };
+
+    void sweep_closed ();
 };
 
 }   // namespace decnet::nsp

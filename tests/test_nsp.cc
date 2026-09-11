@@ -212,6 +212,65 @@ DN_TEST (nsp, connect_and_accept)
     l.stop ();
 }
 
+DN_TEST (nsp, closed_connections_are_reclaimed)
+{
+    // A closed connection is not destroyed at once, because it is retired
+    // from inside a callback into its own owner and freeing it there is a
+    // use-after-free.  It must not be kept forever either: that was the
+    // slow leak in BUGS.md item 6, where a node that opened and closed
+    // many links grew without bound.
+    Link l;
+    l.start ();
+    // Nothing is waited out: the grace period is the rule being checked,
+    // not the clock.
+    l.a->nsp ()->set_closed_grace (std::chrono::seconds (0));
+    l.b->nsp ()->set_closed_grace (std::chrono::seconds (0));
+
+    std::size_t held = l.b->nsp ()->closed_count ();
+
+    for (int i = 0; i < 5; ++i) {
+        Connection *c = l.b->nsp ()->connect (Nodeid::parse ("1.1"),
+                                              bytes_of ("hi"));
+        DN_ASSERT (c != nullptr);
+        DN_ASSERT (wait_until ([&] { return c->running (); }));
+        c->disconnect (0, { });
+        DN_ASSERT (wait_until ([&] { return !c->running (); }));
+    }
+
+    // With no grace, each retirement sweeps what came before it, so the
+    // list does not grow with the number of links opened and closed.
+    DN_ASSERT (wait_until ([&] {
+        return l.b->nsp ()->closed_count () <= held + 1;
+    }));
+
+    l.stop ();
+}
+
+DN_TEST (nsp, a_closed_connection_is_kept_for_the_grace_period)
+{
+    // The other half of the rule: with a grace period, the object survives
+    // its own retirement.  This is what stops the use-after-free.
+    Link l;
+    l.start ();
+    l.b->nsp ()->set_closed_grace (std::chrono::seconds (60));
+
+    Connection *c = l.b->nsp ()->connect (Nodeid::parse ("1.1"),
+                                          bytes_of ("hi"));
+    DN_ASSERT (c != nullptr);
+    DN_ASSERT (wait_until ([&] { return c->running (); }));
+
+    std::size_t before = l.b->nsp ()->closed_count ();
+    c->disconnect (0, { });
+    DN_ASSERT (wait_until ([&] { return !c->running (); }));
+    DN_ASSERT (wait_until ([&] {
+        return l.b->nsp ()->closed_count () == before + 1;
+    }));
+    // And it still answers, rather than being a dangling pointer.
+    DN_ASSERT (!c->running ());
+
+    l.stop ();
+}
+
 DN_TEST (nsp, accept_can_carry_data)
 {
     Link l;

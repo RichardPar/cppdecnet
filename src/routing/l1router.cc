@@ -549,6 +549,7 @@ Update::Update (Circuit *circuit, L1Router *router, double t1,
 void Update::start ()
 {
     running_ = true;
+    lastfull_ = std::chrono::steady_clock::now ();
     if (node ()) node ()->timers ().start (this, t1_);
 }
 
@@ -593,14 +594,39 @@ void Update::send_now ()
 {
     // A triggered update carries only what changed; a periodic one carries
     // everything.
-    std::vector<Bytes> pkts = build (!any_srm_);
+    const bool triggered = any_srm_;
+    std::vector<Bytes> pkts = build (!triggered);
     for (const Bytes &p : pkts) circuit_->send_update (p);
-    DN_TRACE ("sent {} routing update packet(s) on {}", pkts.size (),
-              circuit_->name ());
+    DN_TRACE ("sent {} {} routing update packet(s) on {}", pkts.size (),
+              triggered ? "triggered" : "periodic", circuit_->name ());
 
     std::fill (srm_.begin (), srm_.end (), false);
     any_srm_ = false;
-    if (node ()) node ()->timers ().start (this, t1_);
+
+    // What to set the timer to depends on which kind of update that was.
+    //
+    // A periodic one restarts the full interval, and is the thing the
+    // interval is about.  A triggered one must not: restarting t1 after
+    // every send means a circuit whose topology keeps changing pushes its
+    // periodic sweep back indefinitely and never sends one, which is what
+    // this used to do.  The sweep is what recovers from a lost triggered
+    // update, so losing it is not harmless.
+    //
+    // pydecnet schedules the next one at the time elapsed since the last
+    // full update, capped at t1 (Update.dispatch).  The effect is that a
+    // full update follows a triggered one within at most another t1, so
+    // the sweep happens every t1 to 2*t1 however busy the circuit is.
+    double delta = t1_;
+    auto now = std::chrono::steady_clock::now ();
+    if (triggered) {
+        std::chrono::duration<double> since = now - lastfull_;
+        delta = std::min (since.count (), t1_);
+    } else {
+        lastfull_ = now;
+    }
+    next_interval_ = delta;
+    last_complete_ = !triggered;
+    if (node ()) node ()->timers ().start (this, delta);
 }
 
 std::vector<Bytes> Update::build (bool complete) const

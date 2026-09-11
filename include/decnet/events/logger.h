@@ -179,6 +179,13 @@ public:
 
     std::size_t queued () const noexcept { return queue_.size (); }
 
+    // Is the logical link to the far end open?  A sink with no link
+    // queues what it is given and retries the connect every conn_retry
+    // seconds, so "the event was raised" and "the event can travel" are
+    // half a minute apart in the worst case.  Exposed so a test can wait
+    // for the second rather than assume it follows the first.
+    bool connected () const noexcept { return conn_ != nullptr; }
+
 protected:
     unsigned sinkmask (const Event &e) const override;
     void writeevent (const Event &e, unsigned mask) override;

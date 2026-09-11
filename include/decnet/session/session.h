@@ -15,6 +15,7 @@
 #ifndef DECNET_SESSION_SESSION_H
 #define DECNET_SESSION_SESSION_H
 
+#include <chrono>
 #include "decnet/common/element.h"
 #include "decnet/nsp/nsp.h"
 #include "decnet/session/packets.h"
@@ -159,7 +160,28 @@ private:
     //
     // PORT: nothing reclaims these, nor NSP's closed connections; a long
     // running node grows slowly.  See BUGS.md.
-    std::vector<Live>                            finished_;
+    // Finished conversations, kept for the same reason NSP keeps closed
+    // connections and reclaimed the same way: retirement happens inside a
+    // callback into the application being retired, so it cannot be freed
+    // there, but keeping it forever is a slow leak.  See BUGS.md.
+    struct Retired {
+        Live                                  live;
+        std::chrono::steady_clock::time_point when;
+    };
+    std::vector<Retired> finished_;
+
+public:
+    // As in NSP, and for the same reason: the tests need to see how many
+    // are held and to shorten the wait.
+    std::size_t finished_count () const noexcept { return finished_.size (); }
+    void set_finished_grace (std::chrono::seconds g) noexcept
+    { finished_grace_ = g; }
+
+private:
+
+    std::chrono::seconds finished_grace_ { 60 };
+
+    void sweep_finished ();
 };
 
 // The DECnet network management loopback application, object 25.  Port of

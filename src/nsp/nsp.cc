@@ -865,11 +865,32 @@ void NSP::close_connection (Connection *c)
     return_id (addr);
     // The object stays alive: a caller may still hold a pointer, and it
     // reports itself closed.  Only the tables forget it.
+    // Sweep before adding, never after.  The connection being retired here
+    // is retired from inside a callback into its own owner, so it must
+    // survive this dispatch -- and a sweep that ran after the push could
+    // reclaim the very object whose stack frame is about to be returned
+    // into.  Sweeping first means only entries from earlier dispatches are
+    // ever candidates, which is true whatever the grace period is set to.
+    sweep_closed ();
+
     auto it = by_addr_.find (addr);
     if (it != by_addr_.end ()) {
-        closed_.push_back (std::move (it->second));
+        closed_.push_back (Closed { std::move (it->second),
+                                    std::chrono::steady_clock::now () });
         by_addr_.erase (it);
     }
+}
+
+void NSP::sweep_closed ()
+{
+    auto now = std::chrono::steady_clock::now ();
+    std::size_t before = closed_.size ();
+    std::erase_if (closed_, [&] (const Closed &c) {
+        return now - c.when >= closed_grace_;
+    });
+    if (std::size_t gone = before - closed_.size ())
+        DN_TRACE ("reclaimed {} closed connection(s), {} still held", gone,
+                  closed_.size ());
 }
 
 void NSP::deliver (Nodeid src, ByteView payload)

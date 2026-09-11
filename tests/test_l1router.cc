@@ -295,6 +295,39 @@ DN_TEST (l1, update_messages_describe_what_we_can_reach)
     p.stop ();
 }
 
+DN_TEST (l1, a_triggered_update_does_not_postpone_the_periodic_one)
+{
+    // The periodic sweep is what recovers from a triggered update that was
+    // lost, so a circuit with steady topology churn must still get one.
+    //
+    // This used to restart the full interval after every send, triggered
+    // or not, which let a busy circuit push its sweep back indefinitely.
+    // pydecnet schedules the next update at the time elapsed since the
+    // last full one, capped at t1, so a full update follows a triggered
+    // one within at most another t1.  BUGS.md item 2.
+    Pair p ("l1router", "l1router", " --t3 2");
+    p.start ();
+    DN_ASSERT (wait_until ([&] { return p.both_up (); }));
+
+    Update *u = p.ra ()->update_for (p.a->routing ()->circuits ().front ());
+    DN_ASSERT (u != nullptr);
+
+    // A triggered update: mark something changed, then let the send run.
+    u->set_srm (500);
+    u->timeout ();
+    DN_ASSERT (!u->last_was_complete ());
+    // Scheduled sooner than a whole interval, because the interval belongs
+    // to the sweep and this was not one.
+    DN_ASSERT (u->next_interval () <= u->t1 ());
+
+    // The next one carries the whole table and restarts the interval.
+    u->timeout ();
+    DN_ASSERT (u->last_was_complete ());
+    DN_ASSERT_EQ (u->next_interval (), u->t1 ());
+
+    p.stop ();
+}
+
 DN_TEST (l1, updates_are_split_to_fit_the_block_size)
 {
     // A full table for 1023 nodes does not fit one 576 byte message, so

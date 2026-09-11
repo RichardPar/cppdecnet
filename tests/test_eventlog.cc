@@ -320,10 +320,14 @@ struct Pair {
     {
         a->start ();
         b->start ();
-        wait_until ([&] {
+        // The result mattered and was being dropped: on a loaded machine
+        // this could time out, start () would return anyway, and the test
+        // that followed raced something that had not happened yet.
+        bool up = wait_until ([&] {
             return a->routing ()->adjacency_count () == 1
                 && b->routing ()->adjacency_count () == 1;
         });
+        DN_ASSERT (up);
     }
     void stop () { if (b) b->stop (); if (a) a->stop (); }
 };
@@ -364,6 +368,22 @@ DN_TEST (eventlog, an_event_travels_to_a_remote_sink)
         parse_events ("4.10,4.15"));
 
     p.start ();
+
+    // Wait for the link to the remote sink, not just for the adjacency.
+    //
+    // This is what made the test fail about one run in three on a busy
+    // machine.  An event raised before the sink's logical link is up is
+    // queued, and the sink retries its connect every thirty seconds --
+    // twice the fifteen this test was prepared to wait.  So a slow start
+    // did not delay the record, it delayed it past the deadline, and the
+    // failure looked like a lost event rather than a late link.
+    //
+    // Waiting for the precondition is the fix.  Lengthening the deadline
+    // past thirty seconds would also have gone green, and would have hidden
+    // the same race behind a slower test.  BUGS.md item 10.
+    events::RemoteSink *sink = p.a->event_logger ()->remote_sink ("NODEB");
+    DN_ASSERT (sink != nullptr);
+    DN_ASSERT (wait_until ([&] { return sink->connected (); }));
 
     // A raises an event that its filter selects for the remote sink.
     Event up { { 4, 10 }, nice::Entity::make_circuit ("MUL-0") };

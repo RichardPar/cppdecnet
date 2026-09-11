@@ -280,6 +280,38 @@ DN_TEST (session, mirror_loop_by_object_number)
     p.stop ();
 }
 
+DN_TEST (session, finished_conversations_are_reclaimed)
+{
+    // The same rule as NSP's closed connections, and for the same reason:
+    // a conversation is retired from inside a callback into the
+    // application being retired, so it is moved aside rather than
+    // destroyed -- and then it has to be destroyed eventually, or a node
+    // that serves many connections grows without bound.  BUGS.md item 6.
+    Pair p;
+    p.start ();
+    p.a->session ()->set_finished_grace (std::chrono::seconds (0));
+    p.b->session ()->set_finished_grace (std::chrono::seconds (0));
+
+    for (int i = 0; i < 5; ++i) {
+        auto client = std::make_unique<Client> ();
+        Client *cl = client.get ();
+        SessionConnection *c = p.b->session ()->connect (
+            Nodeid::parse ("1.1"), EndUser::number (25),
+            EndUser::named ("TEST"), {}, std::move (client));
+        DN_ASSERT (c != nullptr);
+        DN_ASSERT (wait_until ([&] { return cl->accepts () == 1; }));
+        c->disconnect ();
+        DN_ASSERT (wait_until ([&] { return cl->disconnects () == 1; }));
+    }
+
+    // Five conversations came and went; the graveyard does not hold five.
+    DN_ASSERT (wait_until ([&] {
+        return p.b->session ()->finished_count () <= 1;
+    }));
+
+    p.stop ();
+}
+
 DN_TEST (session, mirror_loop_by_object_name)
 {
     Pair p;

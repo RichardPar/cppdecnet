@@ -31,50 +31,27 @@ numbering other documents refer to does not shift.
 
 `src/routing/routing.cc`, `src/routing/lan.cc`
 
-### 2. Triggered updates reset the periodic timer
-
-`Update::send_now` restarts the periodic timer at T1 after any send.
-PyDECnet distinguishes: after a triggered update it schedules the next
-periodic one at the time remaining since the last full update, so a busy
-circuit still gets its sweep on schedule.
-
-Effect: on a circuit with frequent topology changes, full updates go out
-later than they should. Routes still converge, since triggered updates
-carry the changes, but a lost update is recovered from more slowly. Easy
-fix: track `lastfull` the way PyDECnet does.
-
-`src/routing/l1router.cc`
-
-### 3. Endnode circuit cost is sampled once
+### 2. Endnode circuit cost is sampled once
 
 `L1Router::adj_up` reads the circuit's cost when the adjacency comes up and
 writes it into the endnode column; nothing re-reads it. Fine while cost is
 configuration-only, which it is. It would be wrong if cost became settable
 at run time, which NCP `SET CIRCUIT COST` does.
 
-### 4. `PtpCircuit::running()` casts away const
+### 3. `PtpCircuit::running()` casts away const
 
 `src/routing/ptp.cc` uses `const_cast` to call `in_state` from a const
 member. Cosmetic, but the kind of thing that hides a real constness problem
 later. `StateMachine::in_state` should be const.
 
-### 5. Frames from our own source address are dropped unconditionally
+### 4. Frames from our own source address are dropped unconditionally
 
 `BcDatalink::receive_frame` ignores any frame whose source is our own
 address, which is right on a medium that echoes. But `--random-address`
 does not stop two nodes drawing the same address, and the symptom would be
 a circuit silently ignoring its peer. Worth at least logging.
 
-### 6. Closed connections are never reclaimed
-
-NSP keeps finished `Connection` objects in a `closed_` list and session
-control keeps finished conversations in `finished_`, because a caller may
-still hold a pointer to one. See the use-after-free below for why that
-matters. Nothing ever frees them, so a node that opens and closes many
-links grows slowly. Needs reference counting, or a sweep that reclaims an
-entry once nothing outside can reach it.
-
-### 7. NSP asks for no flow control on its own inbound data
+### 5. NSP asks for no flow control on its own inbound data
 
 Outbound flow control is done: a peer that asks for segment or message mode
 gets it, and link service messages carry the credit. Our own connect
@@ -83,11 +60,11 @@ PyDECnet does the same, so this interoperates, but it means we cannot slow
 a fast sender down. Doing it needs us to send link service messages as a
 receiver, which is the other half of the same machinery.
 
-### 8. `UdpMultinet::create_port` is a pointless passthrough
+### 6. `UdpMultinet::create_port` is a pointless passthrough
 
 Dead code in `src/datalink/multinet.cc`. It calls the base and returns.
 
-### 9. A level 1 router sends no routing messages to a LAN of endnodes
+### 7. A level 1 router sends no routing messages to a LAN of endnodes
 
 `LanCircuit::wants_updates` returns false unless a router adjacency is up,
 so a circuit whose only neighbour is an endnode never carries a routing
@@ -111,25 +88,29 @@ the traffic is wanted and the receiver is not a PDP-11.
 
 `src/routing/lan.cc`
 
-### 10. `test_eventlog` fails under load
+### 8. `test_eventlog` hangs, rarely, under heavy load
 
-`eventlog.an_event_travels_to_a_remote_sink` times out in its `wait_until`
-about one run in three *while the machine is busy* -- during this session,
-with a decnetd and a tcpdump running against real hardware. On an idle
-machine it passed 6 of 6 both with and without the changes made that day,
-so it is not a regression from them.
+`eventlog.an_event_travels_to_a_remote_sink` used to fail about one run in
+three on a busy machine. Most of that is fixed and the cause is written up
+below; what is left is rarer and is a different failure.
 
-It stands two nodes up, joins them with a real circuit and waits for an
-event record to cross it, so it is timing sensitive by construction. The
-`wait_until` deadline is presumably tuned for an idle machine. Either the
-deadline is too tight or something in the path is slower than it should be
-under contention, and which of those it is has not been established.
+The remaining one is a **hang**, not a failed assertion: the process runs
+past two minutes having brought both circuits up, and prints no result.
+Seen once in twelve runs with every core spinning; then not once in the
+following seventy-five runs under the same load, so it is rarer than one in
+twenty and has not been caught in the act.
 
-Worth pinning down rather than lengthening the timeout blindly: the same
-test caught a real ordering defect once already (the event raised from
-inside a state function, below).
+Not diagnosed. A stack trace is what it needs, and the recipe is:
 
-`tests/test_eventlog.cc:381`
+    for i in $(seq 1 $(nproc)); do (timeout 300 yes > /dev/null &); done
+    ./build/release/bin/test_eventlog & pid=$!
+    sleep 45
+    kill -0 $pid && gdb -p $pid -batch -ex "thread apply all bt"
+
+Note the load generator has to be killable by name (`pkill -x yes`). A
+`while :; do :; done` loop matches the pattern of the shell running the
+hunt, and killing that produces an empty log that looks exactly like a
+hung test -- which cost a diagnosis cycle here.
 
 ---
 
@@ -267,6 +248,46 @@ bytes, which is what narrowed it to the fill.
 The lesson is not about padding. It is that matching a reference
 implementation's *incidental* choices is worth doing when the peer is forty
 years old and may read past what it was told.
+
+### A triggered routing update postponed the periodic one indefinitely
+
+`Update::send_now` restarted the periodic timer at `t1` after any send. A
+triggered update is sent whenever the table changes, so on a circuit whose
+topology keeps changing the periodic sweep was pushed back every time and
+could go out arbitrarily late, or never.
+
+That matters because the sweep is what recovers from a triggered update
+that was lost. Losing it does not stop routes converging; it stops them
+converging again after a drop, which is the failure that looks like a
+network with a long memory for stale routes.
+
+pydecnet schedules the next update after a triggered one at the time
+elapsed since the last *full* update, capped at `t1`, and only a full
+update restarts the interval (`Update.dispatch`). A full update therefore
+follows a triggered one within at most another `t1`, so the sweep happens
+every `t1` to `2*t1` however busy the circuit is. Ported, with `lastfull_`
+as the extra state it needs.
+
+### Closed connections and finished conversations are now reclaimed
+
+NSP kept every closed `Connection` and session control every finished
+conversation, because both are retired from inside a callback into the
+object being retired and freeing them there is a use-after-free -- the one
+written up below. Nothing ever freed them, so a node that opened and closed
+many links grew without bound.
+
+Each now carries the time it was retired and is destroyed once a grace
+period has passed, sixty seconds by default. The sweep runs when another
+entry is retired, so the work happens exactly when there is something to
+reclaim and an idle node does nothing.
+
+The ordering is the part worth remembering: **sweep before adding, never
+after.** A sweep that runs after the push can reclaim the very object whose
+stack frame is about to be returned into, which is the original bug wearing
+a new hat. Written the other way round first, and the test that set the
+grace period to zero to avoid waiting out a minute hung immediately --
+which is the same defect this entry is about, reintroduced and then caught
+by a test written to check it was gone.
 
 ### Object lifetime inside a callback
 
