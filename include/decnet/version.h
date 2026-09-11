@@ -16,7 +16,7 @@ inline constexpr const char *cyear   = "2026";
 // was worked out in the Python it derives from.  Paul Koning's copyright
 // in that Python is retained in LICENSE, which is what its BSD 3-clause
 // terms require and what the credit line below acknowledges.
-inline constexpr const char *authors = "RichardPar";
+inline constexpr const char *authors = "Richard";
 
 // Set by the build from git; see DN_GITREV in mk/config.mk.
 #ifndef DN_GITREV
