@@ -183,6 +183,15 @@ void Config::apply (ConfigLine line)
         return;
     }
 
+    if (line.command == "http") {
+        // pydecnet's http command carries both ports; https is not offered
+        // here, so it is accepted and ignored rather than rejected, which
+        // keeps a real configuration file loading.
+        if (has (line, "http-port"))
+            http_port_ = to_uint (opt (line, "http-port", empty), "http-port");
+        return;
+    }
+
     if (line.command == "routing") {
         if (line.positional.empty ())
             throw std::runtime_error ("routing needs a node address");

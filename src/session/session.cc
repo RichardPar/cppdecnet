@@ -3,6 +3,7 @@
 
 #include "decnet/common/logging.h"
 #include "decnet/config.h"
+#include "decnet/nice/nml.h"
 #include "decnet/node.h"
 #include "decnet/session/process.h"
 
@@ -326,8 +327,13 @@ void add_default_objects (Session &s)
         s.add_object (26, "EVENTLOGGER",
                       [n] { return events::make_event_receiver (n); });
     }
-    // PORT: nml (19) and pmr (123) are the other objects pydecnet enables
-    // by default.
+    // Object 19 is the network management listener, which is what NCP on
+    // another node connects to.  Enabled by default, as upstream does.
+    if (!s.find_object (19) && !s.find_object ("NML")) {
+        Node *n = s.node ();
+        s.add_object (19, "NML", [n] { return nice::make_nml (n); });
+    }
+    // PORT: pmr (123) is the other object pydecnet enables by default.
 }
 
 }   // namespace decnet::session

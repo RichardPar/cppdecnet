@@ -1,3 +1,4 @@
+#include "decnet/http/server.h"
 #include "decnet/node.h"
 
 #include "decnet/common/logging.h"
@@ -6,9 +7,12 @@
 #include "decnet/events/events.h"
 #include "decnet/events/logger.h"
 #include "decnet/mop/mop.h"
+#include "decnet/nice/packets.h"
 #include "decnet/nsp/nsp.h"
 #include "decnet/routing/routing.h"
 #include "decnet/session/session.h"
+
+#include "decnet/version.h"
 
 #include <algorithm>
 #include <chrono>
@@ -59,6 +63,11 @@ Node::Node (const Config &config)
     else
         name_ = id_.str ();
 
+    ident_ = config.identification ();
+    swident_ = version::ident ();
+    if (ident_.empty ()) ident_ = swident_;
+    zeroed_ = std::chrono::steady_clock::now ();
+
     logging::set_thread_name (name_);
     DN_DEBUG ("initializing node {}", name_);
 
@@ -70,6 +79,12 @@ Node::Node (const Config &config)
     // MOP runs on broadcast circuits that ask for it, whether or not this
     // node routes.
     mop_ = std::make_unique<mop::Mop> (this, config);
+
+    // The monitoring server, if the configuration asked for one.  It is
+    // not a protocol layer: nothing below it depends on it, and a node
+    // without one behaves identically.
+    if (config.http_port ())
+        http_ = std::make_unique<http::Server> (this, config.http_port ());
     if (config.routing ()) {
         try {
             routing_ = routing::make_router (this, config);
@@ -131,6 +146,17 @@ Nodeinfo *Node::find_node (const std::string &name)
     return it == by_name_.end () ? nullptr : it->second;
 }
 
+std::vector<const Nodeinfo *> Node::known_nodes () const
+{
+    std::vector<const Nodeinfo *> out;
+    out.reserve (by_id_.size ());
+    for (const auto &[id, info] : by_id_) out.push_back (info.get ());
+    std::sort (out.begin (), out.end (),
+               [] (const Nodeinfo *a, const Nodeinfo *b)
+               { return a->id.value () < b->id.value (); });
+    return out;
+}
+
 void Node::dispatch (Work &)
 {
     // Work addressed to the node itself; nothing uses it yet.
@@ -146,6 +172,73 @@ nice::NiceNode Node::nicenode (Nodeid id) const
     auto it = by_id_.find (id.value ());
     if (it != by_id_.end ()) return nice::NiceNode (id, it->second->name);
     return nice::NiceNode (id);
+}
+
+unsigned Node::seconds_since_zeroed () const noexcept
+{
+    std::chrono::duration<double> dt =
+        std::chrono::steady_clock::now () - zeroed_;
+    return static_cast<unsigned> (dt.count ());
+}
+
+int Node::nice_read (nice::NiceRequest &req, nice::ReplyDict &replies)
+{
+    using namespace nice;
+
+    // Two rewrites before anything else sees the request, so that no layer
+    // below has to know about either form.  Port of the head of
+    // Node.nice_read.
+    if (req.entity_type == Entity::node && req.entity.code == 0
+        && req.entity.id.value () == 0) {
+        // "The executor" arrives as node address zero.
+        req.entity.id = id_;
+    }
+    if (req.entity_type == Entity::node && req.entity.code > 0) {
+        // A read by name.  Look the name up and substitute the address.
+        auto it = by_name_.find (req.entity.name);
+        if (it == by_name_.end ()) return rc_unrecognized_component;
+        req.entity.code = 0;
+        req.entity.id = it->second->id;
+    }
+
+    if (req.entity_type == Entity::logging) {
+        // Logging is the event logger's business alone.
+        if (event_logger_) event_logger_->nice_read (req, replies);
+        return 0;
+    }
+    if (req.events ()) return rc_unrecognized_function;
+
+    // Hand it to the layers.  NSP goes first because it is what knows the
+    // whole node database, so the entries exist before routing fills in
+    // reachability for them.
+    if (nsp_)      nsp_->nice_read (req, replies);
+    if (routing_)  routing_->nice_read (req, replies);
+    if (datalink_) datalink_->nice_read (req, replies);
+    if (mop_)      mop_->nice_read (req, replies);
+
+    // The executor's own identity, which no single layer owns.
+    if (req.entity_type == Entity::node && replies.contains_node (id_)) {
+        NiceReply &exe = replies.node_entry (id_);
+        exe.entity = Entity::make_node (nice::NiceNode (id_, name_, true));
+        if (req.sum () || req.chars ())
+            exe.params.set (100, Value::ai (ident_));
+        if (req.chars ()) {
+            exe.params.set (126, Value::ai (swident_));
+            // Network management version 4.0.0.
+            exe.params.set (101, Value::cm ({ Value::du (4), Value::du (0),
+                                              Value::du (0) }));
+        } else if (req.stat ()) {
+            Macaddr m = Macaddr::from_nodeid (id_);
+            exe.params.set (10, Value::hi (Bytes (m.bytes ().begin (),
+                                                  m.bytes ().end ())));
+        }
+        if (req.sumstat ())
+            exe.params.set (0, Value::c (0));   // On
+        if (req.counters ())
+            exe.params.set_counter (0, Counter { seconds_since_zeroed (), 2,
+                                                 false, 0 });
+    }
+    return 0;
 }
 
 void Node::logevent (events::Event &e)
@@ -168,6 +261,7 @@ void Node::start ()
     if (routing_)  routing_->start ();
     if (nsp_)      nsp_->start ();
     if (session_)  session_->start ();
+    if (http_)     http_->start ();
     thread_ = std::thread ([this] { mainloop (); });
 }
 
@@ -188,6 +282,13 @@ void Node::stop_layers ()
 
 void Node::stop ()
 {
+    // The monitoring server goes first, and from this thread rather than
+    // the node's.  Its helper thread answers a request by posting work to
+    // the node and waiting for the result, so it has to be joined while
+    // that loop is still running: stopping it from inside stop_layers
+    // would have it waiting on a queue nothing was draining.
+    if (http_) http_->stop ();
+
     if (thread_.joinable ()) {
         // Stopping happens on the node's own thread, not the caller's.
         //

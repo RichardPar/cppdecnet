@@ -5,12 +5,15 @@
 
 #include "decnet/common/socket.h"
 #include "decnet/config.h"
+#include "decnet/datalink/datalink.h"
 #include "decnet/node.h"
 #include "decnet/routing/l1router.h"
 #include "decnet/routing/lan.h"
+#include "decnet/routing/packets.h"
 #include "decnet/routing/routing.h"
 
 #include <chrono>
+#include <mutex>
 #include <thread>
 
 using namespace decnet;
@@ -75,6 +78,93 @@ struct Lan {
     EndnodeLanCircuit *ea () { return dynamic_cast<EndnodeLanCircuit *> (ca ()); }
     EndnodeLanCircuit *eb () { return dynamic_cast<EndnodeLanCircuit *> (cb ()); }
 };
+
+// Everything above builds a LAN out of two of our own nodes, which agree
+// with each other about every convention whether or not the convention is
+// right.  The tests at the end of this file need a neighbour that does not:
+// one that announces one address and answers on another, or pads its
+// packets.  Sink and Station are that neighbour -- a datalink port with no
+// routing layer above it, so a test can put exactly the bytes it chooses on
+// the wire, under an address of its choosing, and see exactly what is
+// addressed back to it.
+class Sink : public Element {
+public:
+    explicit Sink (Node *n) : Element (n) {}
+
+    void dispatch (Work &w) override
+    {
+        if (auto *r = dynamic_cast<Received *> (&w)) {
+            std::lock_guard lock (mutex_);
+            got_.push_back (r->packet ());
+        }
+    }
+
+    std::size_t count () { std::lock_guard l (mutex_); return got_.size (); }
+    std::vector<Bytes> got () { std::lock_guard l (mutex_); return got_; }
+
+private:
+    std::mutex         mutex_;
+    std::vector<Bytes> got_;
+};
+
+class Station {
+public:
+    Station (std::uint16_t mine, std::uint16_t peer, Macaddr mac)
+        : cfg_ (Config::from_string (
+              "node 1.9 STATN\ncircuit eth-0 Ethernet udp:"
+              + std::to_string (mine) + ":127.0.0.1:" + std::to_string (peer)
+              + " --random-address\n")),
+          node_ (cfg_), sink_ (&node_)
+    {
+        auto *dl = dynamic_cast<datalink::BcDatalink *> (
+            node_.datalink ()->circuit ("eth-0"));
+        if (!dl) throw std::runtime_error ("no broadcast datalink");
+        port_ = dl->create_bc_port (&sink_, datalink::ROUTING_PROTO);
+        port_->set_macaddr (mac);
+        node_.start ();
+    }
+
+    ~Station () { node_.stop (); }
+
+    void send (const Bytes &payload, Macaddr dest) { port_->send (payload, dest); }
+
+    // What arrived addressed to this station, payload only: the port
+    // accepts its own unicast address and nothing else, which is the whole
+    // point of the addressing tests below.
+    std::size_t count () { return sink_.count (); }
+    std::vector<Bytes> got () { return sink_.got (); }
+
+private:
+    Config             cfg_;
+    Node               node_;
+    Sink               sink_;
+    datalink::BcPort  *port_ = nullptr;
+};
+
+// An endnode hello as a neighbour would send it: enough for a router to
+// bring an adjacency up and put the sender in its routing table.
+Bytes endnode_hello (Nodeid id)
+{
+    EndnodeHello h;
+    h.tiver    = tiver_ph4;
+    h.id       = id;
+    h.blksize  = ETHMTU;
+    h.timer    = 10;
+    h.testdata = hello_testdata (50);
+    h.neighbor.assign (6, 0);
+    return h.encode_packet ();
+}
+
+// The same packet behind a pad header: the high bit set, and the low seven
+// bits giving the length of the padding including the header byte itself.
+Bytes padded (const Bytes &pkt, std::size_t padlen)
+{
+    Bytes b;
+    b.push_back (static_cast<std::uint8_t> (0x80 | padlen));
+    b.resize (padlen, 0);
+    b.insert (b.end (), pkt.begin (), pkt.end ());
+    return b;
+}
 
 }   // namespace
 
@@ -328,4 +418,115 @@ DN_TEST (lan, endnode_with_no_router_addresses_the_destination_directly)
         return l.b->routing ()->packets_for_us () == 1;
     }));
     l.stop ();
+}
+
+// ------------------------------------------- neighbours that are not us
+//
+// The tests above prove the two ends agree.  These use a Station, which
+// agrees with nothing, to pin down the two places where a real neighbour
+// on the wire behaves differently from one of ours.
+
+// A level 1 router alone on a LAN, with a Station for company.
+namespace {
+
+struct RouterAndStation {
+    std::uint16_t pr = free_udp_port (), ps = free_udp_port ();
+    Config rcfg;
+    Node   r;
+    Station s;
+
+    explicit RouterAndStation (Macaddr stationmac)
+        : rcfg (Config::from_string (
+              "routing 1.1 --type l1router\nnode 1.1 NODEA\n"
+              "circuit eth-0 Ethernet udp:" + std::to_string (pr)
+              + ":127.0.0.1:" + std::to_string (ps) + " --t3 2\n")),
+          r (rcfg), s (ps, pr, stationmac)
+    { r.start (); }
+
+    ~RouterAndStation () { r.stop (); }
+
+    RoutingLanCircuit *circuit ()
+    { return dynamic_cast<RoutingLanCircuit *> (r.routing ()->lan_circuit ("eth-0")); }
+
+    L1Router *router () { return dynamic_cast<L1Router *> (r.routing ()); }
+
+    // Hellos are periodic on a real LAN, so repeating one is what a
+    // neighbour does anyway; the first can go out before the router's
+    // socket is listening.
+    bool announce (const Bytes &hello, std::uint16_t nodeval)
+    {
+        int n = 0;
+        return wait_until ([&] () mutable {
+            if (n++ % 20 == 0) s.send (hello, datalink::all_routers ());
+            return circuit ()->adjacencies ().count (nodeval) != 0
+                && circuit ()->adjacency_count () >= 1;
+        });
+    }
+};
+
+}   // namespace
+
+DN_TEST (lan, a_neighbour_is_addressed_where_it_transmits_from)
+{
+    // BAJI, a PDP-11 running RSX, announces id aa-00-04-00-13-04 inside its
+    // hellos and transmits from 08-00-2b-11-22-33 -- and answers on that
+    // second address only.  Hellos are multicast, so believing the derived
+    // address costs nothing until the first unicast packet, at which point
+    // everything sent to the neighbour disappears while both ends still
+    // show the adjacency up.  See BUGS.md.
+    Nodeid id = Nodeid::parse ("1.19");
+    RouterAndStation t (Macaddr::parse ("08-00-2b-11-22-33"));
+
+    DN_ASSERT (t.announce (endnode_hello (id), id.value ()));
+    DN_ASSERT (wait_until ([&] { return t.router ()->reachable (19); }));
+
+    // The station accepts frames for 08-00-2b-11-22-33 and nothing else, so
+    // this arrives only if the router addressed it there.  Sent to the
+    // derived aa-00-04-00-13-04 it is simply lost.
+    DN_ASSERT_EQ (t.s.count (), 0u);
+    t.router ()->send (Bytes { 'x' }, id);
+    DN_ASSERT (wait_until ([&] { return t.s.count () >= 1; }));
+
+    // And what arrived is our packet: a long header, since that is what a
+    // LAN carries, ending in the byte we sent.
+    Bytes got = t.s.got ().at (0);
+    DN_ASSERT_EQ (got.at (0) & 0x7, 0x6);        // long data header
+    DN_ASSERT_EQ (got.back (), 'x');
+}
+
+DN_TEST (lan, padded_routing_packets_are_accepted)
+{
+    // A routing packet on a LAN may arrive behind a pad header: the high
+    // bit set, the low seven bits giving the total pad length including the
+    // header byte.  Port of the same in route_eth.py.
+    Nodeid id = Nodeid::parse ("1.19");
+    RouterAndStation t (Macaddr::parse ("08-00-2b-11-22-33"));
+
+    DN_ASSERT (t.announce (padded (endnode_hello (id), 5), id.value ()));
+}
+
+DN_TEST (lan, malformed_padding_is_rejected)
+{
+    // Two layers of padding is not a thing, and neither is a pad longer
+    // than the packet it precedes.  Both have to be dropped rather than
+    // decoded from whatever byte the length happens to land on.
+    Nodeid good = Nodeid::parse ("1.19");
+    Nodeid bad  = Nodeid::parse ("1.18");
+    RouterAndStation t (Macaddr::parse ("08-00-2b-11-22-33"));
+
+    Bytes twice = padded (padded (endnode_hello (bad), 3), 3);
+    Bytes overrun = endnode_hello (bad);
+    overrun.resize (4);
+    overrun[0] = 0x80 | 0x7f;                    // a pad past the end
+
+    for (int i = 0; i < 10; ++i) {
+        t.s.send (twice, datalink::all_routers ());
+        t.s.send (overrun, datalink::all_routers ());
+        std::this_thread::sleep_for (std::chrono::milliseconds (20));
+    }
+
+    // A good hello behind it, so the wait below cannot pass simply because
+    // nothing at all is getting through.
+    DN_ASSERT (t.announce (endnode_hello (good), good.value ()));
+    DN_ASSERT_EQ (t.circuit ()->adjacencies ().count (bad.value ()), 0u);
 }

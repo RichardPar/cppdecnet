@@ -96,6 +96,12 @@ public:
     void encode (Encoder &e) const;
     static Entity decode (Decoder &d);
 
+    // The same without the leading kind byte.  A NICE reply does not carry
+    // one -- the request said which kind of entity it was asking about --
+    // while an event record does, which is why both forms exist.
+    void encode_body (Encoder &e) const;
+    static Entity decode_body (std::uint8_t kind, Decoder &d);
+
     friend bool operator== (const Entity &, const Entity &) = default;
 
 private:

@@ -611,6 +611,15 @@ Connection::State Connection::cd (Work &w)
         if (cphase_ > 2) send_ack ();
         arm_timer (inact_time_);
         timer_is_retransmit_ = false;
+        // Enter the running state before telling session control, not
+        // after.  An application is entitled to send on the link the
+        // moment it is told the connection was accepted, and send_data
+        // drops anything offered to a link that is not yet running -- so
+        // notifying first would silently lose that first message.  In
+        // pydecnet the notification is a queued work item and so cannot
+        // run before the state change; here the call is direct, which is
+        // what makes the order something this code has to get right.
+        set_state (DN_MY_STATE (Connection, run));
         if (session ())
             session ()->connect_confirmed (
                 *this, ByteView (cc_pkt->data_ctl.data (),

@@ -150,8 +150,11 @@ Bytes Value::encode () const
 
 Value Value::decode (Decoder &d)
 {
-    std::uint8_t code = d.byte ();
+    return decode_body (d.byte (), d);
+}
 
+Value Value::decode_body (std::uint8_t code, Decoder &d)
+{
     // The coded group: the byte count is five bits, not four.
     if (code & 0x80) {
         unsigned n = code & 0x1f;

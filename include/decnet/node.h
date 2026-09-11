@@ -13,11 +13,14 @@
 #include "decnet/common/types.h"
 #include "decnet/common/work.h"
 #include "decnet/nice/entity.h"
+#include "decnet/nice/nml.h"
 
+#include <chrono>
 #include <map>
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 #include <unordered_map>
 
 namespace decnet {
@@ -30,6 +33,7 @@ namespace nsp      { class NSP; }
 namespace session  { class Session; }
 namespace mop      { class Mop; }
 namespace events   { class Event; class EventLogger; }
+namespace http     { class Server; }
 
 // Per node database entry for a remote node.  Port of node.Nodeinfo; the
 // NSP and routing state that pydecnet mixes in here will be added as those
@@ -89,6 +93,23 @@ public:
     // database has one for it.
     nice::NiceNode nicenode (Nodeid id) const;
 
+    // Answer a NICE read request.  Returns zero with the replies filled
+    // in, or a NICE error return code.  The request is taken by reference
+    // because it is rewritten first: a read of "the executor" arrives as
+    // node address zero, and a read by name arrives as a name, and the
+    // layers below are spared both.  Port of Node.nice_read.
+    int nice_read (nice::NiceRequest &req, nice::ReplyDict &replies);
+
+    // What this node calls itself in a management reply.  Port of
+    // Node.ident and Node.swident.
+    const std::string &identification () const noexcept { return ident_; }
+    const std::string &software_identification () const noexcept
+    { return swident_; }
+
+    // Seconds since the counters were last zeroed, which for now is since
+    // the node started: nothing zeroes them yet.
+    unsigned seconds_since_zeroed () const noexcept;
+
     // Queue work to this node from any thread.  Port of Node.addwork.
     void add_work (WorkPtr w);
     void add_work (WorkPtr w, Element *handler);
@@ -108,6 +129,11 @@ public:
     Nodeinfo *find_node (const std::string &name);
     void add_node (Nodeinfo info);
 
+    // Every node the database knows, in address order.  A NICE read of
+    // "known nodes" walks this, and so does the monitoring page.  Sorted
+    // rather than in hash order so a listing is stable between reads.
+    std::vector<const Nodeinfo *> known_nodes () const;
+
     void dispatch (Work &w) override;
 
     const WorkStats &stats () const noexcept { return stats_; }
@@ -120,6 +146,9 @@ private:
     std::string    name_;
     Nodeid         id_;
     Phase          phase_ = Phase::ph4;
+
+    std::string    ident_, swident_;
+    std::chrono::steady_clock::time_point zeroed_;
 
     WorkQueue      queue_;
     TimerWheel     timers_;
@@ -136,6 +165,7 @@ private:
     std::unique_ptr<nsp::NSP>                nsp_;
     std::unique_ptr<session::Session>        session_;
     std::unique_ptr<mop::Mop>                mop_;
+    std::unique_ptr<http::Server>            http_;
     std::unique_ptr<events::EventLogger>     event_logger_;
     // PORT: the bridge follows.
 };

@@ -206,9 +206,11 @@ DN_TEST (process, a_configured_object_replaces_the_builtin)
     Node n (c);
     DN_ASSERT (n.session ()->find_object (25) != nullptr);
     // Object 25 exists once, not twice: the configured program replaced
-    // the built-in rather than being refused.  Object 26, the event
-    // logger's receiving end, is the other one registered by default.
-    DN_ASSERT_EQ (n.session ()->object_count (), 2u);
+    // the built-in rather than being refused.  The other two are the ones
+    // registered by default: 19, the network management listener, and 26,
+    // the event logger's receiving end.
+    DN_ASSERT_EQ (n.session ()->object_count (), 3u);
+    DN_ASSERT (n.session ()->find_object (19) != nullptr);
     DN_ASSERT (n.session ()->find_object (26) != nullptr);
 }
 

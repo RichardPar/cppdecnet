@@ -157,6 +157,15 @@ DN_TEST (eth, short_frames_are_padded_to_the_minimum)
     DN_ASSERT (parse_frame (f, p));
     DN_ASSERT_EQ (p.payload.size (), 1u);
     DN_ASSERT_EQ (p.payload[0], 0xaa);
+
+    // The fill is 0x42, not zero.  That looks like it cannot matter -- the
+    // length field two bytes into the frame says where the payload ends --
+    // but a PDP-11 running RSX reads past it, and what it finds there ends
+    // up in the address it records.  Sent a hello filled with zeros it
+    // built an adjacency to node 21.426, which exists nowhere; sent the
+    // same 27 payload bytes filled with 0x42 it built a correct one.  See
+    // BUGS.md.  Zeros here would pass every other test in this file.
+    for (std::size_t i = 17; i < f.size (); ++i) DN_ASSERT_EQ (f[i], 0x42);
 }
 
 DN_TEST (eth, malformed_frames_rejected)

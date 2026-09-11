@@ -2,9 +2,6 @@
 
 DECnet Phase II/III/IV in C++, ported from [PyDECnet](../pydecnet).
 
-283 tests in 24 binaries. Builds clean in debug (ASan and UBSan) and
-release, no warnings.
-
 ```mermaid
 flowchart TB
     subgraph done [" "]
@@ -91,9 +88,9 @@ real Ethernet segment rather than a simulated one; `make features` says
 whether it was found.
 
 ```sh
-make                   # debug build with sanitizers, and the tests
+make                   # optimised build, and the tests
 make check             # build and run the tests
-make BUILD=release     # optimised
+make BUILD=debug       # unoptimised, with ASan and UBSan
 make features          # what the build detected
 make todo              # unfinished port sites
 make help              # everything else
@@ -102,9 +99,9 @@ make help              # everything else
 Output lands in `build/<flavour>/`:
 
 ```
-build/debug/bin/decnetd      the daemon
-build/debug/bin/dnping       command line tools
-build/debug/lib/libdecnet.a  the stack as a library
+build/release/bin/decnetd      the daemon
+build/release/bin/dnping       command line tools
+build/release/lib/libdecnet.a  the stack as a library
 ```
 
 ## Running
@@ -112,7 +109,7 @@ build/debug/lib/libdecnet.a  the stack as a library
 Configuration files use PyDECnet's syntax unchanged.
 
 ```sh
-./build/debug/bin/decnetd --log-level debug samples/endnode.conf
+./build/release/bin/decnetd --log-level debug samples/endnode.conf
 ```
 
 ```
@@ -276,8 +273,8 @@ run the daemon as root, or grant the capability once:
 sudo setcap cap_net_raw,cap_net_admin+eip build/release/bin/decnetd
 ```
 
-Use the release build for that — a sanitizer instrumented binary refuses to
-run with elevated privileges.
+That needs the default release build — a sanitizer instrumented binary
+(`make BUILD=debug`) refuses to run with elevated privileges.
 
 **The hardware address.** DECnet Phase IV derives a station's Ethernet
 address from its node number: node 1.20 is `aa-00-04-00-14-04`. We cannot
@@ -390,6 +387,48 @@ on FARSID. If both adjacencies come up but that does not work, the two
 halves are fine and the routing between them is not, and `--log-level
 debug` shows the routing messages on each circuit.
 
+## Monitoring
+
+Two ways to ask a running node what it is doing, and they answer from the
+same place.
+
+`NCP` over the network. Object 19 is the network management listener, so a
+management station -- pydecnet's `ncp`, or the NCP on a real VMS or RSX
+node -- can read this node's database:
+
+```
+NCP> TELL CPPNOD SHOW KNOWN CIRCUITS
+NCP> TELL CPPNOD SHOW EXECUTOR CHARACTERISTICS
+```
+
+READ INFORMATION is served for every entity at all four levels of detail,
+and `LOOP NODE` loops through MIRROR. SET and ZERO are refused: nothing
+authenticates the credentials a request carries, and writing before
+authenticating is the wrong order. See [NOTDONE.md](NOTDONE.md).
+
+A browser, if the configuration asks for one:
+
+```
+http --http-port 8102
+```
+
+```
+http://localhost:8102/
+```
+
+An index naming the node, then a page per entity -- nodes, circuits, lines,
+areas, modules, logging -- each at summary, status, characteristics or
+counters:
+
+```
+http://localhost:8102/circuits?info=counters
+```
+
+The pages are built from the same `nice_read` the NICE protocol answers,
+rather than a second set of accessors into each layer. One description of
+what a circuit looks like, not two that drift apart -- and nothing can
+appear on a page that a remote NCP could not also read.
+
 ## Layout
 
 ```
@@ -426,9 +465,9 @@ End to end tests that stand two nodes up in one process, joined by a real
 TCP or UDP circuit, and run the whole stack. These catch the ordering
 mistakes that unit tests cannot see.
 
-Debug builds run under ASan and UBSan. Python could not corrupt memory;
-this can, and the receive paths parsing untrusted input are where it would
-happen. Both have already paid for themselves — see [BUGS.md](BUGS.md).
+`make BUILD=debug` builds under ASan and UBSan. Python could not corrupt
+memory; this can, and the receive paths parsing untrusted input are where
+it would happen. Both have already paid for themselves — see [BUGS.md](BUGS.md).
 
 ## Licence
 

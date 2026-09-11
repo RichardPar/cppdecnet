@@ -74,6 +74,9 @@ public:
     const BcPortCounters &counters () const noexcept { return counters_; }
     BcPortCounters &mutable_counters () noexcept { return counters_; }
 
+    void nice_read_port (const nice::NiceRequest &req,
+                         nice::NiceReply &r) override;
+
 private:
     friend class BcDatalink;
 
@@ -90,6 +93,13 @@ public:
     BcDatalink (Element *owner, std::string name, bool random_address);
 
     bool use_mop () const noexcept override { return true; }
+
+    // Ethernet, in both of NICE's numberings.
+    unsigned nice_type () const noexcept override { return 6; }
+    unsigned nice_protocol () const noexcept override { return 6; }
+
+    void nice_read_line (const nice::NiceRequest &req,
+                         nice::ReplyDict &resp) override;
 
     Macaddr hwaddr () const noexcept { return hwaddr_; }
     void set_hwaddr (Macaddr a) noexcept { hwaddr_ = a; }

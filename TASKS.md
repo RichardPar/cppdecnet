@@ -11,7 +11,7 @@ reasoning. Anything listed there is a decision, not an oversight.
 Unfinished spots in the code carry a `PORT:` comment; `make todo` lists
 them.
 
-Done so far: 34 library sources, 283 tests in 24 binaries, clean under ASan
+Done so far: 43 library sources, 316 tests in 26 binaries, clean under ASan
 and UBSan and at `-Wall -Wextra -Wpedantic` plus a dozen more.
 
 ```mermaid
@@ -30,7 +30,8 @@ flowchart LR
     classDef todo fill:#eee,stroke:#999
     class P0,P1 done
     class P2,P3,P4,P5,P6 part
-    class P7,P8 todo
+    class P7 part
+    class P8 todo
 ```
 
 Green is finished, yellow is working but incomplete, grey is untouched.
@@ -175,11 +176,27 @@ ahead of their turn are held rather than dropped.
       logical link to object 26, with the receiving end as well
 - [ ] Raising the rest of the events. Routing, NSP and node state are
       reported; the data link and physical classes are not
-- [ ] `nicepackets`: the NICE protocol messages
-- [ ] `nice_coding` parameter group and the counter types (CTR/CTM)
+- [x] `nicepackets`: the NICE protocol messages, and `nml`, the object 19
+      listener NCP talks to. READ INFORMATION for every entity, at all four
+      levels of detail, and LOOP NODE through MIRROR
+- [x] `nice_coding` parameter group and the counter types (CTR/CTM)
+- [x] SET: refused with "unrecognized function", which is what pydecnet
+      answers. Not a gap -- upstream does not implement it either
+- [ ] ZERO COUNTERS: refused with a privilege violation. pydecnet
+      implements it and refuses it that way only when read-only. Wants the
+      access control decision in `NOTDONE.md`, and a zeroing path through
+      the layers that hold the counters
+- [ ] LOOP CIRCUIT and LOOP LINE, which drive MOP loopback rather than
+      MIRROR. The loopback itself is there; nothing wires NICE to it
+- [ ] Phase II NICE, the `P2*` classes in `nicepackets.py`
 
 ### Phase 7: monitoring and the API
-- [ ] `http` and `html`: the monitoring pages
+- [x] `http` and `html`: the monitoring pages. An index naming the node,
+      and a page per NICE entity at each level of detail, served from the
+      same `nice_read` the network management protocol answers
+- [ ] The pages pydecnet has that these do not: the per-connection NSP
+      detail, the event display, and the bridge page
+- [ ] HTTPS. The `--https-port` option is accepted and ignored
 - [ ] `apiserver`: the JSON API over a Unix socket
 
 ### Phase 8: the rest

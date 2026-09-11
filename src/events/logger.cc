@@ -1,5 +1,7 @@
 #include "decnet/events/logger.h"
 
+#include "decnet/nice/nml.h"
+
 #include "decnet/config.h"
 #include "decnet/node.h"
 #include "decnet/session/session.h"
@@ -524,6 +526,23 @@ void EventLogger::register_monitor (LocalMonitor::Callback cb,
     if (it == local_.end ()) return;
     static_cast<LocalMonitor *> (it->second)->register_monitor (std::move (cb),
                                                                 events);
+}
+
+void EventLogger::nice_read (const nice::NiceRequest &, nice::ReplyDict &)
+{
+    // Deliberately empty, matching EventLogger.nice_read upstream.
+    //
+    // SHOW LOGGING asks which events each sink is set to record, and the
+    // architected answer is a logging entity carrying an event list per
+    // sink.  The parameter encoding for that -- the event list format in a
+    // NICE reply, which is not the same as the one in an event record --
+    // is not implemented in pydecnet either, so there is nothing here to
+    // port and no wire format to check a guess against.  Answering nothing
+    // makes the listener report "unrecognized component", which is honest:
+    // we do not have this information in the form NCP asked for it.
+    //
+    // The data itself is not missing.  local_filter() has every sink's
+    // event set, and the monitoring page prints it.
 }
 
 EventFilter *EventLogger::local_filter (const std::string &type)

@@ -20,6 +20,7 @@
 #include "decnet/common/timers.h"
 #include "decnet/datalink/bc.h"
 #include "decnet/mop/packets.h"
+#include "decnet/nice/nml.h"
 
 #include <chrono>
 #include <map>
@@ -40,6 +41,11 @@ struct HeardSystem {
     Macaddr                               address;
     SysId                                 sysid;
     std::chrono::steady_clock::time_point last_heard;
+    // The same instant on the wall clock.  Network management reports the
+    // last report as a date and time, which a steady clock cannot give:
+    // it has no relationship to the calendar.  Both are kept because the
+    // steady one is what any interval should be measured with.
+    std::chrono::system_clock::time_point last_report;
 };
 
 // System ID on one circuit: announce ourselves periodically, answer
@@ -63,6 +69,10 @@ public:
 
     const std::map<std::string, HeardSystem> &heard () const noexcept
     { return heard_; }
+
+    // Seconds since this handler started listening, which the configurator
+    // module reports as "Elapsed time".
+    double elapsed () const noexcept;
 
 private:
     void send_counters (Macaddr dest, std::uint16_t receipt);
@@ -135,6 +145,11 @@ public:
 
     void start ();
     void stop ();
+
+    // Answer the module half of a NICE read: the configurator, which
+    // reports what other stations on each circuit have announced about
+    // themselves.  Port of Mop.nice_read.
+    void nice_read (const nice::NiceRequest &req, nice::ReplyDict &resp);
 
     MopCircuit *circuit (const std::string &name) const;
     const std::vector<MopCircuit *> &circuits () const noexcept

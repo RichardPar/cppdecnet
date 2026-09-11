@@ -1,7 +1,7 @@
 # cppdecnet -- a C++ port of PyDECnet.
 #
-#   make                 build the library, the daemon and the tools (debug)
-#   make BUILD=release   optimised build, no sanitizers
+#   make                 build the library, the daemon and the tools (release)
+#   make BUILD=debug     unoptimised build with ASan and UBSan
 #   make check           build and run the unit tests
 #   make V=1 ...         echo full command lines
 #

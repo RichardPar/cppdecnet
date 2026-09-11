@@ -140,7 +140,8 @@ void SysIdHandler::dispatch (Work &w)
         DN_TRACE ("system id on {} from {} node {}", parent_->name (),
                   seen ? "known" : "new", src.str ());
         heard_[k] = HeardSystem { src, *s,
-                                  std::chrono::steady_clock::now () };
+                                  std::chrono::steady_clock::now (),
+                                  std::chrono::system_clock::now () };
         return;
     }
     if (auto *q = dynamic_cast<RequestId *> (pkt.get ())) {

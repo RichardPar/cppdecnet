@@ -105,6 +105,13 @@ public:
     std::uint16_t blksize () const noexcept { return info_.blksize; }
     bool running () const noexcept;
 
+    // The NICE substate for the circuit's current state, or -1 when there
+    // is none.  pydecnet attaches these to the state functions with
+    // @setcode: ha and ds are "Synchronizing", ri and rv are "Starting",
+    // and ru -- Running -- has no substate at all, which is what tells a
+    // circuit read that there is a neighbour worth naming.
+    int nice_substate () const noexcept;
+
     const AdjacencyPtr &adjacency () const noexcept { return adj_; }
 
     void dispatch (Work &w) override { StateMachine<PtpCircuit>::dispatch (w); }
@@ -126,6 +133,12 @@ public:
     void adj_timeout (Adjacency *adj) override;
 
     double t3 () const noexcept { return t3_; }
+
+    // Answer the part of a NICE read this circuit knows about.  For a node
+    // read that is the neighbour at the far end; for a circuit read it is
+    // the circuit's own state.  Port of PtpCircuit.nice_read.
+    void nice_read (const nice::NiceRequest &req, nice::ReplyDict &resp,
+                    const Nodeid *adj_qual = nullptr);
 
 private:
     // Send a packet straight to the datalink.

@@ -113,7 +113,19 @@ void LanCircuit::dispatch (Work &w)
 
 bool LanCircuit::send_to (ShortData &pkt, const Adjacency &adj)
 {
-    send_to_mac (pkt, adj.macid ());
+    // Address the neighbour where it demonstrably receives -- the source of
+    // the frames it sends us, recorded when its hello arrived -- rather than
+    // the address its node number implies.  See the note in
+    // EndnodeLanCircuit::handle: BAJI announces aa-00-04-00-13-04 and
+    // answers on 08-00-2b-11-22-33, so forwarding to the derived address
+    // loses every packet while the adjacency stays up.  The derived address
+    // is the fallback for a neighbour we have somehow not heard from, which
+    // is all pydecnet ever uses (`Adjacency.macid`).
+    auto it = adjacencies_.find (adj.nodeid ().value ());
+    Macaddr mac = adj.macid ();
+    if (it != adjacencies_.end () && it->second.macaddr != Macaddr {})
+        mac = it->second.macaddr;
+    send_to_mac (pkt, mac);
     return true;                // a LAN has no notion of "unreachable"
 }
 
@@ -263,6 +275,7 @@ void EndnodeLanCircuit::handle (RoutingPacketBase &pkt, Macaddr src)
             DN_INFO ("{} using designated router {}", name_, rh->id.str ());
         }
         dr_ = std::make_pair (rh->id, rmac);
+        adjacencies_[rh->id.value ()].macaddr = rmac;
 
         AdjacencyInfo info;
         info.id      = rh->id;

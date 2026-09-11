@@ -130,6 +130,9 @@ public:
 
     std::uint8_t ntype () const noexcept override { return L1ROUTER; }
 
+    void nice_read (const nice::NiceRequest &req,
+                    nice::ReplyDict &resp) override;
+
     void start () override;
 
     // Adjacency changes drive the route computation.
@@ -174,6 +177,12 @@ public:
     Update *update_for (Circuit *c) const;
 
 protected:
+    void read_node (const nice::NiceRequest &req, Nodeid id,
+                    nice::ReplyDict &resp) override;
+    void node_char (nice::NiceReply &r) override;
+    void reach (const nice::NiceRequest &req, nice::ReplyDict &resp,
+                const std::string *circuit_qual) override;
+
     // Recompute the best route for destinations first..last in one matrix.
     // Port of L1Router.doroute, whose l2 flag chooses which matrix; here
     // the matrix is the argument.  "extra" is an additional column that is
@@ -230,6 +239,9 @@ public:
 
     std::uint8_t ntype () const noexcept override { return L2ROUTER; }
 
+    void nice_read (const nice::NiceRequest &req,
+                    nice::ReplyDict &resp) override;
+
     void start () override;
     void adj_up (const AdjacencyPtr &adj) override;
     void adj_down (const AdjacencyPtr &adj) override;
@@ -252,6 +264,9 @@ public:
 
 protected:
     Adjacency *find_oadj (Nodeid dest, bool &out_of_range) const override;
+    void read_node (const nice::NiceRequest &req, Nodeid id,
+                    nice::ReplyDict &resp) override;
+    void node_char (nice::NiceReply &r) override;
 
 private:
     // Recompute area routes, then re-derive the attached flag.  Port of

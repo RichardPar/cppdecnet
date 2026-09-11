@@ -227,6 +227,23 @@ had dutifully sent its data to 00-00-00-00-00-00. A test that asks whether
 a packet arrived, rather than whether an adjacency exists, is what made the
 difference -- the same lesson as the LAN routing table fix above.
 
+That fix was incomplete, and the tests could not have said so. It corrected
+what the circuits record and what an endnode sends, but not
+`LanCircuit::send_to`, the path a *router* forwards by: it still called
+`Adjacency::macid ()`, the derived address. So a router with a route
+through BAJI would have put every transit packet on the wire addressed to
+an address BAJI does not answer on, with the adjacency up and the routing
+table correct throughout.
+
+Nothing caught it because every LAN test builds both ends out of our own
+nodes, which do program their derived address into the card, so derived and
+actual agree and the two paths are indistinguishable. `test_lan` now has a
+`Station`: a datalink port with no routing layer above it, announcing one
+address and answering on another, which is the only arrangement in which
+the difference is visible. `send_to` now prefers the recorded source
+address and keeps the derived one as the fallback for a neighbour nothing
+has been heard from. Fixed 11-Sep-2026.
+
 ### A hello identical in every field was still rejected, for its padding
 
 An Ethernet frame shorter than 60 bytes has to be padded. We padded with

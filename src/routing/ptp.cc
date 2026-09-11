@@ -75,6 +75,20 @@ bool PtpCircuit::running () const noexcept
         State (&PtpCircuit::ru, "ru"));
 }
 
+int PtpCircuit::nice_substate () const noexcept
+{
+    // nice_substate_synchronizing / _starting in nicedefs; the values are
+    // the ones route_ptp.py's @setcode decorators carry.
+    auto *self = const_cast<PtpCircuit *> (this);
+    if (self->in_state (State (&PtpCircuit::s0, "ha"))
+        || self->in_state (State (&PtpCircuit::ds, "ds")))
+        return 10;                      // Synchronizing
+    if (self->in_state (State (&PtpCircuit::ri, "ri"))
+        || self->in_state (State (&PtpCircuit::rv, "rv")))
+        return 0;                       // Starting
+    return -1;                          // Running: no substate
+}
+
 void PtpCircuit::dlsend (const RoutingPacketBase &pkt)
 {
     port_->send (pkt.encode_packet ());

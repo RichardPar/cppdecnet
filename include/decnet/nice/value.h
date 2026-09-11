@@ -88,6 +88,12 @@ public:
 
     // Read a type code and the value that follows it.
     static Value decode (Decoder &d);
+
+    // The same, for a caller that already has the type code.  A NICE
+    // *request* omits the code byte -- the reader is expected to know what
+    // each parameter means -- so the request decoder looks the code up in a
+    // table and calls this.  See nice/packets.h.
+    static Value decode_body (std::uint8_t code, Decoder &d);
     static Value parse (ByteView buf);
 
     // ---------------------------------------------------------- formatting

@@ -90,6 +90,11 @@ std::string Entity::str () const
 void Entity::encode (Encoder &e) const
 {
     e.byte (kind_);
+    encode_body (e);
+}
+
+void Entity::encode_body (Encoder &e) const
+{
     switch (kind_) {
     case node:
         node_.encode (e);
@@ -114,7 +119,11 @@ void Entity::encode (Encoder &e) const
 
 Entity Entity::decode (Decoder &d)
 {
-    std::uint8_t kind = d.byte ();
+    return decode_body (d.byte (), d);
+}
+
+Entity Entity::decode_body (std::uint8_t kind, Decoder &d)
+{
     switch (kind) {
     case node:
         return make_node (NiceNode::decode (d));

@@ -12,6 +12,7 @@
 #define DECNET_ROUTING_ROUTING_H
 
 #include "decnet/common/element.h"
+#include "decnet/nice/nml.h"
 #include "decnet/routing/adjacency.h"
 #include "decnet/routing/packets.h"
 
@@ -78,11 +79,30 @@ public:
     // Where a packet for this node goes.  NSP registers itself here.
     void set_nsp (nsp::NSP *n) noexcept { nsp_ = n; }
 
+    // Answer the part of a NICE read request routing knows about: node
+    // reachability, circuits, and (for an area router) areas.  Port of
+    // BaseRouter.nice_read.
+    virtual void nice_read (const nice::NiceRequest &req, nice::ReplyDict &resp);
+
     // A routing message arrived.  An endnode never sees one.
     virtual void routing_message (const RoutingMessage &, Adjacency *,
                                   unsigned) {}
 
 protected:
+    // Fill in what this node reports about one node address: whether it is
+    // reachable and by what route.  Port of BaseRouter.read_node.
+    virtual void read_node (const nice::NiceRequest &req, Nodeid id,
+                            nice::ReplyDict &resp);
+
+    // Add this node type's characteristics to an executor reply.  Each
+    // router subclass adds its own.  Port of BaseRouter.node_char.
+    virtual void node_char (nice::NiceReply &r);
+
+    // Report every reachable node, for a plural request.  An endnode has no
+    // routing table, so the base does nothing.  Port of BaseRouter.reach.
+    virtual void reach (const nice::NiceRequest &req, nice::ReplyDict &resp,
+                        const std::string *circuit_qual);
+
     // Create the routing circuits.  This is deliberately NOT called from
     // this class's constructor: building a circuit asks the router for its
     // node type, which is virtual, and during a base class constructor
@@ -94,6 +114,11 @@ protected:
 public:
 
     void dispatch (Work &) override {}
+
+    // Every adjacency this node has, keyed as the routing layer keys them.
+    // Exposed for network management and the monitoring pages.
+    const std::map<std::uint16_t, AdjacencyPtr> &adjacencies () const noexcept
+    { return adjacencies_; }
 
     const std::vector<PtpCircuit *> &circuits () const noexcept
     { return circuit_order_; }

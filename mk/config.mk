@@ -10,7 +10,7 @@ RANLIB   ?= ranlib
 INSTALL  ?= install
 
 # ------------------------------------------------------------------ layout
-BUILD    ?= debug
+BUILD    ?= release
 BUILDDIR ?= build/$(BUILD)
 OBJDIR    = $(BUILDDIR)/obj
 BINDIR    = $(BUILDDIR)/bin

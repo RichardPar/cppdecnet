@@ -130,6 +130,11 @@ public:
     const std::string &identification () const noexcept { return identification_; }
     const std::string &node_name () const noexcept { return node_name_; }
 
+    // The monitoring server.  Zero means "not configured", which is also
+    // what "--http-port 0" means to pydecnet: the port is how the feature
+    // is turned on and off.
+    unsigned http_port () const noexcept { return http_port_; }
+
     // Lines whose command no layer has claimed yet.  Everything the port
     // has not reached is parsed and kept here rather than rejected, so a
     // real configuration file still loads.
@@ -153,6 +158,7 @@ private:
     std::vector<ConfigLine>      unhandled_;
     std::string                  identification_;
     std::string                  node_name_;
+    unsigned                     http_port_ = 0;
 };
 
 // Split a config file line into words, honouring quotes and '#' comments.

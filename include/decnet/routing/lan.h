@@ -24,6 +24,7 @@
 #include "decnet/common/timers.h"
 #include "decnet/events/events.h"
 #include "decnet/datalink/bc.h"
+#include "decnet/nice/nml.h"
 #include "decnet/routing/adjacency.h"
 #include "decnet/routing/circuit.h"
 #include "decnet/routing/packets.h"
@@ -95,6 +96,22 @@ public:
     // How many neighbours are currently confirmed up.
     std::size_t adjacency_count () const;
 
+    // What this circuit knows about its neighbours, for network management
+    // and the monitoring pages.
+    const std::map<std::uint16_t, LanAdjacency> &adjacencies () const noexcept
+    { return adjacencies_; }
+
+    unsigned cost () const noexcept { return cost_; }
+
+    // Answer the part of a NICE read this circuit knows about.  Port of
+    // LanCircuit.nice_read in route_eth.py.
+    void nice_read (const nice::NiceRequest &req, nice::ReplyDict &resp,
+                    const Nodeid *adj_qual = nullptr);
+
+    // What a router adds to a circuit characteristics reply and an endnode
+    // does not: the priority, and who the designated router is.
+    virtual void nice_char (nice::NiceReply &r) const {}
+
 protected:
     // Strip any padding, decode, and hand the packet to the subclass.
     // Returns null for anything to be ignored.
@@ -163,6 +180,8 @@ public:
 
     // Is this neighbour confirmed two-way?
     bool two_way (Nodeid id) const;
+
+    void nice_char (nice::NiceReply &r) const override;
 
 protected:
     void send_hello () override;

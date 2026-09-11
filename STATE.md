@@ -122,7 +122,24 @@ Method worth keeping, because it is what actually resolved this:
 
 ## Next in the queue
 
-`nicepackets` -- the NICE protocol messages. The data coding underneath
-them is already done, because event records needed it. See the note in
-`NOTDONE.md` about requests omitting the type code byte that responses
-carry.
+NICE and the monitoring pages landed on 11-Sep-2026. `nicepackets`, `nml`
+(object 19, which is what NCP connects to) and an HTTP server serving one
+page per NICE entity are in, with 316 tests in 26 binaries passing in both
+flavours.
+
+What that leaves, in the order it is worth doing:
+
+- **NICE SET and ZERO**, which are refused today. They want the access
+  control decision first; see `NOTDONE.md`.
+- **LOOP CIRCUIT and LOOP LINE**, which drive MOP loopback. The loopback
+  works; nothing connects NICE to it.
+- **`apiserver`**, the JSON API over a Unix socket, which is the rest of
+  phase 7.
+
+One trap found while doing this, worth knowing before the next session:
+`BUILD` now defaults to **release**, not debug (`mk/config.mk`). A plain
+`make` builds `build/release`, so running `build/debug/bin/test_*` out of
+habit runs whatever was there last. That produced a convincing failure in
+`test_nml` that did not exist -- the binary was three hours stale. Run
+`make check` for release and `make check BUILD=debug` for the sanitizer
+build, and do not run the binaries by hand from the wrong tree.

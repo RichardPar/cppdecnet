@@ -14,6 +14,7 @@
 #include "decnet/common/element.h"
 #include "decnet/common/types.h"
 #include "decnet/common/work.h"
+#include "decnet/nice/nml.h"
 
 #include <map>
 #include <memory>
@@ -126,6 +127,12 @@ public:
     // the case that needs this.
     virtual bool start_works () const noexcept { return true; }
 
+    // Add this port's contribution to a circuit reply: the circuit type as
+    // a characteristic, the traffic counters as counters.  Port of
+    // Port.nice_read_port.
+    virtual void nice_read_port (const nice::NiceRequest &req,
+                                 nice::NiceReply &r);
+
     void dispatch (Work &) override {}
 
 protected:
@@ -156,6 +163,20 @@ public:
 
     virtual const PtpCounters *counters () const noexcept { return nullptr; }
 
+    // The NICE circuit type code for this kind of datalink: 6 for
+    // Ethernet, 0 for a DDCMP point to point link.  Port of the port_type
+    // class attribute.
+    virtual unsigned nice_type () const noexcept { return 0; }
+
+    // The NICE line protocol code, which is the same list with a different
+    // number for the DDCMP variants.  Port of nice_protocol.
+    virtual unsigned nice_protocol () const noexcept { return 0; }
+
+    // Answer a line read for this circuit.  Port of
+    // Datalink.nice_read_line.
+    virtual void nice_read_line (const nice::NiceRequest &req,
+                                 nice::ReplyDict &resp);
+
 protected:
     std::string name_;
 };
@@ -179,6 +200,10 @@ public:
     { return order_; }
 
     void dispatch (Work &) override {}
+
+    // Answer the line half of a NICE read.  Port of
+    // DatalinkLayer.nice_read.
+    void nice_read (const nice::NiceRequest &req, nice::ReplyDict &resp);
 
     // Build one circuit from its configuration line.  Returns null and logs
     // if the type is unknown or construction fails, which is what

@@ -35,6 +35,7 @@
 #include "decnet/common/element.h"
 #include "decnet/common/statemachine.h"
 #include "decnet/common/timers.h"
+#include "decnet/nice/nml.h"
 #include "decnet/nsp/packets.h"
 
 #include <deque>
@@ -285,7 +286,21 @@ public:
     void dispatch (Work &) override {}
 
     std::size_t connection_count () const noexcept { return by_addr_.size (); }
+
+    // Every live connection, for network management and the monitoring
+    // pages.
+    const std::map<std::uint16_t, std::unique_ptr<Connection>> &
+    connections () const noexcept { return by_addr_; }
+
+    // Answer the part of a NICE read NSP knows about: the node entities,
+    // since NSP is what knows which nodes have links to them.  Port of
+    // NSP.nice_read.
+    void nice_read (const nice::NiceRequest &req, nice::ReplyDict &resp);
     Connection *find (std::uint16_t srcaddr) const;
+
+    // How many logical links run to that node.  Network management reports
+    // it as "Active links", and the monitoring page shows the same number.
+    unsigned links_to (Nodeid dest) const;
 
     // Send an NSP packet to a node, through routing.
     void send_to (Nodeid dest, const Bytes &frame);
@@ -296,6 +311,10 @@ public:
 
 private:
     friend class Connection;
+
+    // Fill in one node's reply.  Port of NSP.read_node.
+    void read_node (const nice::NiceRequest &req, Nodeid id,
+                    nice::ReplyDict &resp, unsigned links);
 
     // Link address assignment.  Port of init_id/get_id/ret_id: addresses
     // are taken from one end of a circular list and returned to the other,

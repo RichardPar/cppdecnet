@@ -70,10 +70,12 @@ DN_TEST (config, option_equals_form)
 DN_TEST (config, unknown_commands_are_kept_not_rejected)
 {
     // Layers that are not ported yet must not make a real config file fail.
-    Config c = Config::from_string ("http --http-port 8102 --https-port 0\n"
-                                    "api /tmp/decnet.sock\n");
+    // This used to use "http" as its example, which stopped being one when
+    // the monitoring server landed and claimed the line.
+    Config c = Config::from_string ("api /tmp/decnet.sock\n"
+                                    "bridge br-0 --pcap eth0\n");
     DN_ASSERT_EQ (c.unhandled ().size (), 2u);
-    DN_ASSERT_EQ (c.unhandled ()[0].command, std::string ("http"));
+    DN_ASSERT_EQ (c.unhandled ()[0].command, std::string ("api"));
 }
 
 DN_TEST (config, names_are_validated)

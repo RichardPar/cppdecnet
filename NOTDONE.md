@@ -198,20 +198,56 @@ is already allowed to block.
 It matters when many circuits share one name and that name is slow to
 resolve. Until then, a thread per node is a thread not spent.
 
-### The NICE protocol messages
+### NICE: SET, ZERO, and the Phase II dialect
 
-The NICE data values, entities, counters and parameter lists are all done:
-they had to be, because an event record ends in one. What is missing is
-`nicepackets.py` itself -- the request and reply messages a management
-station exchanges with a node, and the read, set, zero and test functions
-behind them.
+The NICE protocol is in: the request and reply messages, the parameter
+definitions per entity, and `nml`, the object 19 listener NCP connects to.
+READ INFORMATION works for every entity at all four levels of detail, and
+LOOP NODE loops through MIRROR.
 
-Two details will need care when it is written. A NICE *request* omits the
-type code byte that a response carries, so a request can only be decoded
-against a table of what each parameter means; the parameter list here
-decodes responses, which are self-describing. And the counter definitions
-per entity -- node, circuit, line -- exist in the event catalogue but are
-not yet attached to anything that counts.
+What is left is deliberate rather than unfinished:
+
+**SET is not implemented**, and neither is it in pydecnet: its `nml` falls
+through to "Unsupported NICE request" and answers -1, unrecognized
+function. We answer the same. Saying "privilege violation" instead would
+imply some credential makes it work, and none does. This is not a gap
+against upstream; it is upstream's behaviour.
+
+**ZERO COUNTERS is refused** with -3, privilege violation. Here there *is*
+a small gap: pydecnet implements it, and refuses it the same way only when
+its own read-only flag is set. Ours is read-only permanently, because
+zeroing counters is a write and the request's user name, password and
+account are carried but not authenticated -- the decision the access
+control note above is waiting on. Writing first and authenticating later is
+the wrong order.
+
+One visible consequence: the executor's "time since counters zeroed" is
+reported, and it is really time since the node started, because nothing
+ever zeroes them. That is honest only as long as ZERO stays refused.
+
+**LOOP CIRCUIT and LOOP LINE** drive MOP loopback rather than MIRROR. The
+loopback protocol is implemented and tested; what is missing is the wiring
+from a NICE test request to it, and the state to track a loop in progress
+on a circuit rather than on a logical link.
+
+**Phase II NICE**, the `P2*` classes in `nicepackets.py`, is a different
+message format for a different era, and shares the position of Phase II
+generally: behind the Phase IV work because few people run it.
+
+### The monitoring pages are a subset
+
+The pages serve an index and one page per NICE entity, at each level of
+detail. pydecnet's `http.py` and `html.py` also offer a per-connection NSP
+view, an event display and a bridge page, and none of those is here.
+
+They are served from the same `nice_read` the network management protocol
+answers rather than from a second set of accessors into each layer. That is
+the point: one description of what a circuit looks like, not two that
+drift. It also means the pages can never show something NCP cannot read,
+which is a constraint worth having rather than a limitation to remove.
+
+HTTPS is not offered. `--https-port` is accepted and ignored so that a real
+pydecnet configuration file still loads.
 
 ---
 

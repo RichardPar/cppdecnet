@@ -21,6 +21,7 @@
 #include "decnet/common/element.h"
 #include "decnet/common/timers.h"
 #include "decnet/events/events.h"
+#include "decnet/nice/packets.h"
 
 #include <cstdio>
 #include <deque>
@@ -36,6 +37,8 @@ class Config;
 struct LoggingConfig;
 namespace session { class Application; class Session; class SessionConnection; }
 }
+
+namespace decnet::nice { class ReplyDict; }
 
 namespace decnet::events {
 
@@ -223,6 +226,11 @@ public:
 
     // The filter for a local sink type, for tests and for NCP.
     EventFilter *local_filter (const std::string &type);
+
+    // Answer the logging half of a NICE read.  Port of
+    // EventLogger.nice_read, which upstream leaves as a stub -- see the
+    // implementation for why this one does too.
+    void nice_read (const nice::NiceRequest &req, nice::ReplyDict &resp);
 
     // The remote sink for a node name, for tests.
     RemoteSink *remote_sink (const std::string &node);
