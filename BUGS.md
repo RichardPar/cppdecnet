@@ -290,6 +290,44 @@ grace period to zero to avoid waiting out a minute hung immediately --
 which is the same defect this entry is about, reintroduced and then caught
 by a test written to check it was gone.
 
+### The NSP retransmission timer was a constant
+
+`retransmit_time_` was two seconds, whatever the link. Every retry waited
+the same two seconds, and the limit was a fixed five, so a peer that was
+briefly unreachable was hammered at full rate and then given up on ten
+seconds later -- while a genuinely slow path had every ordinary round trip
+look like a loss.
+
+The Python does not do this, and the `PORT:` note in `NSP::NSP` said so:
+the timer follows the round trip time actually measured to each node.
+Ported, as `Connection::acktimeout` and `Connection::update_delay`:
+
+- each node carries a smoothed estimate in its `Nodeinfo`, so a second
+  connection to the same node starts with what the first one learned
+- a measurement is folded in as `1/(weight+1)` of the difference, so one
+  slow exchange moves the estimate a little rather than replacing it
+- the estimate is floored at one second and capped at five. The floor is
+  not about timer granularity: on a DDCMP serial line the latency depends
+  on packet length, and an estimate taken from short packets produces
+  false timeouts the moment a long one is sent. The cap is because
+  congestion otherwise feeds itself -- a longer estimate means a longer
+  timeout, which hides the congestion that caused it
+- the timeout is the estimate times a factor, because waiting exactly the
+  round trip time makes every ordinary variation look like a loss
+
+Two things the arithmetic alone does not say, both of which matter:
+
+**A retransmitted packet is never timed.** Once a packet has gone out
+twice there is no way to know which transmission an acknowledgement
+answers, and measuring from the first inflates the estimate on every loss
+-- which lengthens the timeout, which loses more.
+
+**Only one packet is timed at a time.** Timing several measures the same
+round trip repeatedly and learns nothing extra.
+
+The retries now back off as well, doubling to a thirty second ceiling,
+and the limit comes from the configuration rather than a constant.
+
 ### Object lifetime inside a callback
 
 Session control destroyed an application from inside a call into it.
