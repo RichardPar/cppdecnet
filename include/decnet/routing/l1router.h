@@ -201,6 +201,9 @@ protected:
     void reach (const nice::NiceRequest &req, nice::ReplyDict &resp,
                 const std::string *circuit_qual) override;
 
+    // Does the configuration give this address a name?  See reach().
+    bool named_node (Nodeid id) const;
+
     // Recompute the best route for destinations first..last in one matrix.
     // Port of L1Router.doroute, whose l2 flag chooses which matrix; here
     // the matrix is the argument.  "extra" is an additional column that is

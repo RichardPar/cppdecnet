@@ -50,6 +50,14 @@ public:
 
     std::uint8_t kind () const noexcept { return kind_; }
 
+    // Report every address in the routing table, including the ones that
+    // are merely unreachable and unnamed.  Off by default: see the note in
+    // L1Router::reach about what those cost on the wire.  The monitoring
+    // pages turn it on for their "all" view, where the cost is a longer
+    // page rather than a thousand frames at a PDP-11.
+    void want_every_address (bool on) noexcept { every_address_ = on; }
+    bool every_address () const noexcept { return every_address_; }
+
     // The reply for one entity, created empty if it does not exist yet.
     NiceReply &node_entry (Nodeid id);
     NiceReply &named_entry (const std::string &name);
@@ -74,6 +82,8 @@ public:
     std::vector<std::vector<NiceReply *>> sorted (const NiceRequest &req) const;
 
 private:
+    bool every_address_ = false;
+
     struct Group {
         std::vector<std::unique_ptr<NiceReply>> items;
     };

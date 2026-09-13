@@ -228,6 +228,11 @@ PcapEthernet::PcapEthernet (Element *owner, std::string name,
     }
 }
 
+// libpcap's read timeout.  Kept short and separate from poll_timeout_ms:
+// this one bounds how long a frame can sit in the kernel's ring, and the
+// Python uses 100ms here for the same reason.
+constexpr int pcap_timeout_ms = 100;
+
 PcapEthernet::~PcapEthernet () { shutdown (); }
 
 bool PcapEthernet::start_transport ()
@@ -236,14 +241,47 @@ bool PcapEthernet::start_transport ()
     // Promiscuous: the addresses DECnet answers to are not the ones the
     // card was configured with, so anything less would filter out exactly
     // the traffic we came for.
-    pcap_t *p = pcap_open_live (dev_.destination.c_str (),
-                                static_cast<int> (ETH_MTU + 64), 1,
-                                poll_timeout_ms, err);
-    if (!p) {
-        DN_ERROR ("cannot open {} for {}: {}", dev_.destination, name_, err);
-        return false;
+    //
+    // Built with pcap_create rather than pcap_open_live for one reason:
+    // immediate mode.  Without it libpcap's read timeout is, on Linux, the
+    // TPACKET_V3 block retirement timeout -- the kernel holds an arriving
+    // frame until the ring block fills or that timer expires, and poll()
+    // does not wake until then either.  A frame therefore waits up to the
+    // timeout before the layers above see it, which turns every protocol
+    // round trip into a timeout-length stall.  NCP "show known nodes" is
+    // where it shows: it answers with one message per node number, so the
+    // stall is paid a thousand times.  Immediate mode delivers each frame
+    // as it arrives; the timeout then only bounds an idle wakeup.
+    pcap_t *p = pcap_create (dev_.destination.c_str (), err);
+    if (p) {
+        pcap_set_snaplen (p, static_cast<int> (ETH_MTU + 64));
+        pcap_set_promisc (p, 1);
+        pcap_set_timeout (p, pcap_timeout_ms);
+        pcap_set_immediate_mode (p, 1);
+        int rc = pcap_activate (p);
+        if (rc < 0) {
+            DN_ERROR ("cannot open {} for {}: {}", dev_.destination, name_,
+                      pcap_geterr (p));
+            pcap_close (p);
+            return false;
+        }
+        // A positive code is a warning: the handle is usable.
+        if (rc > 0) DN_DEBUG ("opening {}: {}", dev_.destination,
+                              pcap_statustostr (rc));
+    } else {
+        // No handle at all from pcap_create, which should not happen.  Fall
+        // back to the old call so a working capture is not lost over it.
+        DN_DEBUG ("pcap_create failed for {}: {}", dev_.destination, err);
+        p = pcap_open_live (dev_.destination.c_str (),
+                            static_cast<int> (ETH_MTU + 64), 1,
+                            pcap_timeout_ms, err);
+        if (!p) {
+            DN_ERROR ("cannot open {} for {}: {}", dev_.destination, name_,
+                      err);
+            return false;
+        }
+        if (err[0]) DN_DEBUG ("opening {}: {}", dev_.destination, err);
     }
-    if (err[0]) DN_DEBUG ("opening {}: {}", dev_.destination, err);
 
     if (pcap_datalink (p) != DLT_EN10MB) {
         DN_ERROR ("{} is not an Ethernet interface ({})", dev_.destination,

@@ -389,6 +389,12 @@ std::string Server::entity_page (std::uint8_t kind, unsigned info,
     req.entity      = nice::ReqEntity::make_wild (kind, nice::ReqEntity::known);
 
     nice::ReplyDict replies (kind, const_cast<Node *> (node_));
+    // The monitoring pages always ask for every address in the routing
+    // table.  They have had their own filter for the unreachable thousand
+    // since before NICE grew one, and it is the better answer here: it
+    // hides the rows, counts what it hid, and offers "all=1" to see them.
+    // None of that costs a frame, which is what the NICE default is about.
+    replies.want_every_address (true);
     int err = const_cast<Node *> (node_)->nice_read (req, replies);
     if (err != 0) {
         b += "<p class=\"none\">this node has nothing to say about ";

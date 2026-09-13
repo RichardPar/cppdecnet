@@ -251,6 +251,24 @@ void Config::apply (ConfigLine line)
             nsp_.qmax = to_uint (opt (line, "qmax", empty), "qmax");
         if (nsp_.qmax < 1 || nsp_.qmax > 4095)
             throw std::runtime_error ("qmax out of range");
+        if (has (line, "nsp-weight")) {
+            nsp_.weight = to_uint (opt (line, "nsp-weight", empty),
+                                   "nsp-weight");
+            if (nsp_.weight < 1 || nsp_.weight > 255)
+                throw std::runtime_error ("nsp-weight out of range");
+        }
+        if (has (line, "nsp-delay")) {
+            nsp_.delay_factor =
+                std::stod (opt (line, "nsp-delay", empty));
+            if (nsp_.delay_factor < 1.0 || nsp_.delay_factor > 15.94)
+                throw std::runtime_error ("nsp-delay out of range");
+        }
+        if (has (line, "retransmits")) {
+            nsp_.retransmits = to_uint (opt (line, "retransmits", empty),
+                                        "retransmits");
+            if (nsp_.retransmits < 1)
+                throw std::runtime_error ("retransmits out of range");
+        }
         return;
     }
 

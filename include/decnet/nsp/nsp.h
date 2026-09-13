@@ -202,6 +202,14 @@ private:
         Bytes    frame;
         bool     sent = false;
         bool     is_data = false;
+
+        // When this packet was first put on the wire, for measuring the
+        // round trip.  Zero means "not being timed": only one packet is
+        // timed at a time, and a retransmitted packet is never timed,
+        // because there is no way to tell which transmission the
+        // acknowledgement answers.  Timing a retransmission is how a
+        // round trip estimate runs away under loss.
+        std::chrono::steady_clock::time_point txtime {};
     };
 
     // May this entry go out now?  Port of Data_Subchannel.flow_ok.
@@ -210,6 +218,11 @@ private:
     // Walk the queue sending whatever flow control now allows, stopping at
     // the first entry it does not.  Port of send_blocked.
     void send_blocked ();
+
+    // The acknowledgement holdoff: arm it, discharge it, cancel it.
+    void delay_ack ();
+    void ack_holdoff ();
+    void stop_ack_holdoff ();
 
     NSP          *parent_;
     std::uint16_t srcaddr_;
@@ -242,6 +255,15 @@ private:
     // Segments received ahead of their turn, keyed by sequence number.
     std::map<std::uint16_t, DataSeg> ooo_;
 
+    // Acknowledgement holdoff.  A segment whose sender set the delay bit
+    // says its acknowledgement may wait, so that it can ride on something
+    // we were going to send anyway instead of costing a frame of its own.
+    // This needs a timer of its own: the connection's is the retransmit
+    // one, and the two run at once.  Port of Subchannel.ackpending and
+    // its HOLDOFF timer.
+    bool          ackpending_ = false;
+    CallbackTimer ack_timer_;
+
     // The other subchannel.  Simpler than the data one: no segmentation,
     // and credit counted in whole messages, of which one is allowed to
     // start with.
@@ -257,6 +279,15 @@ private:
     // The packet currently being processed, so each state can look at it
     // without every state function repeating the cast.
     const NspPacketBase *received_ = nullptr;
+
+    // How long to wait before deciding a packet was lost.  Not a constant:
+    // it follows the round trip time measured to this node.  Port of
+    // Connection.acktimeout.
+    double acktimeout () const;
+
+    // Fold one measurement into this node's estimate.  Port of
+    // Connection.update_delay.
+    void update_delay (std::chrono::steady_clock::time_point txtime);
 
     double conn_timeout_ = 30.0;
     double inact_time_ = 300.0;
@@ -310,6 +341,13 @@ public:
     unsigned max_connections () const noexcept { return maxconns_; }
     unsigned qmax () const noexcept { return qmax_; }
 
+    // What shapes the retransmission timer.  A connection asks NSP rather
+    // than holding its own copy, so a configuration that changes applies
+    // to links already open.
+    unsigned delay_weight () const noexcept { return weight_; }
+    double   delay_factor () const noexcept { return delay_factor_; }
+    unsigned retransmit_limit () const noexcept { return retransmits_; }
+
 private:
     friend class Connection;
 
@@ -331,6 +369,9 @@ private:
     routing::BaseRouter *routing_ = nullptr;
     SessionControl      *session_ = nullptr;
     unsigned             maxconns_ = 4095;
+    unsigned     weight_ = 3;
+    double       delay_factor_ = 2.0;
+    unsigned     retransmits_ = 5;
     unsigned             nspver_ = VER_PH4;
     unsigned             qmax_ = 20;
 

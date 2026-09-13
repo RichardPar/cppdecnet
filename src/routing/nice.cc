@@ -212,6 +212,14 @@ void L1Router::read_node (const NiceRequest &req, Nodeid id, ReplyDict &resp)
     }
 }
 
+// Does the configuration give this address a name?  That is what makes an
+// otherwise silent address one we know about rather than one we do not.
+bool L1Router::named_node (Nodeid id) const
+{
+    const Nodeinfo *ni = const_cast<Node *> (node ())->find_node (id, false);
+    return ni && !ni->name.empty ();
+}
+
 void L1Router::reach (const NiceRequest &req, ReplyDict &resp,
                       const std::string *qual)
 {
@@ -232,10 +240,24 @@ void L1Router::reach (const NiceRequest &req, ReplyDict &resp,
             } else {
                 r.params.set (830, node_value (node ()->nicenode (a->nodeid ())));
             }
-        } else if (req.entity.code == nice::ReqEntity::known
-                   || resp.contains_node (id)) {
-            // "Known nodes" lists the unreachable ones too; the narrower
-            // forms mention one only if something else already has.
+        } else if (resp.every_address () || resp.contains_node (id)
+                   || named_node (id)) {
+            // Unreachable, and worth saying so only for an address we
+            // actually know something about: one the configuration names,
+            // or one something else in this reply has already mentioned.
+            //
+            // DIVERGENCE FROM THE PYTHON, deliberate.  Its reach() adds an
+            // entry for every address from 1 to maxnodes when the request
+            // says "known", and ours did the same.  With the default
+            // maximum of 1023 that answers "show known nodes" with 1025
+            // messages, of which all but a handful say only "node 1.457 is
+            // unreachable" -- a thousand frames out and a thousand
+            // acknowledgements back for nothing.  Against a PDP-11 that is
+            // minutes, and the link times out part way through.  An address
+            // nothing has ever been heard from and no configuration names
+            // is not a node the system knows; it is a number.  The
+            // monitoring pages, which had already grown their own filter
+            // for this, ask for the full set explicitly.
             resp.node_entry (id).params.set (0, Value::c (5));
         }
     }

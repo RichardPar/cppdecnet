@@ -22,7 +22,8 @@ constexpr std::size_t MAX_INTERRUPT = 16;
 // ============================================================ Connection
 
 Connection::Connection (NSP *parent, std::uint16_t srcaddr, Nodeid dest)
-    : Element (parent), parent_ (parent), srcaddr_ (srcaddr), dest_ (dest)
+    : Element (parent), parent_ (parent), srcaddr_ (srcaddr), dest_ (dest),
+      ack_timer_ ([this] { ack_holdoff (); })
 {
     segsize_ = MSS;
     qmax_ = parent->qmax ();
@@ -70,8 +71,33 @@ void Connection::send (const NspPacketBase &pkt)
     parent_->send_to (dest_, pkt.encode_packet ());
 }
 
+// How long an acknowledgement may be held back, waiting for something to
+// ride on.  The Python's Subchannel.HOLDOFF, and the same tenth of a
+// second: one timer tick.
+constexpr double ACK_HOLDOFF = 0.1;
+
+void Connection::delay_ack ()
+{
+    ackpending_ = true;
+    if (!ack_timer_.linked () && node ())
+        node ()->timers ().start (&ack_timer_, ACK_HOLDOFF);
+}
+
+void Connection::ack_holdoff ()
+{
+    // Nothing came along to carry it, so it goes on its own after all.
+    if (ackpending_) send_ack ();
+}
+
+void Connection::stop_ack_holdoff ()
+{
+    ackpending_ = false;
+    if (node ()) node ()->timers ().stop (&ack_timer_);
+}
+
 void Connection::send_ack ()
 {
+    stop_ack_holdoff ();
     AckData a;
     a.dstaddr = dstaddr_;
     a.srcaddr = srcaddr_;
@@ -100,6 +126,12 @@ void Connection::start_outbound (Bytes payload)
     e.seq   = Seq (0);
     e.frame = ci_pkt.encode_packet ();
     e.sent  = true;
+    // Time it.  The connect exchange is a round trip like any other, and
+    // timing it means there is an estimate from the moment the link comes
+    // up rather than only after the first data has been acknowledged --
+    // which matters, because the first retransmission decision may come
+    // before any data has been sent at all.
+    e.txtime = std::chrono::steady_clock::now ();
     txq_.push_back (std::move (e));
     send (ci_pkt);
     timer_is_retransmit_ = false;
@@ -210,6 +242,17 @@ void Connection::send_segments (const Bytes &data)
         // Piggyback what we have received on the outgoing segment.
         seg.acknum = AckNum { next_expect_ - Seq (1), AckNum::ACKQ };
 
+        // And tell the far end that acknowledging this one may wait, so
+        // long as our queue is not over half full -- at which point we
+        // want the acknowledgements promptly, because the window is what
+        // they open.  Phase IV only; Phase III has no such bit.
+        //
+        // Nothing set this before, so every segment we sent demanded an
+        // immediate acknowledgement: a thousand node entries went out as
+        // a thousand frames and came back as a thousand acknowledgement
+        // frames.  Halving that is the point of the bit.
+        seg.dly = cphase_ >= 4 && txq_.size () <= qmax_ / 2;
+
         TxEntry e;
         e.seq     = next_send_;
         e.segnum  = next_segnum_++;
@@ -254,20 +297,77 @@ bool Connection::flow_ok (const TxEntry &e) const
     }
 }
 
+double Connection::acktimeout () const
+{
+    // With no measurement yet, two seconds.  The specification says five;
+    // the Python uses two on the grounds that it is plenty on anything
+    // built this century, and this has to match what it does or the two
+    // give up on each other at different times.
+    const Nodeinfo *info = parent_ && parent_->node ()
+        ? parent_->node ()->find_node (dest_, false) : nullptr;
+    if (!info || info->delay <= 0) return 2.0;
+
+    double factor = parent_->delay_factor ();
+    return info->delay * factor;
+}
+
+void Connection::update_delay (std::chrono::steady_clock::time_point txtime)
+{
+    if (txtime == std::chrono::steady_clock::time_point {}) return;
+    Node *n = parent_ ? parent_->node () : nullptr;
+    if (!n) return;
+    Nodeinfo *info = n->find_node (dest_, true);
+    if (!info) return;
+
+    std::chrono::duration<double> d = std::chrono::steady_clock::now () - txtime;
+    double delta = d.count ();
+
+    // A floor of one second, which looks excessive next to a tenth of a
+    // second of timer granularity and is not.  On a DDCMP serial line the
+    // latency depends on the length of the packet, so an estimate taken
+    // from short packets produces false timeouts the moment a long one is
+    // sent.  The Python carries the same floor and says the same thing.
+    if (delta < 1.0) delta = 1.0;
+
+    if (info->delay > 0) {
+        // Weighted average: each measurement moves the estimate by
+        // 1/(weight+1) of the difference, so one outlier cannot move it far.
+        unsigned w = parent_->delay_weight ();
+        info->delay += (delta - info->delay) / static_cast<double> (w + 1);
+    } else {
+        info->delay = delta;
+    }
+
+    // Capped, because congestion makes the averaging misbehave: without a
+    // ceiling a congested path pushes the estimate up, which lengthens the
+    // timeout, which hides the congestion.
+    if (info->delay > 5.0) info->delay = 5.0;
+}
+
 void Connection::send_blocked ()
 {
     bool sent_any = false;
+    bool timing = false;
+    for (const TxEntry &e : txq_)
+        if (e.txtime != std::chrono::steady_clock::time_point {}) timing = true;
+
     for (TxEntry &e : txq_) {
         if (e.sent) continue;
         if (!flow_ok (e)) break;        // and everything after it waits too
         parent_->send_to (dest_, e.frame);
         e.sent = true;
         sent_any = true;
+        // Time one packet at a time.  Timing several at once measures the
+        // same round trip repeatedly and tells us nothing more.
+        if (!timing) {
+            e.txtime = std::chrono::steady_clock::now ();
+            timing = true;
+        }
     }
     if (sent_any) {
         retries_ = 0;
         timer_is_retransmit_ = true;
-        arm_timer (retransmit_time_);
+        arm_timer (acktimeout ());
     }
 }
 
@@ -278,14 +378,38 @@ void Connection::process_ack (Seq num)
     // Everything up to and including num is acknowledged.  Only entries
     // that were actually sent can be: an unsent one further along the
     // queue is not covered by an acknowledgement.
+    bool progress = false;
     while (!txq_.empty () && txq_.front ().sent && !(num < txq_.front ().seq)) {
         max_acked_seg_ = txq_.front ().segnum;
+        // If this was the packet being timed, the round trip is now known.
+        update_delay (txq_.front ().txtime);
         txq_.pop_front ();
+        progress = true;
     }
     highest_acked_ = num;
-    if (txq_.empty ()) {
+    if (progress) {
+        // Anything acknowledged means the peer is alive and taking
+        // delivery, so the retransmit count starts again and the timeout
+        // is measured afresh from here.
+        //
+        // The Python keeps that count per packet, and an acknowledged
+        // packet takes its count away with it.  Ours is one count for the
+        // whole connection, so without this it records every timeout over
+        // the life of the link and gives up on the fifth -- even though
+        // each one was followed by delivery.  A long NICE reply to a slow
+        // peer is exactly that shape: it makes progress the whole way and
+        // the link is dropped part way through anyway.
         retries_ = 0;
-        if (timer_is_retransmit_ && node ()) node ()->timers ().stop (this);
+        if (node ()) {
+            if (in_flight () > 0) {
+                timer_is_retransmit_ = true;
+                arm_timer (acktimeout ());
+            } else if (timer_is_retransmit_) {
+                node ()->timers ().stop (this);
+            }
+        }
+    } else if (txq_.empty () && timer_is_retransmit_ && node ()) {
+        node ()->timers ().stop (this);
     }
     // Room in the window may have appeared.
     send_blocked ();
@@ -498,7 +622,17 @@ void Connection::handle_data (const DataSeg &seg)
         accept_segment (held);
         ++next_expect_;
     }
-    send_ack ();
+
+    // The sender said this one's acknowledgement may wait, so hold it back
+    // and let it ride on whatever we send next.  Anything else -- a sender
+    // that wants it now, a phase that has no delay bit, or a link that is
+    // not running -- is answered straight away, as everything used to be.
+    // The last of those matters: a shutdown must not leave an
+    // acknowledgement sitting on a timer behind it.
+    if (seg.dly && cphase_ >= 4 && running ())
+        delay_ack ();
+    else
+        send_ack ();
 }
 
 void Connection::retransmit ()
@@ -509,17 +643,41 @@ void Connection::retransmit ()
         // flow control, not on the wire, so there is nothing to resend.
         return;
     }
-    if (++retries_ > MAX_RETRIES) {
+    unsigned limit = parent_ ? parent_->retransmit_limit () : MAX_RETRIES;
+    if (++retries_ > limit) {
         DN_DEBUG ("link {} giving up after {} retransmissions", srcaddr_,
-                  MAX_RETRIES);
+                  limit);
         set_state (close (DISC_NO_LINK, {}, true));
         return;
     }
-    DN_TRACE ("link {} retransmitting {} packet(s)", srcaddr_, n);
-    for (const TxEntry &e : txq_)
-        if (e.sent) parent_->send_to (dest_, e.frame);
+    DN_TRACE ("link {} retransmitting, {} in flight, try {}", srcaddr_, n,
+              retries_);
+    for (TxEntry &e : txq_) {
+        if (!e.sent) continue;
+        // Stop timing a packet once it has been sent twice: an
+        // acknowledgement no longer says which transmission it answers, and
+        // measuring from the first one inflates the estimate every time a
+        // packet is lost -- which lengthens the timeout, which loses more.
+        e.txtime = std::chrono::steady_clock::time_point {};
+        parent_->send_to (dest_, e.frame);
+        // Only the oldest unacknowledged one.  The Python gives every
+        // packet its own timer, so a timeout there resends one packet;
+        // ours has a single timer, and resending the whole window on it
+        // turns one late acknowledgement into a burst of up to qmax
+        // frames at a peer that was merely slow.  Acknowledgements are
+        // cumulative, so the next timeout finds whatever is oldest then:
+        // one at a time still converges, without the burst.
+        break;
+    }
     timer_is_retransmit_ = true;
-    arm_timer (retransmit_time_);
+
+    // Back off: each successive try waits longer, up to a ceiling.  A peer
+    // that is briefly unreachable is retried soon; one that is properly
+    // gone is not hammered for the whole retransmit limit at full rate.
+    double t = acktimeout ();
+    for (unsigned i = 1; i < retries_ && t < 30.0; ++i) t *= 2.0;
+    if (t > 30.0) t = 30.0;
+    arm_timer (t);
 }
 
 void Connection::timeout ()
@@ -538,6 +696,7 @@ Connection::State Connection::close (unsigned reason, ByteView data,
                                      bool tell_session)
 {
     if (node ()) node ()->timers ().stop (this);
+    stop_ack_holdoff ();
     txq_.clear ();
     int_txq_.clear ();
     ooo_.clear ();
@@ -772,10 +931,11 @@ NSP::NSP (Element *parent, const Config &config)
     : Element (parent)
 {
     DN_DEBUG ("initializing NSP");
-    maxconns_ = config.nsp ().max_connections;
-    qmax_     = config.nsp ().qmax;
-    // PORT: the NSP timers are still fixed; the Python takes them from the
-    // same configuration line.
+    maxconns_     = config.nsp ().max_connections;
+    qmax_         = config.nsp ().qmax;
+    weight_       = config.nsp ().weight;
+    delay_factor_ = config.nsp ().delay_factor;
+    retransmits_  = config.nsp ().retransmits;
     unsigned ph = static_cast<unsigned> (node () ? node ()->phase ()
                                                  : Phase::ph4);
     nspver_ = (ph == 2) ? VER_PH2 : (ph == 3) ? VER_PH3 : VER_PH4;

@@ -43,6 +43,13 @@ struct Nodeinfo {
     std::string name;
     std::string inbound_verification;
     std::string outbound_verification;
+
+    // Smoothed round trip time to this node, in seconds; zero until
+    // something has been timed.  It lives here rather than on a connection
+    // because it is a property of the path, and every link to the same
+    // node travels the same one -- a second connection starts with what
+    // the first one learned.
+    double      delay = 0.0;
 };
 
 // Timing histogram for work item dispatch, as node.WorkStats does.

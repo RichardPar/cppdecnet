@@ -212,6 +212,72 @@ DN_TEST (nsp, connect_and_accept)
     l.stop ();
 }
 
+DN_TEST (nsp, the_retransmit_timer_follows_the_measured_round_trip)
+{
+    // The timer is not a constant.  It starts at two seconds because
+    // nothing has been measured, then follows the round trip actually seen
+    // to that node -- so a link across an ocean and a link across a room
+    // do not wait the same time before deciding a packet was lost.
+    Link l;
+    l.start ();
+
+    Connection *c = l.b->nsp ()->connect (Nodeid::parse ("1.1"),
+                                          bytes_of ("hi"));
+    DN_ASSERT (c != nullptr);
+    DN_ASSERT (wait_until ([&] { return c->running (); }));
+
+    // Something has now been sent and acknowledged over the loopback, so
+    // an estimate exists.  It is floored at one second: a tenth of a
+    // second of timer granularity is not the constraint, packet length on
+    // a slow serial line is, and an estimate taken from short packets
+    // produces false timeouts the moment a long one goes out.
+    Nodeinfo *info = l.b->find_node (Nodeid::parse ("1.1"), false);
+    DN_ASSERT (info != nullptr);
+    DN_ASSERT (info->delay >= 1.0);
+    DN_ASSERT (info->delay <= 5.0);     // and capped
+
+    l.stop ();
+}
+
+DN_TEST (nsp, the_estimate_is_an_average_not_the_last_measurement)
+{
+    // One slow round trip must not move the timer far, or a single hiccup
+    // lengthens every timeout after it.  The weight decides how slowly it
+    // moves: each measurement is folded in as 1/(weight+1) of the change.
+    Config c = Config::from_string (
+        "routing 1.1 --type endnode\nnode 1.1 NODEA\n"
+        "circuit mul-0 Multinet 127.0.0.1:1:connect\n"
+        "nsp --nsp-weight 3 --nsp-delay 2.0\n");
+    DN_ASSERT_EQ (c.nsp ().weight, 3u);
+    DN_ASSERT_EQ (c.nsp ().delay_factor, 2.0);
+
+    // Work the published arithmetic by hand: starting at 1, a measurement
+    // of 5 moves the estimate by (5-1)/4 = 1, not to 5.
+    double delay = 1.0;
+    unsigned weight = c.nsp ().weight;
+    delay += (5.0 - delay) / (weight + 1);
+    DN_ASSERT (delay > 1.9 && delay < 2.1);
+}
+
+DN_TEST (nsp, the_timer_settings_come_from_the_configuration)
+{
+    Config c = Config::from_string (
+        "routing 1.1 --type endnode\nnode 1.1 NODEA\n"
+        "circuit mul-0 Multinet 127.0.0.1:1:connect\n"
+        "nsp --nsp-weight 10 --nsp-delay 3.5 --retransmits 9\n");
+    DN_ASSERT_EQ (c.nsp ().weight, 10u);
+    DN_ASSERT_EQ (c.nsp ().delay_factor, 3.5);
+    DN_ASSERT_EQ (c.nsp ().retransmits, 9u);
+
+    // And a value nobody meant is refused rather than quietly clamped: a
+    // weight of zero would divide by one and make the estimate the last
+    // measurement, which is the behaviour the averaging exists to avoid.
+    DN_ASSERT_THROWS (std::runtime_error,
+                      Config::from_string ("nsp --nsp-weight 0\n"));
+    DN_ASSERT_THROWS (std::runtime_error,
+                      Config::from_string ("nsp --nsp-delay 0.5\n"));
+}
+
 DN_TEST (nsp, closed_connections_are_reclaimed)
 {
     // A closed connection is not destroyed at once, because it is retired

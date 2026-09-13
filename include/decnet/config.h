@@ -92,6 +92,22 @@ struct NspConfig {
     unsigned max_connections = 4095;
     // Unacknowledged data segments allowed in flight at once.
     unsigned qmax = 20;
+
+    // The retransmission timer is not a constant: it follows the round
+    // trip time actually measured to each node.  Two numbers shape it.
+    //
+    // weight is how slowly the estimate moves -- each measurement is
+    // averaged in as 1/(weight+1) of the new value, so a larger weight
+    // means a steadier estimate and a slower response to a change.
+    //
+    // delay_factor is how much longer than the estimate we wait before
+    // deciding a packet was lost.  Waiting exactly the round trip time
+    // would make every ordinary variation look like a loss.
+    unsigned weight = 3;
+    double   delay_factor = 2.0;
+
+    // How many times a packet is sent before the link is given up on.
+    unsigned retransmits = 5;
 };
 
 // logging <type> [--sink-node N] [--events E] [--sink-file F] ...
