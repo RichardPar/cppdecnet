@@ -155,6 +155,23 @@ std::unique_ptr<Datalink> Ddcmp::create (Element *owner,
     throw std::invalid_argument ("DDCMP " + d.str () + ": unknown mode");
 }
 
+bool Ddcmp::validate (Work &w)
+{
+    if (dynamic_cast<Restart *> (&w)
+        && in_state (DN_MY_STATE (PtpDatalink, running))) {
+        // The transport is fine; it is the protocol that the layer above
+        // wants started over.  The engine reports down and then up again
+        // as its handshake completes, which is what the routing circuit
+        // is waiting for.  Port of the Restart cases in ddcmp.py's states.
+        DN_DEBUG ("{} restarting the DDCMP protocol on request", name_);
+        proto_->restart ();
+        return false;
+    }
+    // Before the transport is up there is no protocol to restart, so the
+    // base class's handling -- start the connection over -- is right.
+    return PtpDatalink::validate (w);
+}
+
 Ddcmp::State Ddcmp::connected ()
 {
     // The transport is up; now the protocol has its own handshake to do.

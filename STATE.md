@@ -29,6 +29,58 @@ and `src/datalink/ethernet.cc`, plus `BcDatalink::filter_expression()` in
 `src/datalink/bc.cc`. Compiled and unit tested; **never yet run on a real
 segment** -- see below.
 
+**Recovery from a neighbour that stops answering** (14-Sep-2026). Two
+defects, both written up in `BUGS.md`, both of which left a node off the
+network permanently rather than temporarily:
+
+- `Port::restart ()` posts a `Restart` work item that no point to point
+  datalink handled, so every restart the routing layer asked for -- a
+  listen timeout above all -- did nothing, and the circuit waited in `ds`
+  for a `DlStatus` UP that was never coming. Handled now in
+  `PtpDatalink::validate` (reconnect, no holdoff) and overridden in
+  `Ddcmp::validate` (restart the protocol, keep the transport), which is
+  how the Python splits it.
+- `EndnodeLanCircuit` cleared the timed-out adjacency but not `dr_`, so the
+  endnode never re-adopted a designated router that came back.
+- `RoutingLanCircuit` did the same on the router side and never re-ran the
+  election, so a router whose designated router died never took over --
+  and because only the designated router sends hellos to the endnodes,
+  that took the whole segment down with it.
+- A router heard but never confirmed two-way had no adjacency object, so
+  nothing owned a listen timer for it and nothing ever aged it out; its
+  priority stayed in the election for good.
+
+There is also an event where there was none: a point to point listen
+timeout now raises 4.8, circuit down, reason listener timeout, as the
+Python's `PtpCircuit.adj_timeout` does.
+
+Tests: `tests/test_recovery.cc` (three, two nodes joined through a relay
+that can be told to hold both connections open and discard everything --
+which is what a wedged node looks like from outside, and what a dropped
+socket does not), plus `ddcmp.a_restart_request_is_obeyed_and_the_circuit_comes_back`
+and three in `tests/test_lan.cc`:
+`endnode_readopts_a_router_that_went_quiet`,
+`a_router_takes_over_when_the_designated_router_goes_quiet` and
+`a_router_heard_once_does_not_block_the_election_for_good`. Every one of
+them was checked against the unfixed code and fails there.
+
+Worth keeping in mind for the next one of these: the first version of the
+takeover test waited for `designated_router ()` rather than for an
+adjacency to be up, and so stopped the far node three milliseconds after
+it started. That accident is what found the aging defect -- the test was
+wrong and the failure was real.
+
+**A crash in the event logger, found while running the suite to check the
+above** (14-Sep-2026). `RemoteSink::send_events` popped each record after
+sending it, and the send goes down through session control, NSP and routing
+on the caller's stack -- so an event raised down there re-entered the loop
+and the two calls popped the same record twice. One run of `test_eventlog`
+in twelve under load died in the `Event` destructor. Fixed: one loop at a
+time, and the record leaves the queue before it is sent. `BUGS.md` has the
+stack. Whether this was also the rare `test_eventlog` **hang** (item 8) is
+not known; the hang has not appeared since, but it was never frequent
+enough for that to mean much.
+
 **Two defects fixed**, both written up in `BUGS.md`:
 - an event raised from inside a routing state function outran the state
   change, so the connect it triggered was dropped by `send_raw`
@@ -50,6 +102,34 @@ Note when re-running it: a run takes about 25 seconds under ASan, so the
 loop needs ~17 minutes. Counting log *files* is not the same as counting
 finished runs -- the last file exists while its run is still going. Check
 that each log ends with its pass summary.
+
+## Deployed
+
+The gateway node runs on the Rock Pi at 192.168.10.151 as a systemd
+service: node 29.150 CPPNOD, `/usr/local/bin/decnetd` with
+`/etc/decnet/myhecnet.conf`, `CAP_NET_RAW` and `CAP_NET_ADMIN` as ambient
+capabilities rather than root. `tools/deploy-arm.sh` repeats the whole
+thing; `samples/gateway/` is the host side of it.
+
+One circuit reaches both PDP-11s because the host has a bridge: br0 holds
+the wired NIC and the tap the simulator attaches to. That is not
+decoration. libpcap on a shared physical NIC never sees the host's own
+locally-originated frames, so a circuit on the raw NIC and a guest on a tap
+cannot hear each other in either direction -- and the tap has to exist,
+bridged and up, *before* simh starts, or its first transmit fails with EIO,
+RSX's DELUA gives up for the rest of the boot, and NCP goes on reporting
+the circuit as On. Both halves are written up in `samples/gateway/`.
+
+Live evidence, 14-Sep-2026:
+
+    ETH-0  Adjacent node 29.158 (RAXDA)   the simh PDP-11, over tap0
+    ETH-0  Adjacent node 29.159 (BAJI)    the real PDP-11, on the wire
+    MUL-0  Adjacent node 29.1             HECnet
+
+with BAJI's own hellos naming `rtr 29.158` -- two level 1 routers at equal
+priority on one segment, the election decided by address, and this node
+correctly standing down. The other end's hello names us with the two-way
+bit set, which is the part that cannot be faked from our own logs.
 
 ## Open
 

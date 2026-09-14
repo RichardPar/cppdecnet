@@ -100,6 +100,45 @@ Seen once in twelve runs with every core spinning; then not once in the
 following seventy-five runs under the same load, so it is rarer than one in
 twenty and has not been caught in the act.
 
+Seen again on 14-Sep-2026 on an **unloaded** machine, during a plain run of
+the suite, with the same signature: both circuits up, then nothing, the log
+frozen two seconds into the run. So it is not only a load phenomenon. What
+the thread states say, read from `/proc/<pid>/task/*/wchan` -- which needs
+no privilege, unlike gdb here:
+
+    main             futex_wait_queue     (a lock, a condvar, or a join)
+    two threads      hrtimer_nanosleep    (the two timer wheels)
+    two threads      futex_wait_queue
+    one thread       do_poll              (a datalink receive thread)
+
+Nothing is spinning and nothing is in a syscall that would return on its
+own, so it is a deadlock rather than a slow test. The main thread waiting
+on a futex while the timer threads sleep normally points at
+`Node::stop ()` or a lock held across a callback.
+
+**A crash in the same test, found on 14-Sep-2026 and fixed, may or may not
+be the same fault.** Under the load above, one run in twelve died in the
+`Event` destructor:
+
+    SEGV in std::map<unsigned short, nice::Param>::~map
+      #4 nice::ParamList::~ParamList
+      #5 events::Event::~Event
+      #7 std::deque<events::Event>::pop_front
+      #8 events::RemoteSink::send_events   logger.cc:386
+      #9 events::RemoteSink::link_up
+     #11 session::Session::connect_confirmed
+
+`send_events` sent `queue_.front ()` and popped it afterwards, and the send
+is a synchronous call down through session control, NSP and routing. Any
+event raised down there comes back to this sink, is queued, and re-entered
+this loop -- the inner call sent and popped the record the outer one was
+still working on, and the outer `pop_front` then destroyed an element that
+had already gone. Fixed: one loop at a time, and each record leaves the
+queue before it is sent. Written up under "Fixed" below.
+
+Whether that was also the hang is not known. The hang has not been seen
+since, but it was never frequent enough for absence to prove anything.
+
 Not diagnosed. A stack trace is what it needs.
 `tools/catch-eventlog-hang.sh` does the whole thing; by hand it is:
 
@@ -112,6 +151,75 @@ Note the load generator has to be killable by name (`pkill -x yes`). A
 `while :; do :; done` loop matches the pattern of the shell running the
 hunt, and killing that produces an empty log that looks exactly like a
 hung test -- which cost a diagnosis cycle here.
+
+### 9. An adjacency can be freed inside its own listen timeout
+
+`Adjacency::timeout ()` calls `down ()`, which drops the routing layer's
+reference, and then `circuit_->adj_timeout (this)`, which drops the
+circuit's. That can be the last one, so the object is destroyed while a
+member function of it is still on the stack. Nothing touches a member after
+the call, so it is currently harmless.
+
+The related hazard is real, though: a `Timeout` work item holds a raw
+`Timer *`, and `Timeout::dispatch` reads `timer_->revcount ()` to decide
+whether the item is stale. An adjacency whose timer has already been pulled
+off the wheel, and which is then destroyed by a circuit restart before the
+item is dispatched, leaves that read looking at freed memory -- and if the
+count happens to match, `timeout ()` is called on it. Not seen: the
+recovery tests exercise this path under ASan and are clean. Fixing it
+properly means the work item holding a weak reference rather than a
+pointer, which is a change to every timer user.
+
+`src/routing/adjacency.cc`, `include/decnet/common/timers.h`
+
+### 10. An init message on a running circuit is ignored, and `start_works` is always true
+
+Two halves of the same gap, found while fixing the recovery defects below
+and deliberately not fixed with them.
+
+`PtpCircuit::ru` handles hellos, verifies and data, and silently ignores
+anything else -- including a `PtpInit`. The Python's `validate` decodes
+against the packets each state expects, so an init arriving in `ru` falls
+through to "unexpected packet type", which takes the circuit down (event
+4.12) and starts the handshake again. Ours waits for the listen timer
+instead, which is three hello intervals of black-holing where the Python
+recovers at once.
+
+`PtpPort::start_works ()` returns true unconditionally. In the Python it is
+false for Multinet over UDP, because a datagram circuit cannot report a
+remote restart, and two things depend on knowing that: `restart` synthesises
+the datalink UP rather than waiting for one, and `ru` treats an unexpected
+init as "the far end restarted" and applies the workaround above rather than
+taking the circuit down and expecting another init that will never come.
+`UdpMultinet::create_port` is the hook where that would attach -- it is
+item 6, the "pointless passthrough".
+
+Neither is fatal now that a restart is obeyed at all: a UDP Multinet
+circuit whose peer restarts recovers when the listen timer expires. It is
+slower than the Python by design rather than by accident, which is the only
+reason this is written down instead of done.
+
+`src/routing/ptp.cc`, `src/datalink/ptp.cc`, `src/datalink/multinet.cc`
+
+### 11. The monitoring pages show status where characteristics were asked for
+
+`http://host:8102/circuits?info=characteristics` renders the same fields as
+the summary -- state and the adjacency -- and none of the characteristics
+`LanCircuit::nice_read` can supply: no hello timer (906), no cost (900),
+and nothing from `nice_char`, which is where a LAN circuit reports its
+router priority and who the designated router is.
+
+Seen on the live gateway on 14-Sep-2026, on both a LAN and a point to
+point circuit, so it is not specific to either. The read path itself is
+sound -- the same parameters come back correctly to a NICE request over
+the network -- which points at the page handing NICE a summary request
+rather than a characteristics one, or at `NiceRequest::chars ()`.
+
+Worth fixing because the README promises these pages offer "the same choice
+NCP offers after SHOW", and a missing designated router is exactly what
+someone reads that page to find out.
+
+`src/http/monitor.cc`, `src/routing/lan.cc`, `src/nice/packets.h`
 
 ---
 
@@ -502,6 +610,100 @@ Which format applies depends on the port, and which port a frame belongs to
 depends on the protocol type in its header. The receive path now parses the
 header first, finds the port, and reads the payload the way that port
 expects.
+
+### A work item nothing handled, and a circuit that never came back
+
+Both of these have the same shape: a neighbour stops answering, the layer
+above notices and asks for a restart, and the restart does not happen. The
+node is then off the network for good -- not slow, not flapping, gone --
+while every log line up to that point says the circuit was fine.
+
+**`Restart` was dropped on the floor.** `Port::restart()` posts a `Restart`
+work item, and `PtpDatalink::validate` knew `Stop`, `Reconnect` and
+`ThreadExit` but not `Restart`. So the item reached the `running` state,
+matched nothing, and the trace said `no state change`. The routing circuit
+had already moved to `ds`, where it waits -- deliberately without a timeout,
+because the datalink guarantees it will always report when it comes up --
+for a `DlStatus` UP that a datalink still happily running had no reason to
+send. Every path through `PtpCircuit::restart()` wedged there: listen
+timeout, init timeout, verification failure, a neighbour whose address is
+out of range.
+
+The Python has this in `_Multinet.validate`, which turns `Restart` into
+`Reconnect (now = True)`; DDCMP handles it in its own states by restarting
+the protocol and keeping the connection. Both are now ported. The default
+lives in `PtpDatalink::validate` rather than only in `Multinet`, so that a
+datalink which forgets to handle it reconnects instead of wedging.
+
+**An endnode kept a designated router it had no adjacency to.**
+`EndnodeLanCircuit` stores its router in `dr_` and its adjacency in
+`adjacencies_`. A listen timeout erased the adjacency and left `dr_` set,
+and the next hello from that same router took the "the router we are
+already using" path, which only refreshes a listen timer on an adjacency
+that is no longer there. The endnode never adopted it again, and went on
+unicasting to it and naming it in its own hellos. `adj_timeout` now clears
+`dr_`, as `EndnodeLanCircuit.adj_timeout` does in the Python.
+
+**A router kept a designated router it could no longer hear.** The same
+mistake as the endnode's, on the other side of the LAN and with a wider
+blast radius. `RoutingLanCircuit` holds the election in `calc_dr ()`, which
+nothing called when an adjacency went away: `dr_` went on naming the dead
+router, `calc_dr` would have seen no change anyway, and `isdr_` stayed
+false -- so this router never took over, and since only the designated
+router sends hellos to `ALL_ENDNODES`, every endnode on the segment lost
+its own adjacency in turn and had nothing to replace it with. One router
+dying took the LAN with it. `adjacency_down` is now virtual and the router's
+override clears `dr_`, re-runs the election and sends a fresh hello, as
+`RoutingLanCircuit.deladj` does.
+
+**And a router heard once was never aged out at all.** A router entry
+reaches `adjacencies_` from its first hello but only got an `Adjacency`
+object -- which is what owns the listen timer -- when two-way was
+confirmed. So a router we heard but never confirmed (rebooted in between,
+or deaf to us) sat in the table for good, with its priority still in the
+election. A node that saw one hello from a higher-priority router at the
+wrong moment could never become designated router again. The object is now
+created from the first hello, as the Python creates it in state INIT, and
+its timer runs from then on.
+
+The lesson is about silence. A state machine that ignores an input it does
+not recognise, a `std::optional` left set beside the collection it belongs
+with, a table with no expiry on it, and an election nothing re-runs all
+fail by doing nothing at all. Neither produced a log
+line, an event, or a counter -- the only visible symptom was that the
+network stopped and stayed stopped. The tests that find this class of fault
+are the ones that take a neighbour away and then wait to see whether
+anything comes back: `tests/test_recovery.cc` for a neighbour that goes
+quiet with its socket still open, and the three LAN cases at the end of
+`tests/test_lan.cc`. There is also an event (4.8, circuit down, listener
+timeout) on a point to point listen timeout where there was none.
+
+### A queue popped after a send that could re-enter it
+
+`RemoteSink::send_events` walked its queue like this:
+
+    while (!queue_.empty ()) {
+        conn_->send_data (queue_.front ().encode ());
+        queue_.pop_front ();
+    }
+
+`send_data` is not a hand-off to a writer thread; it goes straight down
+through session control, NSP and routing on the caller's stack. Anything
+down there that raises an event -- and plenty does -- lands back in this
+sink, is queued, and used to re-enter `send_events`. The inner call then
+sent and popped the record the outer call was still holding, and the outer
+`pop_front` destroyed an element that was already gone.
+
+The symptom was a SEGV in the `Event` destructor, about one run of
+`test_eventlog` in twelve under load, with nothing in the log leading up to
+it. The fix is two rules: one loop at a time through the queue, and each
+record comes off the queue before it is sent rather than after. Found while
+looking for something else -- the suite was being run to check an unrelated
+change, and this was in the one run of twelve that did not pass.
+
+The general shape is worth remembering, because this code has it in several
+places: a synchronous call down the stack can come back up, so a container
+must not be left in a state that a re-entrant call would corrupt.
 
 ### Process handling
 

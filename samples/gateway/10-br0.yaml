@@ -1,0 +1,25 @@
+# br0 -- the bridge the simh PDP-11 and decnetd both need.
+#
+# A libpcap application on a shared physical NIC never sees the host's own
+# locally-originated frames, so decnetd on end0 could reach the LAN but
+# never a guest on a tap.  A real Linux bridge loops traffic between its
+# members in software, which is what makes one circuit reach both.
+#
+# The bridge takes end0's MAC so the DHCP server hands back the same lease.
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    end0:
+      dhcp4: no
+      dhcp6: no
+  bridges:
+    br0:
+      interfaces: [end0]
+      macaddress: "36:61:6c:54:b4:23"
+      dhcp4: yes
+      dhcp6: no
+      dhcp-identifier: mac
+      parameters:
+        stp: false
+        forward-delay: 0

@@ -347,6 +347,12 @@ public:
     void timeout () override;
 
 protected:
+    // A restart asked for by the layer above restarts the DDCMP protocol
+    // and leaves the transport connection alone, which is what "remote
+    // restart notification" means for a datalink that has a protocol of
+    // its own.  Everything else is handled by the base class.
+    bool validate (Work &w) override;
+
     State connected () override;
     State running (Work &w) override;
 

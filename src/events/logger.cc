@@ -378,13 +378,25 @@ void RemoteSink::send_events ()
     if (stopped_) return;
 
     if (conn_) {
-        while (!queue_.empty ()) {
-            if (!conn_->running ()) return;
-            DN_TRACE ("event sender: sending {} to {}",
-                      queue_.front ().id.str (), node_);
-            conn_->send_data (queue_.front ().encode ());
+        // send_data goes straight down through session control, NSP and
+        // routing, and anything down there may raise an event -- which
+        // arrives back here, is queued, and used to re-enter this very
+        // loop.  The inner call then sent and popped the record the outer
+        // one was still holding, and the outer pop_front destroyed an
+        // element that was no longer there.  That is a crash in the
+        // Event destructor with nothing in the log to explain it.
+        //
+        // So: one loop at a time, and each record leaves the queue before
+        // it is sent rather than after.
+        if (sending_) return;
+        sending_ = true;
+        while (!queue_.empty () && conn_ && conn_->running ()) {
+            Event e = std::move (queue_.front ());
             queue_.pop_front ();
+            DN_TRACE ("event sender: sending {} to {}", e.id.str (), node_);
+            conn_->send_data (e.encode ());
         }
+        sending_ = false;
         return;
     }
     if (connecting_ || node_.empty ()) return;

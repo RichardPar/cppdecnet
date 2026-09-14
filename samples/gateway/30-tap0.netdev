@@ -1,0 +1,20 @@
+# tap0 -- the PDP-11's side of the bridge, created at boot rather than by
+# the simulator.
+#
+# simh will create a tap itself, but then transmits on it immediately,
+# before networkd has noticed the new device, enslaved it to br0 and
+# brought it up -- and a write to a tap whose interface is still down fails
+# with EIO.  simh reports that as "You may need to run as root", which is
+# misleading: it has the capabilities it needs.  RSX's DELUA driver gives up
+# after those errors and the node stays off the network for the rest of the
+# boot.
+#
+# Owned by the user the simulator runs as, so opening it needs no
+# privilege beyond /dev/net/tun.
+[NetDev]
+Name=tap0
+Kind=tap
+
+[Tap]
+User=richard
+Group=richard

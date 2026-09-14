@@ -1,0 +1,9 @@
+# Any tap the simulator creates joins the bridge.
+[Match]
+Name=tap*
+
+[Network]
+Bridge=br0
+
+[Link]
+RequiredForOnline=no

@@ -137,7 +137,10 @@ protected:
     void lanevent (events::EventId ev, Nodeid neighbour, int reason = -1);
 
     void adjacency_up (std::uint16_t key, const AdjacencyInfo &info);
-    void adjacency_down (std::uint16_t key);
+    // Virtual because a router has state that depends on which of its
+    // neighbours are up -- who the designated router is, above all -- and
+    // has to recompute it when one goes away.
+    virtual void adjacency_down (std::uint16_t key);
 
     BaseRouter           *parent_;
     datalink::BcDatalink *datalink_;
@@ -164,6 +167,10 @@ public:
     Nodeid designated_router () const noexcept override { return dr (); }
 
     std::size_t cache_size () const noexcept { return cache_.size (); }
+
+    // The designated router stopped sending hellos.  As well as dropping
+    // the adjacency, forget the router itself.
+    void adj_timeout (Adjacency *adj) override;
 
 protected:
     void send_hello () override;
@@ -196,6 +203,10 @@ public:
     void nice_char (nice::NiceReply &r) const override;
 
 protected:
+    // Losing a neighbour changes the election, and losing the designated
+    // router means there is not one.
+    void adjacency_down (std::uint16_t key) override;
+
     void send_hello () override;
     void handle (RoutingPacketBase &pkt, Macaddr src) override;
 

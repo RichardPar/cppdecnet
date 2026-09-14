@@ -199,6 +199,10 @@ private:
     session::SessionConnection *conn_ = nullptr;
     bool         connecting_ = false;
     bool         stopped_ = false;
+    // True while send_events is working through the queue.  Sending is a
+    // synchronous call down the stack that can raise events of its own,
+    // and those come back here; see the comment on send_events.
+    bool         sending_ = false;
 };
 
 // ------------------------------------------------------------ event logger

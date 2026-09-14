@@ -242,16 +242,25 @@ void Connection::send_segments (const Bytes &data)
         // Piggyback what we have received on the outgoing segment.
         seg.acknum = AckNum { next_expect_ - Seq (1), AckNum::ACKQ };
 
-        // And tell the far end that acknowledging this one may wait, so
-        // long as our queue is not over half full -- at which point we
-        // want the acknowledgements promptly, because the window is what
-        // they open.  Phase IV only; Phase III has no such bit.
+        // Never ask the far end to delay its acknowledgement.
         //
-        // Nothing set this before, so every segment we sent demanded an
-        // immediate acknowledgement: a thousand node entries went out as
-        // a thousand frames and came back as a thousand acknowledgement
-        // frames.  Halving that is the point of the bit.
-        seg.dly = cphase_ >= 4 && txq_.size () <= qmax_ / 2;
+        // The Python sets this bit when its queue is not over half full,
+        // and that was ported here, on the reasoning that it halves the
+        // acknowledgement frames coming back.  Two measurements say
+        // otherwise.  On a long reply it never fires: the queue is already
+        // deep by the time the first segment is built, so the condition is
+        // false for every segment -- confirmed against a live PyDECnet,
+        // which acknowledged 1019 of 1028 segments individually, exactly
+        // as we do.  On a short reply -- which is every NCP command, a
+        // handful of messages -- it fires on all of them, and then the
+        // only thing that can finish the exchange is an acknowledgement we
+        // have just told the far end it need not hurry over.  What that
+        // costs is the far end's holdoff, not ours, and RSX's is not a
+        // tenth of a second.
+        //
+        // So the bit buys nothing where it was meant to and paces us where
+        // it was not.  Receiving it is still honoured; see handle_data.
+        seg.dly = false;
 
         TxEntry e;
         e.seq     = next_send_;
@@ -515,6 +524,35 @@ void Connection::handle_link_service (const LinkSvcMsg &ls)
     // A link service message travels on the other subchannel.
     route_ack (ls.acknum, false);
     route_ack (ls.acknum2, false);
+
+    // And it is sequenced on that subchannel, which is why it carries a
+    // segment number at all, so it has to be acknowledged there -- exactly
+    // as an interrupt is, a few lines above.  Nothing here did.
+    //
+    // The far end will not send the next link service message until the
+    // last one is answered.  RSX waits out a four second timer instead and
+    // then grants one more message of credit, so every reply message after
+    // the first cost four seconds: "show executor" is one message and
+    // looks fine, "show known nodes" is four and takes sixteen.  Any NCP
+    // command that answers with more than one message pays it.
+    Seq got = ls.segnum;
+    if (got < int_next_expect_) {
+        // Seen it before.  Acknowledge again, in case that is what went
+        // missing, but do not apply the credit twice.
+        AckOther dup;
+        dup.dstaddr = dstaddr_;
+        dup.srcaddr = srcaddr_;
+        dup.acknum = AckNum { int_next_expect_ - Seq (1), AckNum::ACKQ };
+        send (dup);
+        return;
+    }
+    int_next_expect_ = got + Seq (1);
+
+    AckOther ack;
+    ack.dstaddr = dstaddr_;
+    ack.srcaddr = srcaddr_;
+    ack.acknum = AckNum { got, AckNum::ACKQ };
+    send (ack);
 
     if (ls.fcval_int == LinkSvcMsg::INT_REQ) {
         // Credit for interrupts.  Only a request for more is meaningful;

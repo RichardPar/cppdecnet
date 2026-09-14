@@ -180,7 +180,11 @@ void LanCircuit::adjacency_up (std::uint16_t key, const AdjacencyInfo &info)
 {
     LanAdjacency &a = adjacencies_[key];
     a.state = AdjState::up;
-    a.adj = std::make_shared<Adjacency> (this, info, t3_);
+    // A router already has an adjacency object, made when its first hello
+    // arrived; only an endnode, which needs no handshake, is created here.
+    // Reused rather than replaced so that a timeout work item already in
+    // flight still refers to a live object.
+    if (!a.adj) a.adj = std::make_shared<Adjacency> (this, info, t3_);
     // This is what puts the neighbour into the routing table: a router
     // gets a column, an endnode an entry in the shared endnode column.
     a.adj->up ();
@@ -193,7 +197,10 @@ void LanCircuit::adjacency_down (std::uint16_t key)
 {
     auto it = adjacencies_.find (key);
     if (it == adjacencies_.end ()) return;
-    if (it->second.adj) {
+    // An adjacency that never came up is dropped without an event: there
+    // was nothing for an operator to have seen come up.  Port of deladj,
+    // which logs only for state UP.
+    if (it->second.adj && it->second.state == AdjState::up) {
         DN_INFO ("{} adjacency down: {}", name_,
                  it->second.adj->nodeid ().str ());
         lanevent ({ 4, 18 }, it->second.adj->nodeid (),
@@ -227,6 +234,18 @@ EndnodeLanCircuit::EndnodeLanCircuit (BaseRouter *parent, std::string name,
 {
     // An endnode listens for the routers' announcements.
     port_->add_multicast (all_endnodes ());
+}
+
+void EndnodeLanCircuit::adj_timeout (Adjacency *adj)
+{
+    // Forget the router as well as the adjacency.  While dr_ still names
+    // it, its next hello takes the "the router we are already using" path
+    // in handle() below, which only refreshes the listen timer -- and the
+    // adjacency it would refresh has just been erased, so nothing rebuilds
+    // it and the endnode stays off the network for good.  The Python's
+    // EndnodeLanCircuit.adj_timeout clears self.dr for this reason.
+    if (adj && dr_ && dr_->first == adj->nodeid ()) dr_.reset ();
+    LanCircuit::adj_timeout (adj);
 }
 
 void EndnodeLanCircuit::send_hello ()
@@ -407,6 +426,35 @@ Bytes RoutingLanCircuit::build_elist (bool empty) const
     return el.encode ();
 }
 
+void RoutingLanCircuit::adjacency_down (std::uint16_t key)
+{
+    // What it was has to be read before the entry goes: the clean-up
+    // depends on whether it was a router.
+    auto it = adjacencies_.find (key);
+    if (it == adjacencies_.end ()) return;
+    bool   was_router = it->second.ntype != ENDNODE;
+    Nodeid id (static_cast<std::uint16_t> (key));
+
+    LanCircuit::adjacency_down (key);
+
+    // A designated router we can no longer hear is not the designated
+    // router.  Leaving dr_ naming it is quietly serious: calc_dr () below
+    // would see no change and do nothing, so nothing on this LAN ever
+    // takes over, and while isdr_ stays false this router sends its hellos
+    // only to the other routers -- the endnodes hear nobody, lose their
+    // own adjacency in turn, and the LAN stays down.  Port of
+    // RoutingLanCircuit.deladj.
+    if (dr_ == id) dr_ = Nodeid ();
+    if (was_router) {
+        calc_dr ();
+        // The hello's router list has changed, so say so now rather than
+        // at the next t3.  The Python's newhello holds this off for T2
+        // where one has just gone out; one extra frame on a neighbour
+        // loss is not worth the state to track that.
+        send_hello ();
+    }
+}
+
 void RoutingLanCircuit::send_hello ()
 {
     RouterHello h;
@@ -444,6 +492,28 @@ void RoutingLanCircuit::handle (RoutingPacketBase &pkt, Macaddr src)
         a.ntype   = (rh->ntype == RouterHello::ntype_l2) ? L2ROUTER : L1ROUTER;
         a.listen_time = rh->timer * BCT3MULT;
 
+        // Give it an adjacency object now, before two-way is confirmed,
+        // because that object owns the listen timer -- and something has to
+        // age this entry out. A router heard once and then gone otherwise
+        // stays in this table for good and goes on winning the designated
+        // router election below, so this node never takes over, and the
+        // endnodes on the LAN are left with no router at all.  The Python
+        // creates the adjacency on the first hello, in state INIT, for the
+        // same reason; it starts the timer on the second hello and we start
+        // it on the first, which only means a router heard exactly once
+        // also expires.
+        if (!a.adj) {
+            AdjacencyInfo init;
+            init.id       = rh->id;
+            init.ntype    = a.ntype;
+            init.blksize  = std::min (rh->blksize, ETHMTU);
+            init.tiver    = rh->tiver;
+            init.timer    = rh->timer;
+            init.priority = rh->prio;
+            a.adj = std::make_shared<Adjacency> (this, init, t3_);
+        }
+        a.adj->alive ();
+
         // Look for ourselves in its router list.  Finding it is the only
         // proof we have that this neighbour can hear us.
         bool listed = false;
@@ -471,7 +541,7 @@ void RoutingLanCircuit::handle (RoutingPacketBase &pkt, Macaddr src)
             info.priority = rh->prio;
             adjacency_up (rh->id.value (), info);
         } else if (a.state == AdjState::up) {
-            if (a.adj) a.adj->alive ();
+            // Already up and still talking; alive() above is all it needed.
         } else if (is_new) {
             DN_DEBUG ("{} heard router {}, waiting for two-way", name_,
                       rh->id.str ());

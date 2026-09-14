@@ -454,6 +454,13 @@ void PtpCircuit::adj_timeout (Adjacency *)
 {
     // The adjacency's listen timer expired.  It has already taken itself
     // down, so restart the circuit and go back to waiting for the datalink.
+    //
+    // The event matters as much as the restart: a neighbour going quiet is
+    // the one circuit failure nothing else reports, so without it the log
+    // shows a working circuit right up to the moment it stops carrying
+    // traffic.  Raised before clearing the neighbour so that it still
+    // names it.  Port of PtpCircuit.adj_timeout.
+    routeevent ({ 4, 8 }, events::reason::listener_timeout);
     adj_.reset ();
     set_state (restart ("listen timeout"));
 }

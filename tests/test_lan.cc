@@ -155,6 +155,20 @@ Bytes endnode_hello (Nodeid id)
     return h.encode_packet ();
 }
 
+// A router hello as a designated router would send it.  The endnode side
+// does not look inside the router list, so an empty one will do.
+Bytes router_hello (Nodeid id, unsigned timer = 2)
+{
+    RouterHello h;
+    h.tiver   = tiver_ph4;
+    h.id      = id;
+    h.ntype   = RouterHello::ntype_l1;
+    h.blksize = ETHMTU;
+    h.prio    = 64;
+    h.timer   = static_cast<std::uint16_t> (timer);
+    return h.encode_packet ();
+}
+
 // The same packet behind a pad header: the high bit set, and the low seven
 // bits giving the length of the padding including the header byte itself.
 Bytes padded (const Bytes &pkt, std::size_t padlen)
@@ -529,4 +543,131 @@ DN_TEST (lan, malformed_padding_is_rejected)
     // nothing at all is getting through.
     DN_ASSERT (t.announce (endnode_hello (good), good.value ()));
     DN_ASSERT_EQ (t.circuit ()->adjacencies ().count (bad.value ()), 0u);
+}
+
+namespace {
+
+// An endnode and a hand-driven station that plays the router it listens to.
+// A station rather than a second node because the point is to stop sending
+// hellos and start again, which a running router will not do.
+struct EndnodeAndStation {
+    std::uint16_t pe = free_udp_port (), ps = free_udp_port ();
+    Config ecfg;
+    Node   e;
+    Station s;
+
+    EndnodeAndStation ()
+        : ecfg (Config::from_string (
+              "routing 1.2 --type endnode\nnode 1.2 NODEB\nnode 1.1 NODEA\n"
+              "circuit eth-0 Ethernet udp:" + std::to_string (pe)
+              + ":127.0.0.1:" + std::to_string (ps) + " --t3 2\n")),
+          e (ecfg), s (ps, pe, Macaddr::parse ("08-00-2b-aa-bb-cc"))
+    { e.start (); }
+
+    ~EndnodeAndStation () { e.stop (); }
+
+    EndnodeLanCircuit *circuit ()
+    { return dynamic_cast<EndnodeLanCircuit *> (e.routing ()->lan_circuit ("eth-0")); }
+
+    // Announce ourselves as the router until the endnode adopts us.  As on
+    // a real LAN the hello repeats; the first can go out before the
+    // endnode's socket is listening.
+    bool announce (Nodeid id, std::chrono::milliseconds timeout
+                                  = std::chrono::seconds (15))
+    {
+        Bytes hello = router_hello (id);
+        int n = 0;
+        return wait_until ([&] () mutable {
+            if (n++ % 20 == 0) s.send (hello, datalink::all_endnodes ());
+            return circuit ()->have_dr () && circuit ()->dr () == id;
+        }, timeout);
+    }
+};
+
+}   // namespace
+
+DN_TEST (lan, endnode_readopts_a_router_that_went_quiet)
+{
+    // A router that stops answering and then comes back -- rebooted, or
+    // wedged for longer than the listen timer.  The endnode has to take
+    // the adjacency down and then build it again from the router's next
+    // hello.  Forgetting only the adjacency and not the router leaves the
+    // endnode with a designated router it has no adjacency to, and every
+    // later hello from that same router is read as "the one we already
+    // have": the endnode never comes back.  See BUGS.md.
+    Nodeid rtr = Nodeid::parse ("1.1");
+    EndnodeAndStation t;
+
+    DN_ASSERT (t.announce (rtr));
+    DN_ASSERT_EQ (t.circuit ()->adjacency_count (), 1u);
+
+    // Go quiet.  The listen timer is the hello timer we announced times
+    // BCT3MULT, so a little over six seconds.
+    DN_ASSERT (wait_until ([&] { return t.circuit ()->adjacency_count () == 0; },
+                           std::chrono::seconds (20)));
+    DN_ASSERT (!t.circuit ()->have_dr ());
+
+    // Start answering again.  The endnode must adopt us a second time.
+    DN_ASSERT (t.announce (rtr, std::chrono::seconds (20)));
+    DN_ASSERT_EQ (t.circuit ()->adjacency_count (), 1u);
+}
+
+DN_TEST (lan, a_router_takes_over_when_the_designated_router_goes_quiet)
+{
+    // Two routers, the second with the higher priority so the first knows
+    // it is not the designated one.  Then the designated router stops
+    // answering.  The survivor has to hold a new election and take over --
+    // and it has to, because only the designated router sends hellos to the
+    // endnodes on the LAN.  Leaving the dead router named as DR leaves
+    // every endnode on that LAN without one.  See BUGS.md.
+    Lan l ("1.1", "l1router", "1.2", "l1router", " --priority 20",
+           " --priority 100");
+    l.start ();
+
+    // Wait for a confirmed two-way adjacency, not merely for the election:
+    // dr_ is set from the first hello, and stopping B before the adjacency
+    // was ever up would test a different thing (which is also worth
+    // testing -- see the next test).
+    DN_ASSERT (wait_until ([&] {
+        return l.ra ()->adjacency_count () == 1
+            && l.ra ()->designated_router () == Nodeid::parse ("1.2");
+    }, std::chrono::seconds (25)));
+    DN_ASSERT (!l.ra ()->is_dr ());
+
+    // Take the designated router away.  Its listen timer is its hello
+    // timer times BCT3MULT, and then DRDELAY before acting on the election.
+    l.b->stop ();
+    l.b.reset ();
+
+    DN_ASSERT (wait_until ([&] { return l.ra ()->is_dr (); },
+                           std::chrono::seconds (30)));
+    DN_ASSERT_EQ (l.ra ()->designated_router (), Nodeid::parse ("1.1"));
+
+    l.a->stop ();
+}
+
+DN_TEST (lan, a_router_heard_once_does_not_block_the_election_for_good)
+{
+    // A router that announces itself and then vanishes before two-way is
+    // confirmed -- rebooted, or one whose hellos we hear and whose
+    // receiver is deaf.  Its entry has no adjacency in the routing table,
+    // so nothing there ages it out; if nothing else does, it keeps winning
+    // the election with its higher priority and this node never becomes
+    // designated router.  See BUGS.md.
+    Lan l ("1.1", "l1router", "1.2", "l1router", " --priority 20",
+           " --priority 100");
+    l.start ();
+
+    // The first hello is enough to lose the election.
+    DN_ASSERT (wait_until ([&] {
+        return l.ra ()->designated_router () == Nodeid::parse ("1.2");
+    }, std::chrono::seconds (25)));
+
+    // Take it away at once, before the adjacency is ever up.
+    l.b->stop ();
+    l.b.reset ();
+
+    DN_ASSERT (wait_until ([&] { return l.ra ()->is_dr (); },
+                           std::chrono::seconds (30)));
+    l.a->stop ();
 }

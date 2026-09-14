@@ -1,0 +1,26 @@
+[Unit]
+Description=cppdecnet -- DECnet Phase IV node CPPNOD (29.150), HECnet gateway
+Documentation=file:/home/richard/cppdecnet/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/decnetd --log-level info /etc/decnet/myhecnet.conf
+# The pcap circuit puts frames on end0 with the Phase IV derived source
+# address and captures promiscuously, which needs these two capabilities
+# and nothing else -- so the daemon does not run as root.
+User=richard
+Group=richard
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
+NoNewPrivileges=yes
+# The HECnet circuit dials out and the local segment may be quiet for a
+# while; keep trying rather than giving up.
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

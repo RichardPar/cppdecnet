@@ -601,11 +601,15 @@ DN_TEST (nsp, xoff_stops_transmission_and_xon_resumes_it)
     DN_ASSERT (wait_until ([&] { return c->running (); }));
     Connection *far = l.sa.last ();
 
+    unsigned lsnum = 0;
     auto link_service = [&] (std::uint8_t mod) {
         LinkSvcMsg ls;
         ls.dstaddr   = c->srcaddr ();
         ls.srcaddr   = far->srcaddr ();
-        ls.segnum    = Seq (1);
+        // Each one gets the next number on the other subchannel, as a real
+        // peer sends them: a repeat of a number already seen is a
+        // retransmission, and its credit must not be applied twice.
+        ls.segnum    = Seq (++lsnum);
         ls.fcval_int = LinkSvcMsg::DATA_REQ;
         ls.fcmod     = mod;
         ls.fcval     = 0;

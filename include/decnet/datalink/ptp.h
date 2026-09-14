@@ -65,7 +65,11 @@ public:
     void dispatch (Work &w) override { StateMachine<PtpDatalink>::dispatch (w); }
 
     // Common handling done in every state, before the state action.
-    bool validate (Work &w);
+    // Virtual for the same reason running() is: the state machine reaches
+    // it through a PtpDatalink reference, so a datalink that needs its own
+    // handling -- DDCMP, which restarts its protocol rather than its
+    // connection -- can only be reached if the base declares it virtual.
+    virtual bool validate (Work &w);
 
     // ------------------------------------------------------------- states
     State s0 (Work &w);

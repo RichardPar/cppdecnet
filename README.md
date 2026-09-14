@@ -136,6 +136,34 @@ circuit MUL-0 up, neighbour 1.1 (Endnode), block size 576
 Configuration commands for layers that are not ported yet get parsed and
 kept rather than rejected, so a real file loads.
 
+### As a service
+
+`samples/gateway/decnetd.service` runs it under systemd. It does not run as root:
+the pcap circuit needs `CAP_NET_RAW` and `CAP_NET_ADMIN` and nothing else,
+so the unit grants exactly those two as ambient capabilities and the daemon
+runs as an ordinary user.
+
+```sh
+sudo install -d /etc/decnet
+sudo install -m 0644 samples/myhecnet.conf /etc/decnet/myhecnet.conf
+sudo install -m 0755 build/release/bin/decnetd /usr/local/bin/decnetd
+sudo install -m 0644 samples/gateway/decnetd.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now decnetd
+journalctl -u decnetd -f
+```
+
+`tools/deploy-arm.sh` does all of that on a remote machine, copy and build
+included -- it is what installs the gateway node on the ARM board here.
+Read the note in it about `touch` before trusting an incremental build of a
+tree that arrived over rsync.
+
+Where the node shares one segment with a simulated PDP-11, the host needs a
+bridge as well: `samples/gateway/` has the bridge, the tap, and the reason
+both are needed -- libpcap on a shared NIC never sees the host's own
+frames, so a circuit on the raw interface and a guest on a tap cannot hear
+each other at all. That directory is host configuration, not DECnet
+configuration, and the deploy script deliberately does not apply it.
+
 ## Connecting to other nodes
 
 A circuit line names the circuit, the kind of data link, and the device

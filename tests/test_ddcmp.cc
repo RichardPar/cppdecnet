@@ -530,6 +530,54 @@ DN_TEST (ddcmp, two_nodes_come_up_over_a_udp_ddcmp_circuit)
     a.stop ();
 }
 
+DN_TEST (ddcmp, a_restart_request_is_obeyed_and_the_circuit_comes_back)
+{
+    // What the routing layer does when it gives up on a neighbour -- a
+    // listen timeout, above all -- is ask the datalink to restart.  For
+    // DDCMP that means run the startup handshake again and leave the
+    // transport alone.  Ignoring the request leaves the circuit waiting
+    // for a datalink that has no reason to say anything: see BUGS.md.
+    int pa = 27811, pb = 27812;
+    Config ca = Config::from_string (
+        "routing 1.1 --type l1router\nnode 1.1 NODEA\nnode 1.2 NODEB\n"
+        "circuit ddc-0 DDCMP udp:" + std::to_string (pa) + ":127.0.0.1:"
+        + std::to_string (pb) + " --t3 2\n");
+    Config cb = Config::from_string (
+        "routing 1.2 --type l1router\nnode 1.2 NODEB\nnode 1.1 NODEA\n"
+        "circuit ddc-0 DDCMP udp:" + std::to_string (pb) + ":127.0.0.1:"
+        + std::to_string (pa) + " --t3 2\n");
+
+    Node a (ca), b (cb);
+    a.start ();
+    b.start ();
+    DN_ASSERT (wait_until ([&] {
+        return a.routing ()->adjacency_count () == 1
+            && b.routing ()->adjacency_count () == 1;
+    }));
+
+    // Ask one end's datalink to restart, exactly as Port::restart does.
+    // The adjacency the restart replaces is remembered rather than watched
+    // for a zero count: over loopback the whole cycle can finish between
+    // two polls, and a new adjacency object is the durable evidence that
+    // the circuit really went down and came back.
+    routing::AdjacencyPtr before = a.routing ()->find_adjacency (
+        Nodeid::parse ("1.2"));
+    DN_ASSERT (before != nullptr);
+
+    datalink::Datalink *dl = a.datalink ()->circuit ("ddc-0");
+    DN_ASSERT (dl != nullptr);
+    a.add_work (std::make_unique<datalink::Restart> (dl));
+
+    DN_ASSERT (wait_until ([&] {
+        routing::AdjacencyPtr now = a.routing ()->find_adjacency (
+            Nodeid::parse ("1.2"));
+        return now && now != before && b.routing ()->adjacency_count () == 1;
+    }, std::chrono::seconds (30)));
+
+    b.stop ();
+    a.stop ();
+}
+
 DN_TEST (ddcmp, a_bad_device_string_costs_its_circuit_and_no_more)
 {
     // A device nobody can make sense of must cost that circuit and
