@@ -1,17 +1,11 @@
 #!/bin/bash
-# Catch the rare test_eventlog hang and dump its thread stacks.
+# Run test_eventlog repeatedly under CPU load and dump thread stacks if it
+# hangs.  Needs root so gdb can attach.
 #
-# Needs root: /proc/sys/kernel/yama/ptrace_scope is 1 on this machine, so
-# gdb cannot attach to a process that is not its own descendant.
-#
-#   sudo /tmp/.../catch-hang.sh            # 80 attempts, default
-#   sudo /tmp/.../catch-hang.sh 200        # more patience
-#
-# The hang appeared about once in 26 runs with every core busy, so the load
-# is part of the recipe, not incidental.
+#   sudo tools/catch-eventlog-hang.sh [attempts]
 
 set -u
-cd /home/richard/Source/Decnet/cppdecnet
+cd "$(dirname "$0")/.." || exit 1
 OUT=${OUT:-/tmp/eventlog-hang}
 ATTEMPTS=${1:-80}
 WAIT=${WAIT:-45}

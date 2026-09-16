@@ -1,15 +1,10 @@
-// src/nsp/nice.cc -- what NSP tells network management.
+// src/nsp/nice.cc -- NICE reads for NSP.
 //
-// Port of NSP.nice_read and NSP.read_node.  NSP answers about node
-// entities, and it goes first among the layers because it is what knows
-// the whole node database: by the time routing runs, the entry for every
-// node it wants to add reachability to already exists.
+// Port of NSP.nice_read and NSP.read_node.  NSP answers node reads first,
+// since it holds the node database; routing adds reachability afterwards.
 //
-// PORT: the Python's Nodeinfo carries a round trip delay estimate and a set
-// of per node counters, and read_node reports both.  Ours does not have
-// them yet, so "active nodes" here means nodes with a link rather than
-// nodes with a link or a delay estimate, and the node counters are absent.
-// See NOTDONE.md.
+// PORT: per node counters are not reported, and "active nodes" means
+// nodes with a link.  See NOTDONE.md.
 
 #include "decnet/common/logging.h"
 #include "decnet/nice/nml.h"
@@ -46,7 +41,7 @@ unsigned NSP::links_to (Nodeid dest) const
 void NSP::read_node (const NiceRequest &req, Nodeid id, ReplyDict &resp,
                      unsigned links)
 {
-    // Asking for the entry is what creates it, as in the Python.
+    // Asking for the entry is what creates it, as in PyDECnet.
     NiceReply &r = resp.node_entry (id);
 
     if (req.sumstat ()) {

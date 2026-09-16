@@ -24,10 +24,8 @@ std::int64_t next_handle ()
     return counter.fetch_add (1);
 }
 
-// Read one line from a file descriptor.  Returns false at end of file.
-// Deliberately unbuffered: two threads read two different descriptors and
-// a shared buffer would be one more thing to get wrong, and these lines
-// are short.
+// Read one line from a file descriptor, unbuffered.  Returns false at end
+// of file.
 bool read_line (int fd, std::string &out)
 {
     out.clear ();
@@ -62,9 +60,7 @@ ProcessApplication::~ProcessApplication ()
 void ProcessApplication::shutdown ()
 {
     stopping_.store (true);
-    // Closing its input is how a program is told there is nothing more
-    // coming; a well behaved one then exits, which ends our reader
-    // threads.
+    // Close stdin to tell the program to exit.
     if (to_child_ >= 0) { ::close (to_child_); to_child_ = -1; }
     if (out_thread_.joinable ()) out_thread_.join ();
     if (err_thread_.joinable ()) err_thread_.join ();
@@ -101,11 +97,8 @@ bool ProcessApplication::spawn ()
         ::close (out_pipe[0]); ::close (out_pipe[1]);
         return false;
     }
-    // A pipe purely to learn whether exec worked.  fork() succeeding says
-    // nothing about that: exec fails in the child, which cannot tell the
-    // parent any other way.  The child writes errno here and the descriptor
-    // is closed by a successful exec, so the parent sees either an error
-    // number or end of file.
+    // Close-on-exec pipe to report exec failure: the child writes errno, and a
+    // successful exec closes it.
     if (::pipe (exec_pipe) < 0) {
         ::close (in_pipe[0]); ::close (in_pipe[1]);
         ::close (out_pipe[0]); ::close (out_pipe[1]);
@@ -114,9 +107,7 @@ bool ProcessApplication::spawn ()
     }
     ::fcntl (exec_pipe[1], F_SETFD, FD_CLOEXEC);
 
-    // Build the argument list.  A Python file is run under an interpreter,
-    // as the Python does, so that a program does not have to be executable
-    // or carry a hash-bang line.
+    // Run .py files with the Python interpreter, as PyDECnet does.
     std::vector<std::string> argv;
     if (program_.size () > 3
         && program_.compare (program_.size () - 3, 3, ".py") == 0) {
@@ -165,9 +156,7 @@ bool ProcessApplication::spawn ()
     ::close (err_pipe[1]);
     ::close (exec_pipe[1]);
 
-    // Wait for exec to succeed or fail.  This read ends either way: on
-    // success the descriptor is closed by exec, on failure it carries the
-    // error number.
+    // Wait for exec: EOF on success, errno on failure.
     int exec_errno = 0;
     ssize_t got = ::read (exec_pipe[0], &exec_errno, sizeof exec_errno);
     ::close (exec_pipe[0]);
@@ -239,9 +228,8 @@ void ProcessApplication::read_stderr ()
     std::string line;
     while (!stopping_.load () && read_line (child_log_, line)) {
         if (line.empty ()) continue;
-        // A log record is a JSON object with a level, a message and
-        // optionally a list of arguments to substitute into it at {}
-        // placeholders.  Anything else is a plain message.
+        // Log record: level, message and optional args for {} placeholders.
+        // Anything else is logged as a plain message.
         try {
             json::Object o = json::Object::parse (line);
             if (o.has ("message")) {

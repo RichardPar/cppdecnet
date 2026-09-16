@@ -70,10 +70,7 @@ DN_TEST (nsppkt, acknum_qualifiers)
 
 DN_TEST (nsppkt, second_acknum_needs_the_first)
 {
-    // Both fields are optional and positional, so a packet carrying only
-    // the second is indistinguishable from one carrying only the first --
-    // which is why the sender must not do that.  Decoding what a correct
-    // sender produces is what matters here.
+    // Both fields are optional and positional.
     AckData p;
     p.acknum = AckNum { Seq (7), AckNum::ACKQ };
     AckData q = AckData::parse (p.encode ());
@@ -276,9 +273,7 @@ DN_TEST (nsppkt, version_and_phase_mapping)
 
 DN_TEST (nsppkt, wire_forms_match_python_byte_for_byte)
 {
-    // Each expected value here was produced by the Python V1.1.1 building the
-    // same message.  A format this port agreed with only itself would be
-    // worth very little.
+    // Expected values produced by PyDECnet V1.1.1.
     struct Case { const char *what; Bytes ours; Bytes theirs; };
     std::vector<Case> cases;
 

@@ -297,14 +297,8 @@ DN_TEST (l1, update_messages_describe_what_we_can_reach)
 
 DN_TEST (l1, a_triggered_update_does_not_postpone_the_periodic_one)
 {
-    // The periodic sweep is what recovers from a triggered update that was
-    // lost, so a circuit with steady topology churn must still get one.
-    //
-    // This used to restart the full interval after every send, triggered
-    // or not, which let a busy circuit push its sweep back indefinitely.
-    // the Python schedules the next update at the time elapsed since the
-    // last full one, capped at t1, so a full update follows a triggered
-    // one within at most another t1.  BUGS.md item 2.
+    // Triggered updates must not postpone the periodic update.  The next update
+    // is scheduled from the last full one, capped at t1.
     Pair p ("l1router", "l1router", " --t3 2");
     p.start ();
     DN_ASSERT (wait_until ([&] { return p.both_up (); }));

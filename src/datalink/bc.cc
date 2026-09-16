@@ -27,27 +27,13 @@ Bytes build_frame (Macaddr dest, Macaddr src, std::uint16_t proto,
     f.push_back (static_cast<std::uint8_t> (proto >> 8));
     f.push_back (static_cast<std::uint8_t> (proto & 0xff));
     if (pad) {
-        // DEC's padded format: a two byte little endian payload length,
-        // which is what lets a receiver find the end of a short packet in
-        // a frame padded out to the minimum size.
+        // DEC padded format: two byte little endian payload length.
         f.push_back (static_cast<std::uint8_t> (payload.size () & 0xff));
         f.push_back (static_cast<std::uint8_t> (payload.size () >> 8));
     }
     f.insert (f.end (), payload.begin (), payload.end ());
-    // Ethernet will not carry a frame shorter than 60 bytes.  Fill with
-    // 0x42 rather than zero, which is what the Python does (`FILL = b'\x42'
-    // * 60` in ethernet.py).
-    //
-    // This looks like it cannot matter, since the DEC padded format gives
-    // the payload length two bytes into the frame and a receiver has no
-    // business reading past it.  On 10-Sep-2026 it mattered. Against a
-    // PDP-11 running RSX, our hello and the Python's were identical for
-    // every one of the 27 payload bytes and differed only in this fill.
-    // the Python's was accepted and ours produced an adjacency to a node
-    // that does not exist -- the PDP recorded its designated router as
-    // 21.426, from bytes we never sent. So something on that end reads
-    // beyond the length it was given, and the fill is what it finds.
-    // Matching the Python costs nothing and is what interoperates.
+    // Pad to the 60 byte minimum with 0x42, as PyDECnet does.  Some RSX
+    // systems read past the payload length and misparse zero padding.
     if (f.size () < ETH_MIN_FRAME) f.resize (ETH_MIN_FRAME, 0x42);
     return f;
 }
@@ -143,9 +129,7 @@ namespace {
 
 Macaddr random_macaddr ()
 {
-    // A locally administered unicast address: bit 0 of the first byte
-    // clear (individual), bit 1 set (local).  the Python does the same, so
-    // that several nodes sharing one host do not collide.
+    // Locally administered unicast address: bit 0 clear, bit 1 set.
     static thread_local std::mt19937_64 gen { std::random_device {} () };
     std::uint64_t r = gen ();
     std::array<std::uint8_t, 6> b {};
@@ -184,9 +168,8 @@ Port *BcDatalink::create_port (Element *)
 
 std::string BcDatalink::filter_expression () const
 {
-    // "(ether dst A or ether dst B or ...) and (ether proto X or ...)".
-    // A promiscuous port wants everything with a protocol type we handle,
-    // so the destination half is dropped when there is one.
+    // "(ether dst A or ...) and (ether proto X or ...)".  The destination part
+    // is omitted if any port is promiscuous.
     std::string protos, dests;
     bool promisc = false;
     std::set<Bytes> seen;
@@ -220,19 +203,16 @@ std::string BcDatalink::filter_expression () const
 
 void BcDatalink::receive_frame (ByteView frame)
 {
-    // Parse only the header here.  Whether the payload carries a length
-    // field depends on the port, and which port this is depends on the
-    // protocol type, which is in the header.  Routing and MOP use the DEC
-    // padded format; loopback does not.
+    // Parse only the header first.  Whether the payload has a length field
+    // depends on the port (routing and MOP use padded format, loopback does
+    // not), and the port depends on the protocol type.
     ParsedFrame p;
     if (!parse_frame (frame, p, false)) {
         DN_TRACE ("malformed frame on {}, {} bytes", name_, frame.size ());
         return;
     }
-    // Our own transmissions come back on a shared medium; ignore them.
-    // Each port sends under its own source address, not the circuit's, so
-    // all of them have to be checked -- on a real interface every frame we
-    // put on the wire is also captured coming off it.
+    // Ignore our own transmissions.  Each port has its own source address, so
+    // check all of them.
     if (p.src == hwaddr_) return;
     for (const auto &port : ports_)
         if (p.src == port->macaddr_) return;

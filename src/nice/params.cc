@@ -65,9 +65,8 @@ std::string format_node_number (std::uint64_t v)
 
 namespace {
 
-// A node parameter: the address, and the name in brackets when one came
-// with it.  On the wire it is a coded multiple of a two byte number and an
-// optional ASCII image, or just the bare number.
+// Node parameter: address, and name in brackets if present.  Encoded as a
+// CM of a two byte number and optional AI, or just the number.
 std::string format_node (const Value &v)
 {
     if (v.kind () != Value::Kind::cm)

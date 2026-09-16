@@ -1,32 +1,18 @@
 #!/bin/bash
-#
-# Deploy this tree to the Rock Pi gateway and (re)start it there.
+# Copy, build and install decnetd on a remote host, then restart it.
 #
 #     tools/deploy-arm.sh [user@host]
 #
-# Defaults to richard@192.168.10.151, the board that runs node 29.150
-# CPPNOD.  Needs ssh access and sudo on the far end; it will ask for both
-# rather than carrying a password.
+# Installs /usr/local/bin/decnetd, /etc/decnet/myhecnet.conf and
+# /etc/systemd/system/decnetd.service.  Host networking (samples/gateway/)
+# is not touched.
 #
-# What it installs:
-#     /usr/local/bin/decnetd
-#     /etc/decnet/myhecnet.conf          (from samples, with pcap:end0)
-#     /etc/systemd/system/decnetd.service
-#
-# It does NOT touch the host's networking.  The bridge and tap that the
-# circuit depends on are in samples/gateway/, with the reasoning; install
-# those once, by hand, on a machine you can still reach if you get it
-# wrong.
-#
-# The `touch` after the copy is not optional.  rsync preserves source
-# mtimes, so a file whose newly copied version is older than the object
-# built from the previous copy leaves make believing the object is current
-# -- and the result is a daemon built from a mixture of two trees, which
-# looks exactly like a fixed bug that is not fixed.  See BUGS.md.
+# Sources are touched after rsync because rsync preserves mtimes, which can
+# leave make with stale objects.
 
 set -e
 TARGET="${1:-richard@192.168.10.151}"
-IFACE="${IFACE:-br0}"   # the bridge, not the raw NIC -- see samples/gateway/
+IFACE="${IFACE:-br0}"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 
 echo "== copying to $TARGET =="

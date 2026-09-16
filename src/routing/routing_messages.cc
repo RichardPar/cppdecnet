@@ -9,9 +9,7 @@ namespace decnet::routing {
 
 namespace {
 
-// The one's complement sum DECnet routing messages use: add up the words,
-// then fold the carries back in.  Two folds are enough, because one fold
-// of a 32 bit sum can itself carry at most once.
+// One's complement sum with carries folded back in twice.
 std::uint16_t ones_complement_sum (const std::uint16_t *words,
                                    std::size_t count, unsigned seed)
 {
@@ -44,11 +42,8 @@ std::vector<std::uint16_t> payload_words (ByteView b)
 
 std::uint64_t RoutingMessage::index_key (ByteView b)
 {
-    // Sum the whole payload with the checksum word complemented.  For a
-    // message whose checksum is right this leaves 0xffff minus the seed
-    // the sender used, which is what says whether this is a Phase III or a
-    // Phase IV message.  Anything else is a checksum error, and no class
-    // will match it.
+    // Sum with the checksum word complemented.  A valid message gives 0xffff
+    // minus the seed (1 for Phase IV, 0 for Phase III).
     std::vector<std::uint16_t> words = payload_words (b);
     words.back () = static_cast<std::uint16_t> (~words.back ());
     return ones_complement_sum (words.data (), words.size (), 0);

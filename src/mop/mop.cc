@@ -17,9 +17,7 @@ namespace {
 // Loopback runs on its own protocol type, unpadded.
 constexpr std::uint16_t LOOP_PROTO = 0x9000;
 
-// The first announcement goes out much sooner than the periodic one, so a
-// node that has just started is visible without a ten minute wait.  Port
-// of SYSID_STARTRATIO.
+// The first announcement is sent early.  Port of SYSID_STARTRATIO.
 constexpr double SYSID_START_RATIO = 30.0;
 
 std::string key_of (Macaddr a) { return a.str (); }
@@ -73,9 +71,7 @@ void SysIdHandler::send_id (Macaddr dest, std::uint16_t receipt)
     const auto &b = hw.bytes ();
     s.hwaddr = Bytes (b.begin (), b.end ());
 
-    // Device 9 is PCL-11: a real code, but obviously not an Ethernet
-    // controller, which is the point.  the Python picks it for the same
-    // reason.
+    // Device 9 (PCL-11), as PyDECnet uses.
     s.device    = 9;
     s.datalink  = 1;                 // Ethernet
     s.processor = 2;                 // communications server
@@ -124,10 +120,8 @@ void SysIdHandler::dispatch (Work &w)
         return;
     }
 
-    // The datalink does not tell us the source address, so take it from
-    // the message where there is one.  A system ID carries its hardware
-    // address; a request does not, so we answer to the multicast address
-    // and let the requester pick it out.
+    // The source address is not passed up, so use the hardware address from a
+    // system ID message.  Requests are answered to the multicast address.
     if (auto *s = dynamic_cast<SysId *> (pkt.get ())) {
         Macaddr src;
         if (s->hwaddr && s->hwaddr->size () == 6) {
@@ -168,10 +162,7 @@ LoopHandler::LoopHandler (MopCircuit *parent, datalink::BcDatalink *dl)
 
 void LoopHandler::loop (Macaddr dest, Bytes payload)
 {
-    // The message carries two functions in turn.  The far station reads
-    // the first, "forward to this address", and sends the message back
-    // here with the skip count advanced past it.  We then read the second,
-    // "reply", and that is the round trip.
+    // Two functions: forward to us, then reply.
     LoopReply rep;
     rep.receipt = ++receipt_;
     rep.payload = std::move (payload);
@@ -253,9 +244,8 @@ MopCircuit::MopCircuit (Element *parent, std::string name,
                         datalink::BcDatalink *dl)
     : Element (parent), name_ (std::move (name)), datalink_ (dl)
 {
-    // The port is owned by the circuit and its traffic forwarded to the
-    // handler, because the handler does not exist yet when the port has to
-    // be created.  The loop handler makes its own, since by then it does.
+    // The circuit owns the port and forwards to the handler, which is created
+    // later.  The loop handler creates its own port.
     datalink::BcPort *p = dl->create_bc_port (this, MOPDL_PROTO);
     sysid_ = std::make_unique<SysIdHandler> (this, p);
     loop_  = std::make_unique<LoopHandler> (this, dl);

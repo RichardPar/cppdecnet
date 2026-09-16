@@ -1,11 +1,5 @@
-// Port of tests/test_routing.py and test_route_ptp.py, at the level this
-// pass builds: two Phase IV endnodes bring up an adjacency over a real
-// Multinet circuit and exchange a data packet.
-//
-// These run the whole stack -- datalink receive threads, the node work
-// queues, the timer wheel and both state machines -- so they are what
-// catches the ordering mistakes that unit tests on the packet formats
-// cannot.
+// Port of tests/test_routing.py and test_route_ptp.py: two Phase IV
+// endnodes bring up an adjacency over Multinet and exchange a data packet.
 
 #include "harness.h"
 
@@ -94,7 +88,7 @@ struct NodePair {
 
 DN_TEST (routing, endnode_needs_exactly_one_circuit)
 {
-    // The architecture allows an endnode one circuit, and the Python enforces
+    // The architecture allows an endnode one circuit, and PyDECnet enforces
     // it at startup rather than misbehaving later.
     Config none = Config::from_string (
         "routing 1.1 --type endnode\nnode 1.1 SOLO\n");

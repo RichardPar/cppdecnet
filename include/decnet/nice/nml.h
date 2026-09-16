@@ -1,20 +1,13 @@
 // decnet/nice/nml.h -- the network management listener, object 19.
 //
-// Port of decnet/modules/nml.py.  NCP on another node -- or on this one --
-// connects to object 19 and sends NICE requests; this answers them.  The
-// answers themselves come from the layers, each of which knows about its
-// own entities: routing about circuits and reachability, NSP about links,
-// the datalink layer about lines, MOP about the configurator module.
+// Port of decnet/modules/nml.py.  Answers NICE requests using data from
+// each layer's nice_read.  A request may cover several entities, and an
+// entity may produce several replies (one per adjacency, for instance);
+// ReplyDict collects them in the order NCP expects.
 //
-// A read request can be about one entity or about a plural one ("known
-// circuits"), and one entity can produce several replies -- a circuit with
-// three adjacencies reports each of them.  ReplyDict below is what collects
-// that: replies keyed by entity, in groups, ordered the way NCP wants to
-// print them.
-//
-// PORT: only read information and loop node are implemented.  Set and zero
-// answer "privilege violation", because this listener is read only; loop
-// circuit and loop line answer "unrecognized function".  See NOTDONE.md.
+// PORT: only READ INFORMATION and LOOP NODE.  SET and ZERO are refused;
+// LOOP CIRCUIT and LOOP LINE answer "unrecognized function".  See
+// NOTDONE.md.
 
 #ifndef DECNET_NICE_NML_H
 #define DECNET_NICE_NML_H
@@ -37,12 +30,8 @@ namespace decnet::nice {
 // nml.MYVERSION.
 inline constexpr std::uint8_t nice_version[3] = { 4, 0, 0 };
 
-// The replies to one request, keyed by the entity each is about.
-//
-// Access creates: asking for the reply for circuit ETH-0 makes an empty one
-// if there is not one already, which is what lets each layer add what it
-// knows without any of them having to go first.  That is the Python's
-// ReplyDict, whose __getitem__ does the same.
+// Replies to one request, keyed by entity.  Lookup creates an empty reply
+// if none exists, as ReplyDict.__getitem__ does.
 class ReplyDict {
 public:
     ReplyDict (std::uint8_t entity_kind, Node *node) noexcept
@@ -50,11 +39,8 @@ public:
 
     std::uint8_t kind () const noexcept { return kind_; }
 
-    // Report every address in the routing table, including the ones that
-    // are merely unreachable and unnamed.  Off by default: see the note in
-    // L1Router::reach about what those cost on the wire.  The monitoring
-    // pages turn it on for their "all" view, where the cost is a longer
-    // page rather than a thousand frames at a PDP-11.
+    // Report every address in the routing table, including unreachable
+    // unnamed ones.  Off by default; see L1Router::reach.
     void want_every_address (bool on) noexcept { every_address_ = on; }
     bool every_address () const noexcept { return every_address_; }
 
@@ -63,9 +49,8 @@ public:
     NiceReply &named_entry (const std::string &name);
     NiceReply &area_entry (unsigned area);
 
-    // Another reply about the same entity.  A circuit reports one reply
-    // per adjacency, and they travel as a group: all but the last carry
-    // "more to come for this entity".
+    // Another reply for the same entity.  All but the last are flagged "more
+    // to come".
     NiceReply &add_named (const std::string &name);
 
     // Is there already a reply for this node?  Distinct from node_entry,
@@ -74,11 +59,9 @@ public:
 
     bool empty () const noexcept { return numeric_.empty () && named_.empty (); }
 
-    // The replies, grouped by entity, in the order they should be sent.
-    // For nodes that is the executor first, then the rest by address, as
-    // NodeReplyDict.sorted does; for everything else it is by key.  A
-    // request's own entity filters the result: a wildcard read of one area
-    // must not answer about another.
+    // Replies grouped by entity in send order: for nodes the executor first,
+    // then by address (NodeReplyDict.sorted); otherwise by key.  Filtered by
+    // the request's entity.
     std::vector<std::vector<NiceReply *>> sorted (const NiceRequest &req) const;
 
 private:

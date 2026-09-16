@@ -116,9 +116,7 @@ void Ddcmp::make_protocol ()
     ddcmp::Protocol::Hooks h;
     h.send = [this] (const Message &m) { transmit (m); };
     h.deliver = [this] (Bytes b) {
-        // A payload the far end acknowledged and put in order.  Everything
-        // above this point sees a reliable message stream, which is the
-        // whole point of DDCMP.
+        // A payload received in sequence.
         counters_.bytes_recv += b.size ();
         ++counters_.pkts_recv;
         if (port_ && node ())
@@ -159,10 +157,9 @@ bool Ddcmp::validate (Work &w)
 {
     if (dynamic_cast<Restart *> (&w)
         && in_state (DN_MY_STATE (PtpDatalink, running))) {
-        // The transport is fine; it is the protocol that the layer above
-        // wants started over.  The engine reports down and then up again
-        // as its handshake completes, which is what the routing circuit
-        // is waiting for.  Port of the Restart cases in ddcmp.py's states.
+        // Restart the protocol, not the transport.  The engine reports down, then
+        // up when the handshake completes.  Port of the Restart handling in
+        // ddcmp.py.
         DN_DEBUG ("{} restarting the DDCMP protocol on request", name_);
         proto_->restart ();
         return false;
@@ -174,9 +171,8 @@ bool Ddcmp::validate (Work &w)
 
 Ddcmp::State Ddcmp::connected ()
 {
-    // The transport is up; now the protocol has its own handshake to do.
-    // The circuit is not reported up until that finishes, which is what
-    // the engine's "up" hook does.
+    // Transport is up; the circuit is reported up when the DDCMP handshake
+    // completes.
     DN_DEBUG ("{} transport connected, starting DDCMP", name_);
     proto_->connected ();
     return DN_MY_STATE (PtpDatalink, running);
@@ -203,9 +199,7 @@ Ddcmp::State Ddcmp::running (Work &w)
         HdrError e = ddcmp::decode_header (ByteView (buf.data (), buf.size ()),
                                            m);
         if (e != HdrError::none) {
-            // A datagram that is not a DDCMP message at all.  On a stream
-            // this would mean "keep looking"; on a datagram there is
-            // nothing to look through, so it is simply dropped.
+            // Not a valid DDCMP message; drop it.
             DN_TRACE ("{}: undecodable DDCMP message, dropped", name_);
             return nullptr;
         }
@@ -238,10 +232,7 @@ Ddcmp::State Ddcmp::running (Work &w)
 Bytes Ddcmp::read_framed_message (
     const std::function<Bytes (std::size_t)> &readn)
 {
-    // Slide along the stream a byte at a time until eight of them are a
-    // header that passes its own CRC.  Nothing else is trusted: after a
-    // loss of sync, a length field would have come out of the noise that
-    // caused it.
+    // Advance a byte at a time until 8 bytes form a header with a valid CRC.
     Bytes hdr = readn (ddcmp::HDRLEN);
     ddcmp::Message m;
     while (ddcmp::decode_header (ByteView (hdr.data (), hdr.size ()), m)
@@ -270,7 +261,6 @@ void UdpDdcmp::connect ()
 {
     // Bound, never connected: a connected datagram socket reports ICMP
     // errors, and a bounced datagram would then kill the receive loop.
-    // See BUGS.md -- this is the same hazard Multinet's UDP mode had.
     socket_ = create_udp (dest_, source_);
 }
 
@@ -319,9 +309,8 @@ TcpDdcmp::TcpDdcmp (Element *owner, std::string name, DdcmpDevice dev)
 
 void TcpDdcmp::connect ()
 {
-    // Listen and dial at the same time; the first connection to arrive is
-    // the one used.  Neither end has to be told which it is, which is what
-    // the Python does and what SIMH's sim_tmxr does.
+    // Listen and connect at the same time and use the first connection, as
+    // SIMH's sim_tmxr does.
     listener_ = source_.create_server ();
     if (!listener_)
         DN_DEBUG ("{}: cannot listen on {}", name_, source_.str ());
@@ -469,9 +458,7 @@ void TcpDdcmp::transmit (const Message &m)
 
 namespace {
 
-// The baud rates termios has names for.  A speed it does not know is an
-// error rather than a silent fallback: a line running at the wrong rate
-// produces noise that looks exactly like a cable fault.
+// Baud rates termios supports.  Unknown speeds are an error.
 speed_t termios_speed (unsigned baud)
 {
     switch (baud) {
@@ -518,9 +505,7 @@ void SerialDdcmp::connect ()
         return;
     }
 
-    // Raw, 8 bits, no parity, one stop bit, no flow control of any kind.
-    // DDCMP does its own framing and its own error detection, so anything
-    // the line discipline might helpfully do to the bytes is damage.
+    // Raw 8N1, no flow control.
     ::cfmakeraw (&t);
     t.c_cflag |= CLOCAL | CREAD;        // ignore modem lines, enable receive
     t.c_cflag &= ~static_cast<tcflag_t> (CSTOPB | PARENB | CRTSCTS);
@@ -551,9 +536,7 @@ void SerialDdcmp::disconnect ()
 
 bool SerialDdcmp::check_connection ()
 {
-    // A serial line has nothing to establish.  Either the port opened or
-    // it did not; there is no peer to agree with until DDCMP's own startup
-    // handshake runs, which is the point of having one.
+    // Nothing to establish on a serial line.
     return fd_ >= 0;
 }
 
@@ -600,10 +583,8 @@ void SerialDdcmp::transmit (const Message &m)
 {
     if (fd_ < 0) return;
     Bytes wire = m.encode ();
-    // One all-ones byte after the trailer, as the spec says.  No SYN bytes
-    // in front: they are for synchronous lines and the spec says not to
-    // send them on an async one.  The far end's framing slides past the
-    // pad the same way it slides past any other byte that is not a header.
+    // One all-ones byte after the trailer.  No leading SYN bytes on an
+    // asynchronous line, per the spec.
     wire.push_back (ddcmp::DEL);
 
     std::size_t sent = 0;

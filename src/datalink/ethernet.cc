@@ -62,7 +62,7 @@ EthernetDevice EthernetDevice::parse (const std::string &device)
 
     if (api == "udp" || api == "bridge") {
         // udp:<localport>:<host>:<remoteport>.  SIMH calls this "udp",
-        // the Python also accepts "bridge"; they mean the same thing.
+        // PyDECnet also accepts "bridge"; they mean the same thing.
         if (parts.size () != 4)
             throw std::invalid_argument ("Ethernet " + api
                                          + " needs localport:host:remoteport in "
@@ -109,10 +109,8 @@ Ethernet::Ethernet (Element *owner, std::string name, EthernetDevice dev,
 
 Ethernet::~Ethernet ()
 {
-    // A backstop only: by now the derived object is gone, so this can do
-    // nothing but make sure no thread is left running.  Each concrete
-    // class calls shutdown() from its own destructor, which is where the
-    // work actually happens.
+    // Backstop only.  Concrete classes call shutdown() from their own
+    // destructors.
     stopnow_.store (true);
     if (thread_.joinable ()) thread_.join ();
 }
@@ -142,7 +140,7 @@ void Ethernet::close ()
 
 void Ethernet::run ()
 {
-    // Name the thread node.circuit, as the Python does, so two nodes in one
+    // Name the thread node.circuit, as PyDECnet does, so two nodes in one
     // process can be told apart in the log.
     logging::set_thread_name ((node () ? node ()->name () + "." : "") + name_);
     DN_TRACE ("Ethernet receive thread started for {}", name_);
@@ -210,11 +208,9 @@ PcapEthernet::PcapEthernet (Element *owner, std::string name,
                             EthernetDevice dev, bool random_address)
     : Ethernet (owner, std::move (name), dev, random_address)
 {
-    // Take the interface's own address as the circuit's, unless a random
-    // one was asked for.  Ports created after this inherit it, which is
-    // what makes MOP report the real hardware address of the card rather
-    // than zeroes.  Routing overrides its own port with the DECnet derived
-    // address, as it must.
+    // Use the interface's address as the circuit address unless a random one
+    // was requested.  MOP reports it; routing sets its own port to the DECnet
+    // address.
     if (!random_address) {
         Macaddr a = interface_address (dev_.destination);
         if (a != Macaddr ()) {
@@ -228,9 +224,7 @@ PcapEthernet::PcapEthernet (Element *owner, std::string name,
     }
 }
 
-// libpcap's read timeout.  Kept short and separate from poll_timeout_ms:
-// this one bounds how long a frame can sit in the kernel's ring, and the
-// Python uses 100ms here for the same reason.
+// libpcap read timeout, as in PyDECnet.
 constexpr int pcap_timeout_ms = 100;
 
 PcapEthernet::~PcapEthernet () { shutdown (); }
@@ -238,20 +232,11 @@ PcapEthernet::~PcapEthernet () { shutdown (); }
 bool PcapEthernet::start_transport ()
 {
     char err[PCAP_ERRBUF_SIZE] = "";
-    // Promiscuous: the addresses DECnet answers to are not the ones the
-    // card was configured with, so anything less would filter out exactly
-    // the traffic we came for.
+    // Promiscuous, since DECnet addresses are not the interface's own.
     //
-    // Built with pcap_create rather than pcap_open_live for one reason:
-    // immediate mode.  Without it libpcap's read timeout is, on Linux, the
-    // TPACKET_V3 block retirement timeout -- the kernel holds an arriving
-    // frame until the ring block fills or that timer expires, and poll()
-    // does not wake until then either.  A frame therefore waits up to the
-    // timeout before the layers above see it, which turns every protocol
-    // round trip into a timeout-length stall.  NCP "show known nodes" is
-    // where it shows: it answers with one message per node number, so the
-    // stall is paid a thousand times.  Immediate mode delivers each frame
-    // as it arrives; the timeout then only bounds an idle wakeup.
+    // pcap_create is used for immediate mode.  Without it, on Linux, frames
+    // are held until the TPACKET_V3 block timeout expires, delaying every
+    // frame by up to the read timeout.
     pcap_t *p = pcap_create (dev_.destination.c_str (), err);
     if (p) {
         pcap_set_snaplen (p, static_cast<int> (ETH_MTU + 64));
@@ -348,9 +333,7 @@ void PcapEthernet::receive_loop ()
     }
     if (!p) return;
 
-    // pcap's own read timeout is not a promise on every platform, so where
-    // the handle can be polled we poll it and only call into pcap when
-    // there is something there.  That is what makes stopping prompt.
+    // Poll the handle where possible so stop requests are handled promptly.
     int fd = pcap_get_selectable_fd (p);
 
     auto handler = [] (u_char *user, const pcap_pkthdr *h, const u_char *bytes) {
@@ -381,9 +364,7 @@ void PcapEthernet::send_frame (const Bytes &frame)
 {
     std::lock_guard lock (pcap_mutex_);
     if (!pcap_) return;
-    // Errors are ignored, which is the DECnet way: a datalink that cannot
-    // send a frame has lost a frame, and the layers above already cope
-    // with that.
+    // Send errors are ignored; a lost frame is handled by the layers above.
     (void) pcap_inject (static_cast<pcap_t *> (pcap_), frame.data (),
                         frame.size ());
 }
@@ -423,9 +404,7 @@ void BridgeEthernet::receive_loop ()
                                     poll_timeout_ms);
         if (stopping ()) return;
         if (p.error) {
-            // A datagram socket can report a transient error -- an ICMP
-            // unreachable from a peer that has not started yet, most
-            // often.  That is a dropped packet, not a dead circuit.
+            // Transient datagram errors (e.g. ICMP unreachable) are not fatal.
             DN_TRACE ("transient error on {}, continuing", name_);
             continue;
         }
@@ -439,7 +418,7 @@ void BridgeEthernet::receive_loop ()
         // Anything shorter than a header cannot be a frame.
         if (n <= static_cast<ssize_t> (ETH_HDR_LEN)) continue;
         // A source routed frame is not something DECnet uses; drop it, as
-        // the Python does with the same check on the source address.
+        // PyDECnet does with the same check on the source address.
         if (buf[6] & 1) continue;
         receive_frame (ByteView (buf, static_cast<std::size_t> (n)));
     }
@@ -447,9 +426,7 @@ void BridgeEthernet::receive_loop ()
 
 void BridgeEthernet::send_frame (const Bytes &frame)
 {
-    // "Ignore any errors, because that's the DECnet way": a LAN drops
-    // frames, and a datalink that reported every loss upward would be
-    // lying about what the medium guarantees.
+    // Send errors are ignored, as in PyDECnet.
     if (!socket_) return;
     const Endpoint *to = dest_.destination ();
     if (!to) return;
@@ -511,10 +488,8 @@ void TapEthernet::receive_loop ()
 void TapEthernet::send_frame (const Bytes &frame)
 {
     if (!socket_) return;
-    // A datalink that cannot send a frame has lost a frame, which the
-    // layers above already cope with.  The result is read rather than cast
-    // away because write() is declared warn_unused_result and a (void)
-    // cast does not silence that.
+    // Send errors are ignored.  The result is assigned because write() is
+    // warn_unused_result.
     ssize_t n = ::write (socket_.fd (), frame.data (), frame.size ());
     if (n < 0)
         DN_TRACE ("send failed on {}: {}", name_, std::strerror (errno));

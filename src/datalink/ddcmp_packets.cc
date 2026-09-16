@@ -114,9 +114,7 @@ Message control (MsgKind k)
     m.kind = k;
     m.type = ctl_type (k);
     m.addr = 1;
-    // START and STACK say "no synchronisation needed, you may transmit":
-    // they are what brings a dead link up, so they cannot depend on the
-    // state the link does not have yet.
+    // START and STACK never require synchronisation.
     if (k == MsgKind::start || k == MsgKind::stack) {
         m.qsync = true;
         m.select = true;

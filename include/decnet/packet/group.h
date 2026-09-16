@@ -1,9 +1,7 @@
 // decnet/packet/group.h -- field groups: BM and TLV.
 //
-// Port of packet.BM and packet.TLV, which the Python calls FieldGroups
-// because one layout row produces several named attributes.  A plain
-// FieldSpec binds one codec to one member; these bind one codec to several,
-// so they carry their own tuple of sub-entries.
+// Port of packet.BM and packet.TLV.  A group binds one codec to several
+// members and has its own tuple of sub-entries.
 
 #ifndef DECNET_PACKET_GROUP_H
 #define DECNET_PACKET_GROUP_H
@@ -17,8 +15,8 @@ namespace decnet::packet {
 
 // ============================================================== BM
 //
-// A group of named bit ranges packed into one little endian integer field.
-// The Python layout row
+// Named bit ranges packed into one little endian integer.  The PyDECnet
+// layout row
 //
 //     ( packet.BM,
 //       ( "mbz",  0, 1 ),
@@ -31,8 +29,7 @@ namespace decnet::packet {
 //              bmf (&Msg::type, "type", 1, 3),
 //              bmf (&Msg::qual, "qual", 4, 2))
 //
-// The field width in bytes is derived from the highest bit used, exactly as
-// makecoderow does: (topbit + 8) / 8.
+// Width in bytes is (topbit + 8) / 8, as in makecoderow.
 
 template <typename Packet, typename Member>
 struct BMBit {
@@ -110,9 +107,8 @@ struct BMGroup {
         }, bits);
     }
 
-    // The value of one named sub-field, read straight from a raw buffer at
-    // the given offset.  This is what indexed dispatch uses to pick a
-    // packet class before the packet is parsed -- packet.BM.makegetindex.
+    // Read one sub-field from a raw buffer, for indexed dispatch before
+    // parsing.  packet.BM.makegetindex.
     static std::uint64_t peek (ByteView buf, std::size_t offset,
                                std::size_t flen_, unsigned start, unsigned bits)
     {
@@ -138,9 +134,9 @@ constexpr auto bm (Bits... b)
 
 // ============================================================== TLV
 //
-// A sequence of tag/length/value items filling the rest of the packet.
-// Port of packet.TLV.  Optional members carry presence the way Python's
-// None does: an item is emitted only when its member holds a value.
+// Tag/length/value items filling the rest of the packet.  Port of
+// packet.TLV.  Items are emitted only when their optional member has a
+// value.
 //
 //     tlv<Msg, 2, 1, Wild::yes> (
 //         tlvf<1, VersionField> (&Msg::version, "version"),
@@ -181,9 +177,8 @@ constexpr auto tlvf (std::optional<Member> Packet::*m, const char *name)
     return TlvEntry<Tag, Codec, Packet, Member> { m, name };
 }
 
-// A TLV item whose value is a bitmap group rather than a single field --
-// MOP's System ID "services" item, for example.  As in the Python, a group
-// item has no presence flag and is always emitted.
+// A TLV item whose value is a bitmap group (e.g. MOP System ID
+// "services").  Always emitted.
 template <unsigned Tag, typename Group>
 struct TlvGroupEntry {
     Group       group;
@@ -249,9 +244,7 @@ struct TlvGroup {
         while (!d.empty ()) {
             if (d.remaining () < TagLen + LenLen) {
                 if constexpr (T == Tolerant::yes) {
-                    // Swallow the runt, as TLV.decode does by returning b''
-                    // when the packet class is tolerant.  Leaving it would
-                    // trip the enclosing packet's extra-data check instead.
+                    // Tolerant mode: consume a truncated item, as TLV.decode does.
                     (void) d.rest ();
                     return;
                 }

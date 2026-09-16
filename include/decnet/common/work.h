@@ -1,10 +1,8 @@
 // decnet/common/work.h -- work items and the node work queue.
 //
-// the Python's concurrency model: one thread per node pulling Work objects
-// off a queue and dispatching them to their owner, with helper threads
-// (datalink receive, HTTP, timers) doing blocking I/O and posting work
-// back.  It ports directly, and it is what makes the single-threaded
-// reasoning in the DNA specs carry over to the implementation.
+// One thread per node takes Work objects off the queue and dispatches
+// them.  Helper threads (datalink receive, HTTP, timers) do blocking I/O
+// and post work back.
 
 #ifndef DECNET_COMMON_WORK_H
 #define DECNET_COMMON_WORK_H
@@ -62,11 +60,8 @@ public:
     Received (Element *owner, Bytes packet) noexcept
         : Work (owner), packet_ (std::move (packet)) {}
 
-    // On a broadcast medium the frame's source address matters to the layer
-    // above: it is the address that neighbour demonstrably receives on,
-    // which is not always the one derived from its node id.  the Python
-    // carries the same thing as work.src.  Left empty by a datalink that
-    // has no such notion, a point to point circuit being the obvious one.
+    // Source MAC address of a frame received on a broadcast circuit (work.src
+    // in PyDECnet).  Empty for point to point circuits.
     Received (Element *owner, Bytes packet, Macaddr src) noexcept
         : Work (owner), packet_ (std::move (packet)), src_ (src) {}
 
@@ -81,10 +76,8 @@ private:
     Macaddr src_ {};
 };
 
-// Run a function on the node thread.  Helper threads that must touch
-// layer state -- a subprocess reader thread, say -- post one of these
-// rather than reaching in from outside, which keeps the single threaded
-// reasoning of the whole design intact.
+// Run a function on the node thread.  Helper threads use this to touch
+// layer state.
 class CallbackWork : public Work {
 public:
     explicit CallbackWork (std::function<void ()> fn) noexcept

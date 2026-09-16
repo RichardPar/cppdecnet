@@ -87,14 +87,9 @@ th { background: #eee; }
 .none { color: #777; font-style: italic; }
 )";
 
-// The formatter gives two shapes, and a page wants both as name and value.
-//
-// A parameter is "Name = value".  A counter is the count right aligned in
-// eleven columns, then its description -- value first, because that is how
-// NCP prints a counter block -- and it may carry a "including" list of
-// qualifiers on following lines.  Splitting everything on "=" turned a
-// counter into a name of "0 Bytes received" and an empty value, which is
-// how this was found.
+// Split formatter output into name and value.  Parameters are
+// "Name = value".  Counters are the count right aligned in 11 columns
+// followed by the description, possibly with qualifier lines.
 std::pair<std::string, std::string> split_param (const std::string &line)
 {
     std::size_t eq = line.find (" = ");
@@ -249,9 +244,7 @@ void Server::handle (Socket conn)
         }
     }
 
-    // Collecting the answer touches layer state, so it happens on the
-    // node's thread and this one waits for it.  Same rule as a datalink
-    // receive path: helper threads post work, they do not reach in.
+    // Gather data on the node thread.
     Response resp;
     if (node_) {
         std::promise<Response> p;
@@ -389,11 +382,8 @@ std::string Server::entity_page (std::uint8_t kind, unsigned info,
     req.entity      = nice::ReqEntity::make_wild (kind, nice::ReqEntity::known);
 
     nice::ReplyDict replies (kind, const_cast<Node *> (node_));
-    // The monitoring pages always ask for every address in the routing
-    // table.  They have had their own filter for the unreachable thousand
-    // since before NICE grew one, and it is the better answer here: it
-    // hides the rows, counts what it hid, and offers "all=1" to see them.
-    // None of that costs a frame, which is what the NICE default is about.
+    // Request all addresses.  The page filters unreachable nodes itself and
+    // offers all=1.
     replies.want_every_address (true);
     int err = const_cast<Node *> (node_)->nice_read (req, replies);
     if (err != 0) {
@@ -410,10 +400,7 @@ std::string Server::entity_page (std::uint8_t kind, unsigned info,
         return page (pd->title, nav, b);
     }
 
-    // A router's node list is every address in its routing table, which is
-    // a thousand entries of "Unreachable" around the handful that mean
-    // something.  NCP's SHOW KNOWN NODES really does mean all of them, so
-    // the page offers them -- but not first, and not by default.
+    // Hide unreachable unnamed nodes unless all=1.
     std::size_t hidden = 0;
     auto worth_showing = [&] (const nice::NiceReply *rep) {
         if (all || kind != nice::Entity::node) return true;

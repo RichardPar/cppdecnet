@@ -79,14 +79,8 @@ struct Lan {
     EndnodeLanCircuit *eb () { return dynamic_cast<EndnodeLanCircuit *> (cb ()); }
 };
 
-// Everything above builds a LAN out of two of our own nodes, which agree
-// with each other about every convention whether or not the convention is
-// right.  The tests at the end of this file need a neighbour that does not:
-// one that announces one address and answers on another, or pads its
-// packets.  Sink and Station are that neighbour -- a datalink port with no
-// routing layer above it, so a test can put exactly the bytes it chooses on
-// the wire, under an address of its choosing, and see exactly what is
-// addressed back to it.
+// Sink and Station are datalink ports with no routing layer, for sending
+// arbitrary frames from arbitrary addresses and seeing what comes back.
 class Sink : public Element {
 public:
     explicit Sink (Node *n) : Element (n) {}
@@ -128,9 +122,7 @@ public:
 
     void send (const Bytes &payload, Macaddr dest) { port_->send (payload, dest); }
 
-    // What arrived addressed to this station, payload only: the port
-    // accepts its own unicast address and nothing else, which is the whole
-    // point of the addressing tests below.
+    // Payloads received on this station's unicast address.
     std::size_t count () { return sink_.count (); }
     std::vector<Bytes> got () { return sink_.got (); }
 
@@ -435,10 +427,6 @@ DN_TEST (lan, endnode_with_no_router_addresses_the_destination_directly)
 }
 
 // ------------------------------------------- neighbours that are not us
-//
-// The tests above prove the two ends agree.  These use a Station, which
-// agrees with nothing, to pin down the two places where a real neighbour
-// on the wire behaves differently from one of ours.
 
 // A level 1 router alone on a LAN, with a Station for company.
 namespace {
@@ -464,9 +452,7 @@ struct RouterAndStation {
 
     L1Router *router () { return dynamic_cast<L1Router *> (r.routing ()); }
 
-    // Hellos are periodic on a real LAN, so repeating one is what a
-    // neighbour does anyway; the first can go out before the router's
-    // socket is listening.
+    // Repeat the hello; the first may be sent before the router is listening.
     bool announce (const Bytes &hello, std::uint16_t nodeval)
     {
         int n = 0;
@@ -482,21 +468,15 @@ struct RouterAndStation {
 
 DN_TEST (lan, a_neighbour_is_addressed_where_it_transmits_from)
 {
-    // BAJI, a PDP-11 running RSX, announces id aa-00-04-00-13-04 inside its
-    // hellos and transmits from 08-00-2b-11-22-33 -- and answers on that
-    // second address only.  Hellos are multicast, so believing the derived
-    // address costs nothing until the first unicast packet, at which point
-    // everything sent to the neighbour disappears while both ends still
-    // show the adjacency up.  See BUGS.md.
+    // A neighbour that announces aa-00-04-00-13-04 but receives only on
+    // 08-00-2b-11-22-33.
     Nodeid id = Nodeid::parse ("1.19");
     RouterAndStation t (Macaddr::parse ("08-00-2b-11-22-33"));
 
     DN_ASSERT (t.announce (endnode_hello (id), id.value ()));
     DN_ASSERT (wait_until ([&] { return t.router ()->reachable (19); }));
 
-    // The station accepts frames for 08-00-2b-11-22-33 and nothing else, so
-    // this arrives only if the router addressed it there.  Sent to the
-    // derived aa-00-04-00-13-04 it is simply lost.
+    // The station receives only on 08-00-2b-11-22-33.
     DN_ASSERT_EQ (t.s.count (), 0u);
     t.router ()->send (Bytes { 'x' }, id);
     DN_ASSERT (wait_until ([&] { return t.s.count () >= 1; }));
@@ -510,9 +490,8 @@ DN_TEST (lan, a_neighbour_is_addressed_where_it_transmits_from)
 
 DN_TEST (lan, padded_routing_packets_are_accepted)
 {
-    // A routing packet on a LAN may arrive behind a pad header: the high
-    // bit set, the low seven bits giving the total pad length including the
-    // header byte.  Port of the same in route_eth.py.
+    // Padded routing packet: high bit set, low seven bits give the pad length
+    // including this byte.  As in route_eth.py.
     Nodeid id = Nodeid::parse ("1.19");
     RouterAndStation t (Macaddr::parse ("08-00-2b-11-22-33"));
 
@@ -521,9 +500,7 @@ DN_TEST (lan, padded_routing_packets_are_accepted)
 
 DN_TEST (lan, malformed_padding_is_rejected)
 {
-    // Two layers of padding is not a thing, and neither is a pad longer
-    // than the packet it precedes.  Both have to be dropped rather than
-    // decoded from whatever byte the length happens to land on.
+    // Double padding and padding longer than the packet are dropped.
     Nodeid good = Nodeid::parse ("1.19");
     Nodeid bad  = Nodeid::parse ("1.18");
     RouterAndStation t (Macaddr::parse ("08-00-2b-11-22-33"));
@@ -547,9 +524,8 @@ DN_TEST (lan, malformed_padding_is_rejected)
 
 namespace {
 
-// An endnode and a hand-driven station that plays the router it listens to.
-// A station rather than a second node because the point is to stop sending
-// hellos and start again, which a running router will not do.
+// An endnode and a station acting as its router, so the router's hellos
+// can be stopped and restarted.
 struct EndnodeAndStation {
     std::uint16_t pe = free_udp_port (), ps = free_udp_port ();
     Config ecfg;
@@ -569,9 +545,7 @@ struct EndnodeAndStation {
     EndnodeLanCircuit *circuit ()
     { return dynamic_cast<EndnodeLanCircuit *> (e.routing ()->lan_circuit ("eth-0")); }
 
-    // Announce ourselves as the router until the endnode adopts us.  As on
-    // a real LAN the hello repeats; the first can go out before the
-    // endnode's socket is listening.
+    // Send router hellos until the endnode adopts us.
     bool announce (Nodeid id, std::chrono::milliseconds timeout
                                   = std::chrono::seconds (15))
     {
@@ -588,13 +562,8 @@ struct EndnodeAndStation {
 
 DN_TEST (lan, endnode_readopts_a_router_that_went_quiet)
 {
-    // A router that stops answering and then comes back -- rebooted, or
-    // wedged for longer than the listen timer.  The endnode has to take
-    // the adjacency down and then build it again from the router's next
-    // hello.  Forgetting only the adjacency and not the router leaves the
-    // endnode with a designated router it has no adjacency to, and every
-    // later hello from that same router is read as "the one we already
-    // have": the endnode never comes back.  See BUGS.md.
+    // The router goes silent past the listen timer, then returns.  The endnode
+    // must drop the adjacency and rebuild it from the next hello.
     Nodeid rtr = Nodeid::parse ("1.1");
     EndnodeAndStation t;
 
@@ -614,20 +583,13 @@ DN_TEST (lan, endnode_readopts_a_router_that_went_quiet)
 
 DN_TEST (lan, a_router_takes_over_when_the_designated_router_goes_quiet)
 {
-    // Two routers, the second with the higher priority so the first knows
-    // it is not the designated one.  Then the designated router stops
-    // answering.  The survivor has to hold a new election and take over --
-    // and it has to, because only the designated router sends hellos to the
-    // endnodes on the LAN.  Leaving the dead router named as DR leaves
-    // every endnode on that LAN without one.  See BUGS.md.
+    // Two routers, B with higher priority.  When B goes silent, A must become
+    // designated router.
     Lan l ("1.1", "l1router", "1.2", "l1router", " --priority 20",
            " --priority 100");
     l.start ();
 
-    // Wait for a confirmed two-way adjacency, not merely for the election:
-    // dr_ is set from the first hello, and stopping B before the adjacency
-    // was ever up would test a different thing (which is also worth
-    // testing -- see the next test).
+    // Wait for a two-way adjacency, not just the election result.
     DN_ASSERT (wait_until ([&] {
         return l.ra ()->adjacency_count () == 1
             && l.ra ()->designated_router () == Nodeid::parse ("1.2");
@@ -648,12 +610,8 @@ DN_TEST (lan, a_router_takes_over_when_the_designated_router_goes_quiet)
 
 DN_TEST (lan, a_router_heard_once_does_not_block_the_election_for_good)
 {
-    // A router that announces itself and then vanishes before two-way is
-    // confirmed -- rebooted, or one whose hellos we hear and whose
-    // receiver is deaf.  Its entry has no adjacency in the routing table,
-    // so nothing there ages it out; if nothing else does, it keeps winning
-    // the election with its higher priority and this node never becomes
-    // designated router.  See BUGS.md.
+    // A higher priority router heard once and never confirmed two-way must
+    // expire, so this node can become designated router.
     Lan l ("1.1", "l1router", "1.2", "l1router", " --priority 20",
            " --priority 100");
     l.start ();

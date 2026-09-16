@@ -1,26 +1,13 @@
-// decnet/common/json.h -- just enough JSON for the application protocol.
+// decnet/common/json.h -- minimal JSON for the application protocol.
 //
-// The protocol the Python uses to talk to applications running as separate
-// processes is one JSON object per line, in each direction. The objects
-// are flat: string keys, and values that are strings, integers, booleans,
-// null, or a flat array of those -- the last only for the argument list of
-// a log record. Nothing here nests further, so this is a reader and writer
-// for exactly that shape rather than a general JSON library; the port has
-// no external dependencies, and pulling one in for this would be out of
-// proportion.
+// The external application protocol is one flat JSON object per line:
+// string keys, and values that are strings, integers, booleans, null, or a
+// flat array of those.  This reads and writes exactly that.
 //
-// Byte strings travel as latin-1: every byte 0 to 255 maps to the code
-// point of the same value, so a JSON string carries arbitrary bytes
-// without escaping beyond what JSON itself requires. That is what
-// the Python's DNJsonEncoder does, and it is why the two ends agree.
-//
-// A note on using a JSON library instead. cJSON was tried, and cannot be
-// used here: it stores string values as NUL-terminated C strings, so a
-// \u0000 in the data truncates the value. This protocol carries arbitrary
-// bytes, and NUL is not a corner case in it -- MIRROR's "loop this back"
-// function code is 0x00, the first byte of every request it receives. Any
-// JSON library with a C-string interface has the same problem; one that
-// reports an explicit length would be fine.
+// Byte strings are encoded as latin-1 (byte n is code point n), matching
+// PyDECnet's DNJsonEncoder.  Strings may contain NUL (MIRROR's function
+// code is 0x00), so libraries that store values as C strings, such as
+// cJSON, cannot be used.
 
 #ifndef DECNET_COMMON_JSON_H
 #define DECNET_COMMON_JSON_H
@@ -94,9 +81,9 @@ public:
 
     std::string encode () const;
 
-    // Substitute this object's "args" array into a message at each {}
-    // placeholder, which is how the Python formats a log record from an
-    // application.  Extra placeholders are left as they are.
+    // Substitute this object's "args" array at each {} placeholder, as
+    // PyDECnet formats application log records.  Extra placeholders are left
+    // as they are.
     std::string format_message (const std::string &key = "message",
                                 const std::string &argkey = "args") const;
 

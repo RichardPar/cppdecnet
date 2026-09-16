@@ -1,11 +1,5 @@
-// The network management listener, object 19, driven over a real logical
-// link between two nodes.
-//
-// These are the tests that say the NICE path works end to end: a request
-// goes out over NSP as NCP would send it, the listener decodes it, the
-// layers answer, and the replies come back in the multiple-item framing
-// the protocol requires.  The unit tests in test_nice.cc check the value
-// coding underneath; these check that something real is on the other end.
+// The network management listener, object 19, over a logical link between
+// two nodes.  Requests are sent as NCP sends them and replies checked.
 
 #include "harness.h"
 
@@ -345,11 +339,8 @@ DN_TEST (nml, read_a_node_we_know_nothing_about)
     SessionConnection *c = p.open (ncp);
     DN_ASSERT (wait_until ([&] { return ncp->accepts () == 1; }));
 
-    // An address the database has never heard of.  Asking about one by
-    // address creates the entry, so the answer is a reply about that node
-    // carrying nothing -- which is what NCP prints as a bare "Node 9.9".
-    // Only an unknown *name* is an unrecognized component, because a name
-    // that is not in the database names nothing at all.
+    // Unknown address: the entry is created and an empty reply returned.  Only
+    // an unknown name is "unrecognized component".
     NiceRequest req = read_request (Entity::node, info_status,
                                     ReqEntity::make_node (Nodeid::parse ("9.9")));
     c->send_data (req.encode ());
@@ -395,13 +386,7 @@ DN_TEST (nml, set_is_unrecognized_and_zero_is_a_privilege_violation)
     SessionConnection *c = p.open (ncp);
     DN_ASSERT (wait_until ([&] { return ncp->accepts () == 1; }));
 
-    // The two writes are refused differently, and the difference is not
-    // cosmetic: NCP prints the reason.
-    //
-    // SET is not implemented at all, here or in the Python, whose nml falls
-    // through to "Unsupported NICE request" and answers -1.  Saying
-    // "privilege violation" would suggest some credential would make it
-    // work, and none would.
+    // SET returns "unrecognized function" (-1), as PyDECnet does.
     NiceRequest set;
     set.function = fn_set;
     set.entity_type = Entity::node;
@@ -411,9 +396,8 @@ DN_TEST (nml, set_is_unrecognized_and_zero_is_a_privilege_violation)
     DN_ASSERT_EQ (NiceReply::parse_header (ncp->at (0)).retcode,
                   rc_unrecognized_function);
 
-    // ZERO is a different case: the Python implements it and refuses it with
-    // -3 when its read-only flag is set, which is our permanent posture
-    // until the access control question is settled.
+    // ZERO returns "privilege violation" (-3), as PyDECnet does when
+    // read-only.
 
     NiceRequest zero;
     zero.function = fn_zero;
@@ -521,9 +505,7 @@ DN_TEST (nml, loop_node_by_name)
     SessionConnection *c = p.open (ncp);
     DN_ASSERT (wait_until ([&] { return ncp->accepts () == 1; }));
 
-    // "LOOP NODE NODEB".  A loop request does not go through the read
-    // path, so nothing has turned the name into an address before the
-    // listener sees it -- this is what checks that it does so itself.
+    // "LOOP NODE NODEB": the listener must resolve the name itself.
     NiceRequest req;
     req.function = fn_test;
     req.test_type = test_node;
@@ -548,10 +530,7 @@ DN_TEST (nml, loop_node_to_an_unknown_name_fails_at_once)
     SessionConnection *c = p.open (ncp);
     DN_ASSERT (wait_until ([&] { return ncp->accepts () == 1; }));
 
-    // A name nothing in the database matches.  This has to be answered
-    // immediately rather than by trying to connect: an address that is
-    // merely unreachable takes the NSP connect timeout to fail, but a
-    // name that resolves to nothing can be refused straight away.
+    // An unknown name is refused immediately, without a connect attempt.
     NiceRequest req;
     req.function = fn_test;
     req.test_type = test_node;

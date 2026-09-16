@@ -1,14 +1,8 @@
 // decnet/mop/packets.h -- MOP message formats.
 //
-// Port of the packet classes in mop.py.  MOP is the maintenance protocol:
-// it announces what a node is, answers requests for its identity and its
-// Ethernet counters, and provides the loopback test that NCP LOOP CIRCUIT
-// uses.  None of it involves routing or NSP; it rides directly on the
-// datalink.
-//
-// Two protocol types are involved.  Everything with a MopHdr travels on
-// 60-01 in the DEC padded format.  Loopback messages travel on 90-00 with
-// no padding, and are not part of the MopHdr family.
+// Port of the packet classes in mop.py.  Messages with a MopHdr use
+// protocol 60-01 in DEC padded format.  Loopback messages use 90-00
+// without padding.
 
 #ifndef DECNET_MOP_PACKETS_H
 #define DECNET_MOP_PACKETS_H
@@ -41,10 +35,9 @@ enum Code : std::uint8_t {
     CONSOLE_RESPONSE = 19
 };
 
-// The software identification field of a system ID message.  It is either
-// a counted string or a single signed byte in the range -2 to 0, which
-// stand for "no software id", "maintenance system" and "operating system".
-// Port of mop.C.
+// Software identification field of a system ID message: a counted string,
+// or a signed byte -2 to 0 ("no software id", "maintenance system",
+// "operating system").  Port of mop.C.
 struct SoftwareId {
     bool         is_code = false;
     std::int8_t  code = 0;
@@ -75,10 +68,8 @@ struct MopPacketBase : Indexed<MopPacketBase> {
     { return try_parse_indexed (b); }
 };
 
-// What a node says about itself.  The body is a TLV list, and tags we do
-// not recognise are kept so that a message can be passed on or re-encoded
-// unchanged.  Marked tolerant because real implementations send items that
-// do not quite fit the spec.
+// System ID.  The body is a TLV list; unknown tags are kept.  Tolerant,
+// because real implementations send items that do not match the spec.
 struct SysId : IndexedBody<SysId, MopPacketBase> {
     static constexpr const char *name = "SysId";
     static constexpr std::uint8_t code_value = SYSTEM_ID;
@@ -163,9 +154,7 @@ struct RequestCounters : IndexedBody<RequestCounters, MopPacketBase> {
         field<B<2>> (&RequestCounters::receipt, "receipt"));
 };
 
-// Ethernet counters.  Most of the error counts mean nothing to a software
-// implementation, but they are defined so that counters from a real
-// controller can be parsed and reported.
+// Ethernet counters.
 struct Counters : IndexedBody<Counters, MopPacketBase> {
     static constexpr const char *name = "Counters";
 
@@ -257,10 +246,8 @@ struct ConsoleResponse : IndexedBody<ConsoleResponse, MopPacketBase,
 
 // ------------------------------------------------------------- loopback
 //
-// Loopback messages are a different shape: a skip count saying how far
-// into the message the next function is, then a sequence of functions.
-// A station that is asked to forward bumps the skip count and passes the
-// message on, so the reply retraces the path.
+// A skip count giving the offset of the next function, then a list of
+// functions.  A forwarding station advances the skip count.
 
 struct LoopSkip : Packet<LoopSkip, Extra::allow> {
     std::uint16_t skip = 0;

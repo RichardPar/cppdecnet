@@ -10,11 +10,9 @@ namespace decnet::events {
 
 namespace {
 
-// Days from 1970-01-01 to a civil date, and back.  Howard Hinnant's
-// algorithms.  The event timestamp is an offset from 1 January 1977 in
-// local wall clock time with no daylight saving correction, so it cannot
-// come from a UTC clock reading: it has to be built from the broken down
-// local time, and read back the same way.
+// Days from 1970-01-01 to a civil date and back (Howard Hinnant's
+// algorithms).  Event timestamps are local time without DST correction, so
+// they are built from broken down local time.
 constexpr long days_from_civil (long y, unsigned m, unsigned d) noexcept
 {
     y -= m <= 2;
@@ -215,9 +213,8 @@ std::string Event::str () const
     if (def) { out += ", "; out += def->text; }
     out += "\nFrom node " + source.str () + ", occurred " + timestamp ();
 
-    // The body is laid out the way NICE.format does it: fields separated
-    // by commas, gathered several to a line, each continuation line
-    // indented under the header.
+    // Body layout as in NICE.format: comma separated fields, several per line,
+    // continuation lines indented.
     constexpr std::size_t indent = 4;
     constexpr std::size_t width = 70 - (indent + 1);
 

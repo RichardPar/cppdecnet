@@ -1,33 +1,18 @@
 // decnet/datalink/ddcmp.h -- the DDCMP datalink.
 //
-// Port of ddcmp.py.  DDCMP is the one datalink here that is a protocol in
-// its own right: it frames, it sequences, and it retransmits, where
-// Multinet and Ethernet get all three from what carries them.
+// Port of ddcmp.py.  This header has the message layer; the protocol and
+// transports are in ddcmp.cc and ddcmp_link.cc.
 //
-// The message layer is this header; the protocol and its transports
-// follow in ddcmp.cc.
+// Every message starts with SOH (data), ENQ (control) or DLE
+// (maintenance) and has an 8 byte header ending in a CRC-16 over the first
+// six bytes.  To resynchronise, a receiver searches for a start byte whose
+// header CRC checks.
 //
-// Three framing notes, because they are what the format is about.
+// Data messages have a second CRC-16 over the payload, so a message with a
+// good header and bad payload can be NAKed and retransmitted.
 //
-// Every message starts with one of three bytes -- SOH for data, ENQ for
-// control, DLE for maintenance -- and is exactly eight bytes of header
-// including a CRC-16 over the first six.  A receiver that has lost its
-// place hunts for one of those three bytes and checks the header CRC; a
-// header that passes is a frame start, and that is the whole of
-// resynchronisation.
-//
-// A data message carries its payload after the header, followed by a
-// second CRC-16 over the payload alone.  The two CRCs are separate on
-// purpose: a header damaged in transit is indistinguishable from noise,
-// but a good header with a bad payload can still be acknowledged as
-// received-in-error, which is what lets the sender retransmit exactly
-// that message rather than resynchronising the link.
-//
-// Sequence numbers are modulo 256, and deliberately not RFC 1982: DDCMP
-// allows up to modulus - 1 messages outstanding, where RFC 1982 comparison
-// needs the window to stay under half the modulus.  the Python says the same
-// thing in a comment on its Seq class.  So these are compared by the
-// protocol's own rules, not by common/modulo.
+// Sequence numbers are modulo 256 but not compared per RFC 1982, since up
+// to 255 messages may be outstanding.
 
 #ifndef DECNET_DATALINK_DDCMP_H
 #define DECNET_DATALINK_DDCMP_H
@@ -51,7 +36,7 @@
 
 namespace decnet::datalink::ddcmp {
 
-// The start bytes, in the octal the Python writes them in.
+// The start bytes, in the octal PyDECnet writes them in.
 inline constexpr std::uint8_t SOH = 0201;   // a data message
 inline constexpr std::uint8_t ENQ = 0005;   // a control message
 inline constexpr std::uint8_t DLE = 0220;   // a maintenance message
@@ -82,10 +67,8 @@ inline constexpr std::size_t MAXCOUNT = 0x3fff;
 
 // ------------------------------------------------------------ sequences
 
-// A DDCMP sequence number.  Modulo 256, with the comparison the protocol
-// needs rather than RFC 1982's: "is n in the window (lo, hi]" is asked
-// directly, because with up to 255 messages outstanding there is no
-// half-modulus rule to fall back on.
+// DDCMP sequence number, modulo 256, with a window test instead of RFC 1982
+// comparison.
 class Seq {
 public:
     constexpr Seq () noexcept = default;
@@ -93,9 +76,7 @@ public:
         : v_ (static_cast<std::uint8_t> (v)) {}
 
     constexpr std::uint8_t value () const noexcept { return v_; }
-    // Explicit: an implicit conversion makes `seq + 1` ambiguous with the
-    // integer promotion, and the compiler is right to complain -- one of
-    // them wraps at 256 and the other does not.
+    // Explicit, so that seq + 1 is not ambiguous with integer promotion.
     constexpr explicit operator std::uint8_t () const noexcept { return v_; }
 
     constexpr Seq &operator++ () noexcept
@@ -107,9 +88,7 @@ public:
     constexpr std::uint8_t distance (Seq other) const noexcept
     { return static_cast<std::uint8_t> (other.v_ - v_); }
 
-    // Is this number in the range (lo, hi], going forward from lo?  That
-    // is the question an acknowledgement asks: "does this ack cover the
-    // message I still have unacknowledged?"
+    // Is this number in (lo, hi], going forward from lo?
     constexpr bool in_window (Seq lo, Seq hi) const noexcept
     {
         std::uint8_t span = lo.distance (hi);
@@ -128,10 +107,8 @@ private:
 // What a decoded message turned out to be.
 enum class MsgKind { data, maintenance, ack, nak, rep, start, stack };
 
-// One decoded DDCMP message.  the Python gives each kind a class and indexes
-// them on the start byte; here they share a struct, because the header is
-// one shape with two readings and the fields that differ are two bytes.
-// Which reading applies is what `kind` says.
+// One decoded DDCMP message.  All kinds share one struct; `kind` says how
+// to interpret the header fields.
 struct Message {
     MsgKind       kind = MsgKind::data;
 
@@ -186,43 +163,27 @@ Message make_maintenance (Bytes payload);
 // Why a header was rejected.
 enum class HdrError { none, too_short, bad_start, bad_crc };
 
-// Decode the eight header bytes.  The CRC is checked unless told not to:
-// a framer board that has already checked it hands over a header without
-// one, which is what `check` is for.
-//
-// A header that fails is not an error to report upward -- on a stream the
-// receiver simply has not found the start of a message yet -- so this
-// returns the reason rather than throwing.
+// Decode the 8 header bytes.  Set check to false to skip the CRC (for a
+// framer that has already checked it).  Returns the failure reason rather
+// than throwing.
 HdrError decode_header (ByteView buf, Message &out, bool check = true);
 
-// Find the next plausible header in a stream: the first position whose
-// start byte is one of the three and whose header CRC checks out.  Returns
-// the offset, or nothing if no complete header is present yet.
-//
-// This is the whole of DDCMP resynchronisation.  A receiver that has lost
-// its place cannot trust a length field, because the length it would read
-// came from the noise that lost it -- so it trusts nothing but a header
-// that passes its own CRC.
+// Find the next valid header in a stream: the first offset with a start
+// byte and a good header CRC.  Returns nothing if no complete header is
+// present.
 std::optional<std::size_t> find_header (ByteView buf);
 
 // ------------------------------------------------------------- protocol
 
-// The DDCMP protocol engine, with no transport in it.
+// DDCMP protocol engine, independent of transport.
 //
-// Everything that makes DDCMP a protocol rather than a frame format lives
-// here: the startup handshake, sequence numbers, acknowledgement,
-// retransmission and the maintenance mode.  What carries the bytes is the
-// transport's business, and it is given to this class as two callbacks --
-// one to put a message on the wire, one to hand a payload upward.
+// Handles startup, sequencing, acknowledgement, retransmission and
+// maintenance mode.  The transport supplies two callbacks: one to send a
+// message and one to deliver a payload upward.  Tests connect two engines
+// directly.
 //
-// Splitting it this way is what makes the protocol testable.  Two engines
-// wired to each other exercise the startup handshake, a lost message, a
-// NAK and a wrapped sequence number with no sockets, no timers and no
-// scheduling -- and those are the parts that are hard to get right.
-//
-// States are the Python's, and its names: Istart after we have sent a Start,
-// Astart after we have answered one, Running, and Maintenance.  See the
-// DDCMP spec V4.1 table 3, the startup state table.
+// States follow PyDECnet: Istart, Astart, Running, Maintenance.  See DDCMP
+// V4.1 table 3.
 class Protocol {
 public:
     enum class State { halted, istart, astart, running, maintenance };
@@ -252,15 +213,12 @@ public:
     void receive (const Message &m);
     void timeout ();
 
-    // A received message that failed its payload CRC, or a header error
-    // the transport detected.  DDCMP answers these with a NAK, which is
-    // how the far end learns to retransmit exactly one message rather
-    // than resynchronising the whole link.
+    // A received message with a bad payload CRC, or a header error from the
+    // transport.  Answered with a NAK.
     void receive_error (std::uint8_t reason, const Message *partial = nullptr);
 
-    // Send a payload.  Queued if the window is full, discarded if the
-    // link is not running -- which is what a datalink does: routing will
-    // notice the circuit is down and stop offering.
+    // Send a payload.  Queued if the window is full, discarded if the link is
+    // not running.
     void send (Bytes payload);
 
     // Maintenance mode, used by MOP to talk to a node that has no routing.
@@ -303,9 +261,8 @@ namespace decnet::datalink {
 
 // ------------------------------------------------------------ the datalink
 
-// The parsed --device argument: proto:lport:host:rport, where proto is
-// "udp", "tcp" or "telnet", as the Python takes it.  A serial line is
-// serial:devname[:speed] instead.
+// Parsed device string: proto:lport:host:rport, where proto is udp, tcp or
+// telnet, or serial:devname[:speed].
 struct DdcmpDevice {
     enum class Mode { udp, tcp, telnet, serial };
 
@@ -319,13 +276,9 @@ struct DdcmpDevice {
     std::string str () const;
 };
 
-// A DDCMP circuit.  The protocol engine does the protocol; this class
-// carries its messages and drives its timer.
-//
-// The engine asks for timeouts and has no clock of its own.  PtpDatalink
-// is already a Timer -- StateMachine derives from one, because a state
-// machine nearly always needs a timer -- so the timeout hook is an
-// override rather than another base.
+// A DDCMP circuit: runs the protocol engine over a transport and drives
+// its timer.  PtpDatalink is already a Timer, so the timeout hook is an
+// override.
 class Ddcmp : public PtpDatalink {
 public:
     Ddcmp (Element *owner, std::string name, DdcmpDevice dev);
@@ -347,10 +300,8 @@ public:
     void timeout () override;
 
 protected:
-    // A restart asked for by the layer above restarts the DDCMP protocol
-    // and leaves the transport connection alone, which is what "remote
-    // restart notification" means for a datalink that has a protocol of
-    // its own.  Everything else is handled by the base class.
+    // A restart from the layer above restarts the protocol and keeps the
+    // transport connection.  Everything else goes to the base class.
     bool validate (Work &w) override;
 
     State connected () override;
@@ -362,16 +313,9 @@ protected:
 
     void make_protocol ();
 
-    // Read one whole message from a byte stream, given something that
-    // reads exactly n bytes or throws.  Slides along the stream a byte at
-    // a time until eight of them pass the header CRC, then reads the
-    // payload that header describes.
-    //
-    // Shared by TCP and serial because the framing problem is the same
-    // one, and it is the part that is easy to get subtly wrong: looking
-    // for a start byte and taking seven more fails, because a control
-    // message repeated while sync is lost can carry one of the three
-    // start bytes at another offset.
+    // Read one message from a byte stream.  Advances a byte at a time until 8
+    // bytes pass the header CRC, then reads the payload.  Used by TCP and
+    // serial.
     Bytes read_framed_message (const std::function<Bytes (std::size_t)> &readn);
 
     DdcmpDevice                       dev_;
@@ -381,9 +325,7 @@ protected:
     Backoff                           conn_timer_ { 5.0, 120.0 };
 };
 
-// One datagram is exactly one DDCMP message, so there is no framing to do
-// and a lost datagram is a lost message -- which the protocol already
-// expects.
+// DDCMP over UDP.  One datagram is one message.
 class UdpDdcmp : public Ddcmp {
 public:
     UdpDdcmp (Element *owner, std::string name, DdcmpDevice dev);
@@ -396,12 +338,8 @@ protected:
     void transmit (const ddcmp::Message &m) override;
 };
 
-// A byte stream, so there is framing to do: the receiver hunts for a header
-// that passes its own CRC, then reads the payload the header describes.
-//
-// Both ends listen and dial at once, and whichever connection arrives first
-// is the one used.  That is what the Python does and what SIMH does in
-// sim_tmxr.c, and it means neither end has to be told which it is.
+// DDCMP over TCP.  Both ends listen and connect, and the first connection
+// is used, as in SIMH's sim_tmxr.c.
 class TcpDdcmp : public Ddcmp {
 public:
     TcpDdcmp (Element *owner, std::string name, DdcmpDevice dev);
@@ -424,13 +362,7 @@ private:
     Socket connecting_;     // outbound, until one of them wins
 };
 
-// A real serial line: the medium DDCMP was written for.
-//
-// Nothing underneath does any of the work here.  There is no connection to
-// establish, no delivery guarantee and no ordering beyond the order bits
-// arrive in, which is why this is the transport that makes the protocol's
-// framing, sequencing and retransmission worth having rather than
-// redundant.
+// DDCMP over a serial line.
 class SerialDdcmp : public Ddcmp {
 public:
     SerialDdcmp (Element *owner, std::string name, DdcmpDevice dev);

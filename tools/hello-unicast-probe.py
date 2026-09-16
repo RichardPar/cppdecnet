@@ -1,28 +1,14 @@
 #!/usr/bin/env python3
-"""Send a router hello to one station's own address instead of the multicast.
+"""Send a router hello to a station's unicast address instead of the multicast.
 
-A diagnostic for one specific failure: we hear a neighbour, the neighbour
-does not hear us.  Router hellos go to the all-endnodes multicast
-AB-00-00-04-00-00, so a station whose Ethernet address filter was never
-programmed with the DECnet addresses will transmit happily and receive
-nothing.  That looks identical to a routing fault and is not one.
+If the station then adopts 1.20 as its designated router, it is not
+receiving the DECnet multicast addresses.
 
-This sends the same hello to the station's own hardware address, which it
-demonstrably does receive.  If it then adopts us as its designated router,
-the multicast filter is the problem and the fault is on that station, not
-here.
+    sudo tools/hello-unicast-probe.py <iface> <mac> [count]
 
-    sudo tools/hello-unicast-probe.py enx00051be19c68 08:00:2b:11:22:33
-
-Then on the far end (RSX):  NCP> SHOW ADJACENT NODES
-
-The frame is a verbatim replay of one decnetd put on the wire, captured on
-10-Sep-2026 and decoded by tcpdump as
+The frame is a captured decnetd hello:
 
     router-hello l1rout vers 2 src 1.20 blksize 591 pri 64 hello 10
-
-Replayed rather than rebuilt on purpose: a hello assembled here could be
-subtly wrong, and then a station ignoring it would prove nothing.
 """
 
 import os
@@ -33,15 +19,14 @@ import time
 
 ROUTING_PROTO = 0x6003
 
-# Everything from the ethertype onward, exactly as captured: the DEC padded
-# length field 001b, the 27 byte hello, then the pad to minimum frame size.
+# Length field, 27 byte hello, padding.
 HELLO_BODY = bytes.fromhex(
     "1b00"
     "0b020000aa0004001404024f0240000a"
     "00000800000000000000000000000000"
     "000000000000000000000000")
 
-SRC = bytes.fromhex("aa0004001404")     # 1.20, the address decnetd sends from
+SRC = bytes.fromhex("aa0004001404")     # 1.20
 
 
 def mac_bytes(s):
@@ -83,12 +68,7 @@ def main():
         if n != count:
             time.sleep(interval)
 
-    print("\nNow ask the far end whether it found a router:")
-    print("    NCP> SHOW ADJACENT NODES")
-    print("\nIt names 1.20 or CPPNOD  -> it receives unicast but not the")
-    print("  DECnet multicast. Its Ethernet address filter is the fault.")
-    print("Still 'No information'   -> it is not accepting our hello for a")
-    print("  reason other than addressing; capture and compare.")
+    print("\nCheck the far end with NCP> SHOW ADJACENT NODES")
     return 0
 
 

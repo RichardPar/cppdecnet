@@ -1,9 +1,7 @@
-// decnet/node.h -- the Node object, container for everything else.
+// decnet/node.h -- the Node object.
 //
-// Port of node.py.  A Node owns the work queue, the timer wheel and the
-// per-layer objects, and runs the main loop that gives the whole system its
-// single threaded semantics.  As in the Python, more than one Node can exist
-// in one process, which is how a whole test network fits in one program.
+// Port of node.py.  A Node owns the work queue, timer wheel and layer
+// objects and runs the main loop.  Several nodes can exist in one process.
 
 #ifndef DECNET_NODE_H
 #define DECNET_NODE_H
@@ -35,20 +33,15 @@ namespace mop      { class Mop; }
 namespace events   { class Event; class EventLogger; }
 namespace http     { class Server; }
 
-// Per node database entry for a remote node.  Port of node.Nodeinfo; the
-// NSP and routing state that the Python mixes in here will be added as those
-// layers are ported.
+// Node database entry for a remote node.  Port of node.Nodeinfo.
 struct Nodeinfo {
     Nodeid      id;
     std::string name;
     std::string inbound_verification;
     std::string outbound_verification;
 
-    // Smoothed round trip time to this node, in seconds; zero until
-    // something has been timed.  It lives here rather than on a connection
-    // because it is a property of the path, and every link to the same
-    // node travels the same one -- a second connection starts with what
-    // the first one learned.
+    // Smoothed round trip time to this node in seconds, zero until measured.
+    // Shared by all connections to the node.
     double      delay = 0.0;
 };
 
@@ -100,11 +93,9 @@ public:
     // database has one for it.
     nice::NiceNode nicenode (Nodeid id) const;
 
-    // Answer a NICE read request.  Returns zero with the replies filled
-    // in, or a NICE error return code.  The request is taken by reference
-    // because it is rewritten first: a read of "the executor" arrives as
-    // node address zero, and a read by name arrives as a name, and the
-    // layers below are spared both.  Port of Node.nice_read.
+    // Answer a NICE read.  Returns zero with replies filled in, or a NICE
+    // error code.  The request is rewritten first: executor (address zero)
+    // and node names are resolved to addresses.  Port of Node.nice_read.
     int nice_read (nice::NiceRequest &req, nice::ReplyDict &replies);
 
     // What this node calls itself in a management reply.  Port of
@@ -136,9 +127,7 @@ public:
     Nodeinfo *find_node (const std::string &name);
     void add_node (Nodeinfo info);
 
-    // Every node the database knows, in address order.  A NICE read of
-    // "known nodes" walks this, and so does the monitoring page.  Sorted
-    // rather than in hash order so a listing is stable between reads.
+    // All known nodes, in address order.
     std::vector<const Nodeinfo *> known_nodes () const;
 
     void dispatch (Work &w) override;

@@ -1,14 +1,9 @@
 // decnet/datalink/bc.h -- broadcast (LAN) datalinks.
 //
-// Port of datalink.BcDatalink, BcPort and BcCounters.  A broadcast circuit
-// differs from a point to point one in two ways that matter here: a frame
-// carries a destination address, so the port has to say which addresses it
-// wants; and several upper layers share one circuit, each taking a
-// different protocol type -- routing on 60-03, MOP on 60-01.
-//
-// There is no state machine: a LAN is either there or it is not, and the
-// routing sublayer above discovers its neighbours by listening rather than
-// by handshaking.
+// Port of datalink.BcDatalink, BcPort and BcCounters.  Frames carry a
+// destination address, so each port registers the addresses it wants, and
+// several upper layers share one circuit by protocol type (routing on
+// 60-03, MOP on 60-01).  There is no state machine.
 
 #ifndef DECNET_DATALINK_BC_H
 #define DECNET_DATALINK_BC_H
@@ -115,12 +110,9 @@ public:
     // Put one frame on the wire.  Implemented by each transport.
     virtual void send_frame (const Bytes &frame) = 0;
 
-    // A packet filter matching everything the current ports want: the
-    // protocol types they registered, and the addresses they answer to.
-    // A transport that can push a filter down to the kernel -- pcap can --
-    // uses this so that a busy segment does not wake the receive thread
-    // for every frame on it.  The software checks in receive_frame stay:
-    // the kernel filter is an optimisation, not the rule.
+    // A packet filter expression matching the protocol types and addresses the
+    // current ports want.  pcap pushes this into the kernel.  receive_frame
+    // still checks everything in software.
     std::string filter_expression () const;
 
     // Called when a port's addresses or protocol change, so a transport
@@ -140,9 +132,9 @@ protected:
     Macaddr hwaddr_;
 };
 
-// Build a DEC Ethernet frame: destination, source, protocol type, and --
-// for the padded format DECnet uses -- a two byte little endian payload
-// length.  Short frames are padded to the 60 byte minimum.
+// Build a DEC Ethernet frame: destination, source, protocol type and, for
+// padded format, a two byte little endian length.  Short frames are padded
+// to 60 bytes.
 Bytes build_frame (Macaddr dest, Macaddr src, std::uint16_t proto,
                    ByteView payload, bool pad = true);
 

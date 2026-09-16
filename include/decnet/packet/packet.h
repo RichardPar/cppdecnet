@@ -1,9 +1,7 @@
 // decnet/packet/packet.h -- the Packet base class.
 //
-// Port of packet.Packet.  The Python version builds encode and decode
-// methods from _layout via a metaclass at class definition time; here the
-// CRTP base walks Derived::layout, which is a constexpr tuple, so the loop
-// is unrolled and each field's codec is inlined.
+// Port of packet.Packet.  A CRTP base that encodes and decodes using
+// Derived::layout, a constexpr tuple.
 
 #ifndef DECNET_PACKET_PACKET_H
 #define DECNET_PACKET_PACKET_H
@@ -15,7 +13,7 @@
 namespace decnet::packet {
 
 // Whether a packet class tolerates bytes left over after its last field.
-// the Python allows them only when the class declares a payload attribute.
+// PyDECnet allows them only when the class declares a payload attribute.
 enum class Extra { reject, allow };
 
 template <typename Derived, Extra ExtraPolicy = Extra::reject>
@@ -38,9 +36,7 @@ public:
         return out;
     }
 
-    // Parse buf into this packet.  Returns the number of bytes consumed, so
-    // a caller that layers packets (routing over datalink, NSP over
-    // routing) can hand the remainder on.
+    // Parse buf into this packet.  Returns the number of bytes consumed.
     std::size_t decode (ByteView buf)
     {
         Decoder d (buf);
@@ -62,9 +58,7 @@ public:
         return p;
     }
 
-    // Try to parse; returns nullopt instead of throwing.  The receive paths
-    // in routing and NSP drop malformed packets rather than unwinding, so
-    // this is the form they use.
+    // Parse, returning nullopt instead of throwing.  Used by receive paths.
     static std::optional<Derived> try_parse (ByteView buf) noexcept
     {
         try {

@@ -104,11 +104,8 @@ std::string Endpoint::str () const
 
 namespace {
 
-// Reduce an address to the bytes worth comparing.  A dual stack listening
-// socket reports an IPv4 peer as ::ffff:a.b.c.d, while resolving that
-// peer's name gives a plain AF_INET address, so comparing the family first
-// rejects every IPv4 peer.  Unwrapping the mapping makes them comparable.
-// host.py gets to the same place by another route.
+// Normalise an address for comparison.  IPv4-mapped IPv6 addresses
+// (::ffff:a.b.c.d) are converted to IPv4.
 struct AddrBytes {
     const unsigned char *data = nullptr;
     std::size_t          len = 0;

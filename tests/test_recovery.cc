@@ -1,13 +1,6 @@
-// Recovering from a neighbour that stops answering.
-//
-// This is the case a dead or wedged node presents: the TCP connection is
-// still established, so nothing at the socket layer reports anything, and
-// the only thing that can notice is the routing layer's listen timer.  The
-// question these tests ask is whether the circuit comes back by itself once
-// the neighbour starts answering again.
-//
-// The silence is produced by a relay in the middle that holds both
-// connections open and discards everything it is given.
+// Recovery from a neighbour that stops answering while the TCP connection
+// stays open.  A relay holds both connections and discards traffic; the
+// circuit must come back when traffic resumes.
 
 #include "harness.h"
 
@@ -333,10 +326,7 @@ DN_TEST (recovery, recovers_from_repeated_silence)
     p.stop ();
 }
 
-// The other way a neighbour disappears: the connection itself drops and is
-// remade.  This path always worked -- the datalink notices the socket and
-// reconnects on its own -- and the test is here so that it stays that way
-// alongside the one above, which did not.
+// The connection drops and is re-established.
 DN_TEST (recovery, nice_works_after_the_connection_drops)
 {
     Pair p;

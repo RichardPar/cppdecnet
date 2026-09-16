@@ -1,22 +1,16 @@
-// decnet/routing/lan.h -- the routing sublayer for broadcast circuits.
+// decnet/routing/lan.h -- routing on broadcast circuits.
 //
-// Port of route_eth.py.  A LAN circuit has no handshake and no state
-// machine: every node multicasts a hello periodically and neighbours are
-// learned by listening.  Two consequences make up most of this file.
+// Port of route_eth.py.  Nodes send periodic multicast hellos and
+// neighbours are learned by listening.
 //
-// Two-way visibility has to be proved.  Hearing a router's hello only
-// shows it can reach us.  Each router lists in its hello every router it
-// can hear, so seeing our own address in a neighbour's list is what
-// promotes that adjacency from INIT to UP.
+// Router adjacencies go from INIT to UP when a router sees its own address
+// in the neighbour's hello router list.
 //
-// Somebody has to be the designated router.  Endnodes send everything they
-// cannot address directly to one router, so the routers elect one by
-// priority with ties broken by address.  The winner waits DRDELAY before
-// acting on it, so a brief disagreement at startup does not leave two
-// nodes both behaving as DR.
+// Routers elect a designated router by priority, then address.  The winner
+// waits DRDELAY before acting as DR.
 //
-// PORT: Phase III and Phase II nodes on a LAN are not handled; neither is
-// the router-priority/maximum-routers table overflow event.
+// PORT: Phase II and III nodes on a LAN, and the router table overflow
+// event.
 
 #ifndef DECNET_ROUTING_LAN_H
 #define DECNET_ROUTING_LAN_H
@@ -53,10 +47,8 @@ struct LanAdjacency {
     double       listen_time = 0;
 };
 
-// The previous hop cache an endnode keeps: which MAC address last
-// delivered traffic from a given source node.  Sending back that way
-// avoids bouncing every reply off the designated router.  Port of
-// route_eth.NiCacheEntry.
+// Endnode previous hop cache: the MAC address that last delivered traffic
+// from a source node.  Port of route_eth.NiCacheEntry.
 struct CacheEntry {
     Macaddr                               prevhop;
     std::chrono::steady_clock::time_point expires;
@@ -78,12 +70,8 @@ public:
     // "unreachable", so this always succeeds.
     void send_to_mac (ShortData &pkt, Macaddr nexthop);
 
-    // Who the designated router on this LAN is, and what priority we bring
-    // to electing one.  Both kinds of circuit can answer, but they are
-    // answering different questions: an endnode reports the router it
-    // chose, a router reports the one it believes won, which may be
-    // itself.  Virtual so that a caller holding a LanCircuit -- the
-    // monitoring pages do -- does not have to know which it has.
+    // Designated router and our election priority.  An endnode reports its
+    // chosen router; a router reports the election winner, possibly itself.
     virtual Nodeid designated_router () const noexcept { return Nodeid (); }
 
     // Zero for an endnode, which does not stand in the election.
@@ -131,15 +119,12 @@ protected:
     virtual void send_hello () = 0;
     virtual void handle (RoutingPacketBase &pkt, Macaddr src) = 0;
 
-    // Bring an adjacency up and register it with the routing layer, or
-    // take one down.  Shared by both circuit kinds.
-    // Raise a class 4 event about this circuit and one neighbour on it.
+    // Bring an adjacency up and register it with routing, or take it down.
+    // Raise a class 4 event for this circuit and a neighbour.
     void lanevent (events::EventId ev, Nodeid neighbour, int reason = -1);
 
     void adjacency_up (std::uint16_t key, const AdjacencyInfo &info);
-    // Virtual because a router has state that depends on which of its
-    // neighbours are up -- who the designated router is, above all -- and
-    // has to recompute it when one goes away.
+    // Virtual: a router re-runs the designated router election.
     virtual void adjacency_down (std::uint16_t key);
 
     BaseRouter           *parent_;

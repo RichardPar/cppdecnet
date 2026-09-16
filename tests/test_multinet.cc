@@ -1,13 +1,8 @@
 // Port of tests/test_multinet.py.
 //
-// The device string cases are pure parsing.  The loopback cases build two
-// real nodes, one listening and one connecting, and run actual TCP traffic
-// between them -- which is the only way to exercise the point to point
-// state machine, its receive thread and the framing together.
+// Device string parsing, plus two nodes exchanging traffic over TCP.
 //
-// These configurations have no routing line on purpose: the tests want the
-// datalink on its own, and a routing layer would claim the circuit's one
-// port before the test could.
+// No routing line, so the tests can use the circuit's port directly.
 
 #include "harness.h"
 
@@ -50,9 +45,8 @@ public:
         cond_.notify_all ();
     }
 
-    // Wait until pred() holds, or the deadline passes.  Returns whether it
-    // held: the callers assert on that, so a hang shows up as a failure
-    // rather than a stuck test run.
+    // Wait until pred() holds or the deadline passes.  Returns whether it
+    // held.
     template <typename P>
     bool wait_for (P pred, std::chrono::milliseconds timeout)
     {
@@ -304,9 +298,8 @@ DN_TEST (multinet, counters_track_traffic)
 
 DN_TEST (multinet, connect_to_nothing_stays_down_and_retries)
 {
-    // Nothing is listening on this port.  The circuit must not come up,
-    // must not crash, and must keep trying -- the routing layer relies on
-    // the datalink retrying forever rather than giving up.
+    // Nothing listening: the circuit stays down, does not crash, and keeps
+    // retrying.
     std::uint16_t port = free_port ();
     Config ccfg = Config::from_string (
         "node 1.2 C\n"

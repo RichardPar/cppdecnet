@@ -1,20 +1,15 @@
-// decnet/routing/l1router.h -- level 1 routing.
+// decnet/routing/l1router.h -- level 1 and level 2 routing.
 //
-// Port of routing.L1Router and routing.Update.  This is the part that makes
-// a node a router rather than a leaf: it keeps a routing table, recomputes
-// it when an adjacency or a neighbour's advertisement changes, forwards
-// packets towards their destination, and tells its neighbours what it can
-// reach.
+// Port of routing.L1Router and routing.Update.  Maintains the routing
+// table, recomputes routes on adjacency or advertisement changes, forwards
+// packets and sends routing messages.
 //
-// The table is the matrix the routing spec describes.  One column per
-// adjacency records what that neighbour says it can reach, plus one column
-// for this node itself and one shared column for all endnode adjacencies.
-// The route computation picks, for each destination, the column offering
-// the lowest cost -- and that column's adjacency becomes the output for
-// that destination.
+// The table is the routing matrix from the spec: one column per adjacency,
+// one for this node and one shared column for endnode adjacencies.  For
+// each destination the lowest cost column selects the output adjacency.
 //
-// L2Router, below, builds a second matrix indexed by area rather than node
-// and reuses the same route computation over it.
+// L2Router adds a second matrix indexed by area using the same route
+// computation.
 
 #ifndef DECNET_ROUTING_L1ROUTER_H
 #define DECNET_ROUTING_L1ROUTER_H
@@ -51,9 +46,8 @@ struct RouteInfo {
     virtual ~RouteInfo () = default;
 };
 
-// The shared column for endnode adjacencies.  Endnodes do not advertise, so
-// this node fills the column in itself: one hop, the circuit's cost, and a
-// different adjacency per destination.  Port of EndnodesRouteInfo.
+// Shared column for endnode adjacencies: one hop, circuit cost, adjacency
+// per destination.  Port of EndnodesRouteInfo.
 struct EndnodesRouteInfo : RouteInfo {
     std::vector<Adjacency *> adjacencies;
 
@@ -68,9 +62,7 @@ struct EndnodesRouteInfo : RouteInfo {
 // what to put in them.  Port of routing.Update.
 class Update : public Element, public Timer {
 public:
-    // level is 1 or 2: which routing table this process advertises, and so
-    // which message type it builds.  the Python keeps one Update per circuit
-    // per type for the same reason.
+    // level is 1 or 2: which table this process advertises.
     Update (Circuit *circuit, L1Router *router, double t1,
             unsigned level = 1);
 
@@ -87,14 +79,11 @@ public:
     Element *timer_owner () noexcept override { return this; }
 
     // Build the messages a send would produce, without sending them.
-    // Exposed because it is the part worth testing directly.
+    // Exposed for testing.
     std::vector<Bytes> build (bool complete) const;
 
-    // The interval the last send scheduled, and whether that send carried
-    // the whole table.  Exposed for the same reason as build: the rule
-    // about not letting triggered updates starve the periodic sweep is
-    // arithmetic, and arithmetic is worth checking directly rather than
-    // by waiting out a timer.
+    // Interval scheduled by the last send, and whether it was a full update.
+    // For tests.
     double t1 () const noexcept { return t1_; }
     double next_interval () const noexcept { return next_interval_; }
     bool last_was_complete () const noexcept { return last_complete_; }
@@ -111,20 +100,17 @@ private:
     bool             holdoff_ = false;
     bool             running_ = false;
 
-    // When the last *full* update went out, as distinct from the last
-    // update of any kind.  A triggered update must not push the periodic
-    // sweep back by a whole t1, or a circuit with steady topology churn
-    // never sends one.  Port of Update.lastfull.
+    // Time of the last full update.  Triggered updates schedule the next one
+    // relative to this, so they do not delay the periodic update.  Port of
+    // Update.lastfull.
     std::chrono::steady_clock::time_point lastfull_ {};
     double           next_interval_ = 0.0;
     bool             last_complete_ = false;
 };
 
-// One routing matrix: the columns, and the best route derived from them.
-// Level 1 routing keeps one indexed by node number; level 2 keeps a second
-// indexed by area.  Port of the vectors L1Router and L2Router allocate --
-// minhops/mincost/oadj and aminhops/amincost/aoadj -- gathered into one
-// place so the route computation can serve both.
+// One routing matrix and its computed best routes.  Level 1 is indexed by
+// node, level 2 by area.  Combines minhops/mincost/oadj and
+// aminhops/amincost/aoadj from PyDECnet.
 struct RouteMatrix {
     std::map<Adjacency *, std::unique_ptr<RouteInfo>> columns;
     std::vector<std::uint8_t>  minhops;
@@ -204,16 +190,12 @@ protected:
     // Does the configuration give this address a name?  See reach().
     bool named_node (Nodeid id) const;
 
-    // Recompute the best route for destinations first..last in one matrix.
-    // Port of L1Router.doroute, whose l2 flag chooses which matrix; here
-    // the matrix is the argument.  "extra" is an additional column that is
-    // not in the map -- the shared endnode column, for level 1.
+    // Recompute best routes for destinations first..last.  Port of
+    // L1Router.doroute.  extra is a column not in the map (the endnode column
+    // for level 1).
     //
-    // on_change is called for each destination whose advertised hops or
-    // cost moved, which is what schedules an update.
-    // on_reach is called when a destination becomes reachable or stops
-    // being reachable, which is a different question from whether its cost
-    // moved and is what the reachability change event reports.
+    // on_change is called when a destination's hops or cost change.
+    // on_reach is called when a destination becomes reachable or unreachable.
     void compute (RouteMatrix &m, unsigned first, unsigned last,
                   const RouteInfo *extra,
                   const std::function<void (unsigned)> &on_change,
@@ -230,9 +212,7 @@ protected:
     void compute_routes (unsigned first, unsigned last);
 
     unsigned maxvisits_ = 32;
-    // The periodic routing message interval.  Point to point circuits use
-    // one value, broadcast circuits a much shorter one; ports of --t1 and
-    // --bct1.
+    // Routing message interval: --t1 for point to point, --bct1 for broadcast.
     double   ptp_t1_ = 600.0;
     double   bc_t1_ = 10.0;
 
@@ -246,14 +226,11 @@ protected:
     std::uint64_t transit_sent_ = 0;
 };
 
-// Routing for a level 2 (area) router.  Port of routing.L2Router.
+// Level 2 (area) router.  Port of routing.L2Router.
 //
-// It is a level 1 router that additionally keeps a second matrix indexed by
-// area, exchanges L2Routing messages with other area routers, and -- when
-// it can reach any area other than its own -- declares itself "attached",
-// which it advertises to its own area as a route to destination 0, the
-// "nearest level 2 router" entry every level 1 router uses for out of area
-// traffic.
+// Adds an area matrix and L2Routing messages.  When it can reach another
+// area it is "attached" and advertises destination 0 (nearest level 2
+// router) to its area.
 class L2Router : public L1Router {
 public:
     L2Router (Element *parent, const Config &config);

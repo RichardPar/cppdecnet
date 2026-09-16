@@ -1,8 +1,4 @@
 // The JSON used by the application protocol.
-//
-// These tests run against whichever backend the build selected -- cJSON
-// where it is available, the built-in parser otherwise -- so they are what
-// proves the two agree.  `make features` says which is in use.
 
 #include "harness.h"
 
@@ -24,9 +20,8 @@ DN_TEST (json, encode_a_flat_object)
 
 DN_TEST (json, high_bytes_are_escaped_the_way_python_writes_them)
 {
-    // This is the crux of the protocol: bytes travel as latin-1, and
-    // Python's json.dumps escapes anything outside printable ASCII as
-    // \uXXXX.  Producing the same form is what lets the two ends agree.
+    // Bytes travel as latin-1, with non-printable characters escaped as
+    // \uXXXX, matching Python's json.dumps.
     Object o;
     o.set ("handle", 1);
     o.set ("type", "data");
@@ -122,9 +117,8 @@ DN_TEST (json, malformed_input_is_rejected)
 
 DN_TEST (json, log_records_from_an_application)
 {
-    // What an application writes to its standard error: a level, a
-    // message, and arguments to substitute at {} placeholders.  This is
-    // the only place the protocol uses an array.
+    // Application log record: level, message and {} arguments.  The only
+    // array in the protocol.
     std::string text =
         "{\"level\": 10, \"message\": \"Starting MIRROR with arguments {}\","
         " \"args\": [\"[]\"]}";

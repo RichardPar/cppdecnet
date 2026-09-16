@@ -1,10 +1,8 @@
 // decnet/common/timers.h -- the timer wheel.
 //
-// Direct port of timers.py: a Varghese/Lauck timer wheel, one per node,
-// run by a helper thread that ticks every JIFFY and posts a Timeout work
-// item for each expired timer.  Timers link themselves into a circular
-// queue, so start, restart and cancel are O(1) with no allocation.  That
-// is why it is ported as is rather than replaced with a priority queue.
+// Port of timers.py: a Varghese/Lauck timer wheel, one per node, ticked by
+// a helper thread that posts a Timeout work item for each expired timer.
+// Start, restart and cancel are O(1) with no allocation.
 
 #ifndef DECNET_COMMON_TIMERS_H
 #define DECNET_COMMON_TIMERS_H
@@ -39,9 +37,7 @@ public:
 
     void reset () noexcept { next_ = prev_ = this; }
 
-    // Bumped by every link and unlink.  The wheel samples it when it
-    // notices an expiration and the work item re-checks it at dispatch
-    // time; see Timeout below for why.
+    // Incremented on every link and unlink.  See Timeout.
     unsigned revcount () const noexcept { return revcount_; }
 
     // Insert item as this object's successor: at the front, for a head.
@@ -65,7 +61,7 @@ public:
     }
 
     // Take this item off whatever queue it is on.  Relinking to self makes
-    // a repeated call harmless, as in the Python original.
+    // a repeated call harmless, as in PyDECnet.
     void unlink () noexcept
     {
         ++revcount_;
@@ -88,11 +84,10 @@ class Timer;
 
 // Work item delivered when a timer expires.  Port of timers.Timeout.
 //
-// Expiration is noticed on the wheel's thread but delivered on the node's,
-// so between the two the owning layer may have cancelled or restarted the
-// very timer that is expiring.  Rather than make every layer defend against
-// a stale timeout, the wheel records the timer's revcount when it pulls it
-// off, and dispatch drops the item if the count has moved since.
+// Expiry is detected on the wheel thread but delivered on the node thread,
+// so the timer may have been cancelled or restarted in between.  The wheel
+// records the timer's revcount when it expires, and dispatch drops the
+// item if the count has changed.
 class Timeout : public Work {
 public:
     Timeout (Element *owner, Timer *timer, unsigned revcount) noexcept
@@ -144,7 +139,7 @@ public:
     void shutdown ();
 
     // Start (or restart) t so it expires in "seconds".  A timer already
-    // running is moved, matching the Python semantics.
+    // running is moved, matching PyDECnet semantics.
     void start (Timer *t, double seconds);
     void start (Timer *t, std::chrono::milliseconds ms);
 

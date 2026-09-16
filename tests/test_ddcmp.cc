@@ -1,9 +1,7 @@
-// tests/test_ddcmp.cc -- DDCMP message framing.
+// tests/test_ddcmp.cc -- DDCMP.
 //
-// The encoded forms are checked against bytes the Python's own ddcmp module
-// produced for the same values, which is the practice the rest of this
-// port follows: a format we only agree with ourselves about is not worth
-// much.  The vectors were generated with:
+// Encodings are checked against bytes from PyDECnet's ddcmp module,
+// generated with:
 //
 //     from decnet.ddcmp import StartMsg, AckMsg, DataMsg, ...
 //     m = AckMsg (); m.resp = Seq (5); bytes (m.encode ()).hex (' ')
@@ -57,7 +55,7 @@ Bytes bytes_of (const char *s)
 
 }   // namespace
 
-// ------------------------------------------------- against the Python
+// ------------------------------------------------- against PyDECnet
 
 DN_TEST (ddcmp, control_messages_match_python)
 {
@@ -129,9 +127,7 @@ DN_TEST (ddcmp, a_damaged_header_is_rejected)
     DN_ASSERT (decode_header (ByteView (wire.data (), wire.size ()), out)
                == HdrError::bad_crc);
 
-    // And a byte that is not one of the three starts is not a header at
-    // all, which is a different answer: on a stream it means "keep
-    // looking", not "the link is in trouble".
+    // A non-start byte is "not a header", a different result from a CRC error.
     Bytes junk = wire;
     junk[0] = 0x42;
     DN_ASSERT (decode_header (ByteView (junk.data (), junk.size ()), out)
@@ -146,9 +142,7 @@ DN_TEST (ddcmp, a_damaged_header_is_rejected)
 
 DN_TEST (ddcmp, a_receiver_finds_a_header_in_a_stream_of_noise)
 {
-    // This is what resynchronisation is: a header that passes its own CRC
-    // is a frame start, and nothing else is trusted -- least of all a
-    // length field, which after a loss of sync came out of the noise.
+    // Resynchronisation: only a header with a valid CRC is a frame start.
     Bytes stream;
     const std::uint8_t noise[] = { 0x00, 0x81, 0x13, 0xff, 0x05, 0x9a, 0x90 };
     for (std::uint8_t b : noise) stream.push_back (b);
@@ -161,9 +155,7 @@ DN_TEST (ddcmp, a_receiver_finds_a_header_in_a_stream_of_noise)
     DN_ASSERT (found.has_value ());
     DN_ASSERT_EQ (*found, at);
 
-    // Note the noise deliberately contains 0x81, 0x05 and 0x90 -- all
-    // three start bytes.  Looking for the byte alone is not enough, and a
-    // receiver that stopped there would frame on garbage.
+    // The noise contains all three start bytes (0x81, 0x05, 0x90).
     Message out;
     DN_ASSERT (decode_header (ByteView (stream.data () + *found,
                                         stream.size () - *found), out)
@@ -191,9 +183,7 @@ DN_TEST (ddcmp, sequence_numbers_wrap_at_256)
 
 DN_TEST (ddcmp, an_ack_covers_the_window_it_should)
 {
-    // DDCMP allows up to modulus - 1 outstanding, so this cannot be the
-    // RFC 1982 half-modulus comparison the rest of the port uses.  An ack
-    // for n covers everything from lo up to and including n.
+    // Window test, not RFC 1982: an ack for n covers lo up to and including n.
     DN_ASSERT (Seq (5).in_window (Seq (3), Seq (7)));
     DN_ASSERT (Seq (7).in_window (Seq (3), Seq (7)));     // inclusive at hi
     DN_ASSERT (!Seq (3).in_window (Seq (3), Seq (7)));    // exclusive at lo
@@ -206,11 +196,8 @@ DN_TEST (ddcmp, an_ack_covers_the_window_it_should)
 
 // ------------------------------------------------------------- protocol
 //
-// Two engines wired to each other.  No sockets, no timers and no
-// scheduling: the wire is a vector, delivery happens when the test says
-// so, and a message is lost by not delivering it.  That makes the hard
-// parts -- the startup handshake, a lost message, a NAK, a wrapped
-// sequence number -- ordinary straight line tests.
+// Two engines connected directly.  The wire is a vector, delivery is
+// explicit, and a message is lost by not delivering it.
 
 namespace {
 
@@ -296,9 +283,8 @@ DN_TEST (ddcmp, an_out_of_sequence_message_is_ignored_not_delivered)
     a.proto->send (bytes_of ("second"));
     DN_ASSERT_EQ (a.wire.size (), 2u);
 
-    // Lose the first: deliver only the second.  DDCMP does not deliver
-    // out of order, and does not NAK either -- the far end finds out from
-    // the ack, which still names the message before the gap.
+    // Lose the first message.  The receiver does not deliver out of order; the
+    // sender learns of the gap from the ack.
     b.proto->receive (a.wire[1]);
     DN_ASSERT_EQ (b.up.size (), 0u);
     DN_ASSERT_EQ (b.proto->last_received ().value (), 0u);
@@ -339,9 +325,7 @@ DN_TEST (ddcmp, a_timeout_asks_rather_than_retransmits)
     a.wire.clear ();
     a.proto->timeout ();
 
-    // Most ARQ protocols resend the data.  DDCMP sends REP -- "where have
-    // you got to?" -- so a lost acknowledgement costs one small message
-    // instead of the whole window.
+    // On timeout DDCMP sends REP rather than resending data.
     DN_ASSERT_EQ (a.wire.size (), 1u);
     DN_ASSERT (a.wire[0].kind == MsgKind::rep);
     DN_ASSERT_EQ (a.wire[0].num.value (), 1u);
@@ -424,9 +408,7 @@ DN_TEST (ddcmp, a_start_while_running_restarts_the_link)
     bring_up (a, b);
     DN_ASSERT_EQ (a.downs, 0);
 
-    // The far end rebooted.  We must drop what we thought we knew and
-    // tell the layer above, or we would keep numbering from where we were
-    // and the far end would reject every message.
+    // Remote restart: reset sequence state and report down.
     a.proto->receive (make_start ());
     DN_ASSERT_EQ (a.downs, 1);
     DN_ASSERT (a.proto->state () == Protocol::State::istart);
@@ -460,10 +442,7 @@ DN_TEST (ddcmp, sending_while_down_is_discarded_not_queued)
 
 // --------------------------------------------------------- the datalink
 //
-// The engine tests above prove the protocol.  These prove the wiring: the
-// device string, the factory, and two real nodes brought up over a UDP
-// carried DDCMP circuit -- which is the first time the protocol runs on
-// actual sockets, on actual threads, driven by actual timers.
+// Device strings, the factory, and two nodes over real DDCMP circuits.
 
 namespace {
 
@@ -504,9 +483,7 @@ DN_TEST (ddcmp, the_device_string_is_parsed_like_python)
 
 DN_TEST (ddcmp, two_nodes_come_up_over_a_udp_ddcmp_circuit)
 {
-    // The whole stack on a DDCMP circuit: the startup handshake runs on
-    // real sockets, the routing layer sees the circuit come up, and the
-    // adjacency forms.
+    // Adjacency comes up over a UDP DDCMP circuit.
     int pa = 27801, pb = 27802;
     Config ca = Config::from_string (
         "routing 1.1 --type l1router\nnode 1.1 NODEA\nnode 1.2 NODEB\n"
@@ -532,11 +509,8 @@ DN_TEST (ddcmp, two_nodes_come_up_over_a_udp_ddcmp_circuit)
 
 DN_TEST (ddcmp, a_restart_request_is_obeyed_and_the_circuit_comes_back)
 {
-    // What the routing layer does when it gives up on a neighbour -- a
-    // listen timeout, above all -- is ask the datalink to restart.  For
-    // DDCMP that means run the startup handshake again and leave the
-    // transport alone.  Ignoring the request leaves the circuit waiting
-    // for a datalink that has no reason to say anything: see BUGS.md.
+    // A restart request reruns the DDCMP handshake without dropping the
+    // transport, and the circuit comes back.
     int pa = 27811, pb = 27812;
     Config ca = Config::from_string (
         "routing 1.1 --type l1router\nnode 1.1 NODEA\nnode 1.2 NODEB\n"
@@ -555,11 +529,8 @@ DN_TEST (ddcmp, a_restart_request_is_obeyed_and_the_circuit_comes_back)
             && b.routing ()->adjacency_count () == 1;
     }));
 
-    // Ask one end's datalink to restart, exactly as Port::restart does.
-    // The adjacency the restart replaces is remembered rather than watched
-    // for a zero count: over loopback the whole cycle can finish between
-    // two polls, and a new adjacency object is the durable evidence that
-    // the circuit really went down and came back.
+    // Request a restart as Port::restart does.  Check for a new adjacency
+    // object, since the down/up cycle can complete between polls.
     routing::AdjacencyPtr before = a.routing ()->find_adjacency (
         Nodeid::parse ("1.2"));
     DN_ASSERT (before != nullptr);
@@ -580,11 +551,8 @@ DN_TEST (ddcmp, a_restart_request_is_obeyed_and_the_circuit_comes_back)
 
 DN_TEST (ddcmp, a_bad_device_string_costs_its_circuit_and_no_more)
 {
-    // A device nobody can make sense of must cost that circuit and
-    // nothing else.  The first version of this test gave an endnode a
-    // single bad circuit and expected the node to start; it does not, and
-    // it should not -- an endnode with no circuit has nothing to be.  The
-    // property worth having is that the *other* circuits survive.
+    // A bad device string loses that circuit only; other circuits still come
+    // up.
     Config c = Config::from_string (
         "routing 1.1 --type l1router\nnode 1.1 NODEA\n"
         "circuit good-0 Multinet 127.0.0.1:27811:connect\n"
@@ -597,10 +565,7 @@ DN_TEST (ddcmp, a_bad_device_string_costs_its_circuit_and_no_more)
 
 DN_TEST (ddcmp, two_nodes_come_up_over_a_tcp_ddcmp_circuit)
 {
-    // TCP is a byte stream, so unlike UDP there is framing to do: the
-    // receiver hunts for a header that passes its own CRC and then reads
-    // the payload that header describes.  Both ends listen and dial at
-    // once and the first connection wins, so neither is told which it is.
+    // DDCMP over TCP.  Both ends listen and connect; the first connection wins.
     int pa = 27821, pb = 27822;
     Config ca = Config::from_string (
         "routing 1.1 --type l1router\nnode 1.1 NODEA\nnode 1.2 NODEB\n"
@@ -626,9 +591,7 @@ DN_TEST (ddcmp, two_nodes_come_up_over_a_tcp_ddcmp_circuit)
 
 DN_TEST (ddcmp, a_stream_receiver_frames_on_the_header_crc)
 {
-    // The framing rule, exercised the way a stream meets it: rubbish, then
-    // a real message.  find_header is what the TCP receive path slides
-    // along the stream with, one byte at a time.
+    // Stream framing: garbage followed by a valid message.
     Bytes stream;
     // Rubbish that contains all three start bytes, so framing on the byte
     // alone would pick the wrong place and read a length out of noise.
@@ -654,20 +617,14 @@ DN_TEST (ddcmp, a_stream_receiver_frames_on_the_header_crc)
 
 DN_TEST (ddcmp, the_telnet_device_form_is_accepted)
 {
-    // Telnet is TCP with the all-ones byte doubled, so that a DDCMP
-    // message containing one is not read as a telnet command.  SIMH uses
-    // it for terminal ports that are not in raw mode.
+    // Telnet mode doubles 0xff bytes.
     DdcmpDevice d = DdcmpDevice::parse ("telnet:1:host:2");
     DN_ASSERT (d.mode == DdcmpDevice::Mode::telnet);
 }
 
 // --------------------------------------------------------------- serial
 //
-// A serial line is the medium DDCMP was written for, and the one where
-// nothing underneath does any of the work.  Two pseudo-terminals with a
-// thread copying bytes between them stand in for the wire: no socat, no
-// hardware, and the same code path a real UART takes -- open the tty, set
-// it raw at 8N1, frame the stream by header CRC.
+// Two pseudo-terminals with a thread copying bytes between them.
 
 namespace {
 
@@ -760,9 +717,7 @@ DN_TEST (ddcmp, two_nodes_come_up_over_a_serial_line)
 
 DN_TEST (ddcmp, an_unsupported_serial_speed_is_refused)
 {
-    // A line running at a speed termios has no name for would be set to
-    // whatever it was already at, and the result is noise that looks
-    // exactly like a cable fault.  Better to refuse the configuration.
+    // Unsupported speeds are rejected.
     DN_ASSERT_THROWS (std::invalid_argument,
                       Ddcmp::create (nullptr, "x", "serial:/dev/null:12345"));
 }

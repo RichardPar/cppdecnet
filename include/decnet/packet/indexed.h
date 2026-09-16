@@ -1,26 +1,16 @@
-// decnet/packet/indexed.h -- code dependent packet class lookup.
+// decnet/packet/indexed.h -- packet class lookup by code.
 //
-// Port of packet.Indexed / packet.IndexedPacket and the "indexer"
-// metaclass.  A family of packet formats shares a header; a field in that
-// header says which format this is.  the Python registers each subclass in a
-// class index at class creation time and picks the class straight from the
-// raw buffer before parsing.
-//
-// C++ has no metaclass hook, so registration is explicit:
+// Port of packet.Indexed, packet.IndexedPacket and the indexer metaclass.
+// Packet families share a header, and a header field selects the class.
+// Registration is explicit:
 //
 //     DN_REGISTER_PACKET_MASKED (RoutingPacketBase, ShortData, 0x02, 0xc7);
 //
-// This is the one place the port is much more verbose than the Python.
-// Two properties of the mechanism are easy to miss and neither is
-// optional:
-//
-//  * masked registration -- a class claims every key whose masked bits
-//    match.  Routing needs it because the flags byte mixes packet type
-//    with per-packet bits.
-//  * nested indexes -- the class found by the first lookup can itself be
-//    the root of a second index on a different field.  PtpInit34 (keyed on
-//    the version byte at offset 6) and P2StartBase (keyed on starttype)
-//    both do this.
+//  * masked registration: a class claims every key whose masked bits
+//    match.  Used by routing, where the flags byte mixes type and flags.
+//  * nested indexes: a registered class can be the root of a second index
+//    on another field, e.g. PtpInit34 (version byte at offset 6) and
+//    P2StartBase (starttype).
 
 #ifndef DECNET_PACKET_INDEXED_H
 #define DECNET_PACKET_INDEXED_H
@@ -54,7 +44,7 @@ public:
         const char  *name    = "";
     };
 
-    // limit is the size of the Python's nlist (n) index; zero means the index
+    // limit is the size of PyDECnet's nlist (n) index; zero means the index
     // is a dictionary with no range check.
     PacketIndex (KeyFn keyfn, std::size_t limit) noexcept
         : keyfn_ (keyfn), limit_ (limit) {}
@@ -144,11 +134,9 @@ private:
 template <typename Root>
 class Indexed {
 public:
-    // Every class in the family, including the roots of nested index
-    // levels, decodes to a pointer of this type -- which is why a nested
-    // level is a PacketIndex over the same Root, differing only in the
-    // field its key function reads.  In the Python this falls out of
-    // PtpInit34 being both an index root and a RoutingPacketBase subclass.
+    // All classes in the family, including nested index roots, decode to this
+    // pointer type.  A nested level is a PacketIndex over the same Root with a
+    // different key function.
     using family_root = Root;
 
     virtual ~Indexed () = default;
@@ -160,7 +148,7 @@ public:
     virtual const char *packet_name () const noexcept = 0;
 
     // Pick the class from the buffer, build it and parse.  Throws
-    // DecodeError, like the Python version.
+    // DecodeError, like PyDECnet.
     static std::unique_ptr<Root> parse_indexed (ByteView buf)
     {
         std::unique_ptr<Root> p = Root::index ().create (buf);
@@ -202,10 +190,9 @@ struct IndexedBody : Base, Packet<Derived, E> {
 
 }   // namespace decnet::packet
 
-// Declare a family root's index.  Put this in the root's class body; the
-// index is a function local static so that registrations from any
-// translation unit find it already constructed, whatever the static
-// initialisation order turns out to be.
+// Declare a family root's index, in the root's class body.  The index is a
+// function local static, so it is constructed before any registration
+// regardless of initialisation order.
 #define DN_PACKET_INDEX(Root, limit)                                          \
     static ::decnet::packet::PacketIndex<Root> &index ()                      \
     {                                                                         \
@@ -214,19 +201,13 @@ struct IndexedBody : Base, Packet<Derived, E> {
         return idx;                                                           \
     }
 
-// The same, for a family whose members live in a static library.
+// The same, for a family whose members are in a static library.
 //
-// Static initializers cannot be relied on there.  The linker pulls in an
-// archive member only when something already needed references it, so a
-// translation unit that exists purely to register packet classes may never
-// be linked, and its registrations never run.  The symptom is a family
-// that decodes fine in one program and not in another, depending on what
-// else each happens to call.
-//
-// regfn is a function in the same translation unit as the registrations.
-// Naming it here gives the linker the reference it needs, and the guarded
-// static runs it once before the first lookup.  Registration must use
-// raw_index(), not index(), or it recurses into its own guard.
+// The linker only includes archive members that are referenced, so static
+// initialisers in a registration-only translation unit may never run.
+// regfn is a function in the registration unit; naming it here pulls it in
+// and runs it once before the first lookup.  Registrations must use
+// raw_index(), not index(), to avoid recursion.
 #define DN_PACKET_INDEX_REGISTERED(Root, limit, regfn)                        \
     static ::decnet::packet::PacketIndex<Root> &raw_index ()                  \
     {                                                                         \

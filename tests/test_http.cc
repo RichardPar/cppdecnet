@@ -1,11 +1,7 @@
 // tests/test_http.cc -- the monitoring pages.
 //
-// Two kinds of test.  Most drive Server::serve directly, which is the page
-// builder without a socket in the way, so a failure points at the page
-// rather than at the network.  The last one goes over a real TCP
-// connection to a running node, because that is the part the others cannot
-// check: the helper thread, the hand-off to the node's thread, and the
-// response actually reaching a client.
+// Most tests call Server::serve directly.  The last one uses a real TCP
+// connection to a running node.
 
 #include "harness.h"
 
@@ -128,13 +124,8 @@ DN_TEST (http, the_information_level_is_selectable)
 
 DN_TEST (http, counters_are_rendered_name_first_like_parameters)
 {
-    // The formatter gives two shapes: a parameter is "Name = value", a
-    // counter is the count right aligned and then its description, because
-    // that is how NCP prints a counter block.  A page wants both as name
-    // and value, in that order, or the columns disagree with each other.
-    //
-    // Splitting every line on "=" made a counter come out as a name of
-    // "0 Bytes received" with an empty value.  This is that bug.
+    // Parameters are "Name = value"; counters are the count then the
+    // description.  Both must come out as name and value.
     Config c = Config::from_string (conf);
     Node n (c);
     Server s (&n, 0);
@@ -148,9 +139,7 @@ DN_TEST (http, counters_are_rendered_name_first_like_parameters)
 
 DN_TEST (http, the_node_page_hides_the_unreachable_thousand)
 {
-    // A router's node list is every address in its routing table.  Almost
-    // all of them are "Unreachable" and nameless, and a page of a thousand
-    // of those buries the handful that mean something.
+    // Unreachable unnamed nodes are hidden by default.
     Config c = Config::from_string (
         "routing 1.1 --type l1router\n"
         "node 1.1 NODEA\nnode 1.9 FRIEND\n"
@@ -251,10 +240,7 @@ DN_TEST (http, a_page_is_served_over_a_real_connection)
 
     Server *srv = nullptr;
     (void) srv;
-    // The node owns the server; ask it which port was bound by connecting
-    // to the one the configuration produced.  With --http-port 0 the
-    // server rewrites its own port, so go through a fresh server of our
-    // own to keep the test independent of Node's internals.
+    // Use a separate server so the test does not depend on Node internals.
     Server s (&n, 0);
     s.start ();
     DN_ASSERT (s.port () != 0);

@@ -2,16 +2,8 @@
 
 namespace decnet::routing {
 
-// Register every routing packet class.
-//
-// In the Python these are class attributes the metaclass picks up as each
-// class is defined.  Here they are one explicit function, called once
-// before the first lookup, because static initializers in a static library
-// only run if the linker had another reason to pull the object file in --
-// see DN_PACKET_INDEX_REGISTERED.
-//
-// The masks matter: the flags byte mixes the packet type with per-packet
-// bits, so a class claims every value whose type bits match.
+// Register all routing packet classes.  See DN_PACKET_INDEX_REGISTERED.
+// Masks are needed because the flags byte mixes type and flag bits.
 void register_routing_packets ()
 {
     auto &idx = RoutingPacketBase::raw_index ();
@@ -33,10 +25,7 @@ void register_routing_packets ()
     idx.add_masked (0x05, 0x8f, &PtpHello::make,  "PtpHello");
     idx.add        (0x08,       &NopMsg::make,    "NopMsg");
 
-    // The routing messages.  Both code points go through a second lookup
-    // whose key is the checksum residue, because 0x07 is a Phase III
-    // message or a Phase IV level 1 message depending only on which seed
-    // makes its checksum come out right.
+    // Routing messages use a nested lookup keyed on the checksum residue.
     idx.add_nested_masked (0x07, 0x8f, &P34Routing::index (), "P34Routing");
     P34Routing::index ().add (0xfffe, &L1Routing::make,       "L1Routing");
     P34Routing::index ().add (0xffff, &PhaseIIIRouting::make, "PhaseIIIRouting");
@@ -58,9 +47,8 @@ const char *ntype_string (unsigned t) noexcept
 
 bool PtpHello::testdata_valid () const noexcept
 {
-    // the Python matches the field against ^\252*$, so an empty field passes
-    // too.  Anything else means the neighbour is confused or the link is
-    // corrupting data, and the circuit is taken down.
+    // Test data must be all 0252 (empty allowed); otherwise the circuit is
+    // taken down.
     for (std::uint8_t b : testdata)
         if (b != HELLO_FILL) return false;
     return true;

@@ -1,26 +1,15 @@
 // decnet/datalink/ethernet.h -- Ethernet circuits.
 //
-// Port of ethernet.py.  Three ways to reach a LAN, matching the Python's
-// device syntax:
+// Port of ethernet.py.  Device strings:
 //
-//   udp:<localport>:<host>:<remoteport>   Ethernet frames in UDP datagrams,
-//   bridge:<same>                         to Johnny Billquist's bridge or
-//                                         directly to another node
-//   tap:/dev/tapN                         a TAP device
-//   pcap:<interface>                      a real interface, if libpcap is
-//                                         available (make features says)
+//   udp:<localport>:<host>:<remoteport>   Ethernet frames in UDP datagrams
+//   bridge:<same>                         same as udp
+//   tap:/dev/tapN                         TAP device
+//   pcap:<interface>                      real interface, if libpcap is
+//                                         available
 //
-// The UDP form is the one that needs no privilege and no kernel device, so
-// it is what the tests use: two nodes pointed at each other are a
-// degenerate two station LAN, which is enough to exercise everything the
-// routing sublayer above does.
-//
-// The pcap form is the one that reaches real hardware.  It needs
-// CAP_NET_RAW, and it does not change the interface's hardware address --
-// it cannot -- so it sends frames whose source is the DECnet address
-// AA-00-04-00-xx-xx while the interface keeps its own.  Everything on the
-// segment is captured and filtered, in the kernel where it can be and in
-// software where it cannot.
+// pcap needs CAP_NET_RAW.  It sends with the DECnet address
+// AA-00-04-00-xx-xx as source without changing the interface address.
 
 #ifndef DECNET_DATALINK_ETHERNET_H
 #define DECNET_DATALINK_ETHERNET_H
@@ -54,15 +43,9 @@ public:
     void open () override;
     void close () override;
 
-    // Every concrete Ethernet class must call this from its own
-    // destructor.
-    //
-    // The receive thread runs receive_loop(), which is the derived class's
-    // code operating on the derived class's members.  By the time the base
-    // destructor runs, that object no longer exists -- so stopping the
-    // thread there would be far too late, and calling close() there reaches
-    // a pure virtual.  Stopping it in the derived destructor, while the
-    // derived object is still whole, is the only correct place.
+    // Must be called from each concrete class's destructor.  The receive
+    // thread runs derived class code, so it has to be stopped before the
+    // derived object is destroyed.
     void shutdown ();
 
     static std::unique_ptr<Datalink> create (Element *owner,
@@ -111,14 +94,11 @@ private:
     HostAddress   dest_;
 };
 
-// A real interface, through libpcap.  Port of ethernet._PcapEth.
+// A real interface via libpcap.  Port of ethernet._PcapEth.
 //
-// Two things about this are worth knowing.  The interface is opened
-// promiscuously, because the addresses DECnet answers to -- the derived
-// AA-00-04-00-xx-xx and the routing multicasts -- are not the ones the
-// interface was configured with, so the card would filter our own traffic
-// out.  And capture is restricted to inbound frames, because otherwise
-// every frame we transmit is handed straight back to us.
+// Opened in promiscuous mode, since the DECnet addresses are not the
+// interface's own.  Capture is limited to inbound frames so our own
+// transmissions are not received.
 #if DN_HAVE_PCAP
 class PcapEthernet : public Ethernet {
 public:
@@ -131,9 +111,8 @@ public:
     // Rebuild the kernel filter when a port's addresses change.
     void filter_changed () override;
 
-    // The hardware address of a named interface, or a null address if it
-    // has none or does not exist.  Public because it is worth testing on
-    // its own: everything else here needs a live capture handle.
+    // Hardware address of a named interface, or a null address if it has none
+    // or does not exist.
     static Macaddr interface_address (const std::string &ifname);
 
 protected:

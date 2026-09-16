@@ -135,9 +135,8 @@ Entity Entity::decode_body (std::uint8_t kind, Decoder &d)
     case none:
         return make_none ();
     default: {
-        // Every other code, known or not, is a counted string.  DECnet/E
-        // sends circuit events with a line entity, so a reader that
-        // insisted on the code it expected would reject them.
+        // Other codes are counted strings.  DECnet/E sends circuit events with a
+        // line entity.
         std::size_t len = d.byte ();
         ByteView b = d.raw (len);
         return make_string (kind,

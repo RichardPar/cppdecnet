@@ -1,10 +1,4 @@
-// Objects implemented as separate processes.
-//
-// The protocol is deliberately byte-compatible with the Python's, so an
-// application written for the Python runs unchanged here.  These tests use a
-// small program written inline rather than depending on a the Python
-// checkout; the interop test that runs the Python's own
-// applications/mirror.py is done by hand and recorded in the README.
+// Objects run as separate processes, using a small inline program.
 
 #include "harness.h"
 
@@ -56,9 +50,8 @@ bool wait_until (P pred, std::chrono::milliseconds timeout
     return pred ();
 }
 
-// A mirror written the way an application for the Python is written: read
-// JSON objects from standard input, write them to standard output.  This
-// is the same shape as the Python's applications/mirror.py, deliberately.
+// A mirror in the style of applications/mirror.py: JSON objects on stdin
+// and stdout.
 const char *const mirror_program = R"PROG(#!/usr/bin/env python3
 import sys, json
 encode = json.JSONEncoder ().encode
@@ -205,10 +198,8 @@ DN_TEST (process, a_configured_object_replaces_the_builtin)
         "object --number 25 --name MIRROR --file " + prog + "\n");
     Node n (c);
     DN_ASSERT (n.session ()->find_object (25) != nullptr);
-    // Object 25 exists once, not twice: the configured program replaced
-    // the built-in rather than being refused.  The other two are the ones
-    // registered by default: 19, the network management listener, and 26,
-    // the event logger's receiving end.
+    // Object 25 appears once: the configured program replaced the built-in.
+    // The others are 19 (NML) and 26 (event logger).
     DN_ASSERT_EQ (n.session ()->object_count (), 3u);
     DN_ASSERT (n.session ()->find_object (19) != nullptr);
     DN_ASSERT (n.session ()->find_object (26) != nullptr);
@@ -241,10 +232,7 @@ DN_TEST (process, mirror_loop_through_a_subprocess)
 
 DN_TEST (process, every_byte_value_survives_the_pipe)
 {
-    // The protocol tunnels bytes through JSON strings, and the mirror
-    // sends them straight back, so this exercises both directions -- and
-    // NUL in particular, which is what a C-string based JSON library
-    // cannot carry.
+    // All byte values, including NUL, in both directions.
     std::string prog = write_program ("mirror", mirror_program);
     Pair p ("object --number 25 --name MIRROR --file " + prog + "\n");
     p.start ();

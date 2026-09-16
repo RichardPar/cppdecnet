@@ -1,23 +1,11 @@
 // decnet/http/server.h -- the monitoring pages.
 //
-// Port of http.py and html.py.  the Python serves a small set of read only
-// pages describing what the node is doing: the layers, the circuits, the
-// adjacencies, the routing table and the counters.
+// Port of http.py and html.py.  Read only pages showing circuits,
+// adjacencies, nodes and counters.
 //
-// Two decisions worth stating, because they shape the rest.
-//
-// The data comes from NICE.  Every layer already answers
-// `nice_read (request, replies)` for the network management protocol, and
-// that is the same information these pages want.  Asking NICE rather than
-// reaching into each layer means one description of what a circuit or a
-// node looks like, not two that drift apart -- and anything the monitoring
-// pages can show, a remote NCP can read, by construction.
-//
-// The gathering runs on the node's thread.  A helper thread does the
-// blocking socket work and posts a callback to collect the data, exactly
-// as the datalinks do for their receive paths.  Layer state is still
-// touched from one thread only, which is the rule the whole design rests
-// on.
+// Page data comes from each layer's nice_read, so the pages show the same
+// information NCP can read.  The server thread does socket I/O and posts a
+// callback to gather data on the node thread.
 
 #ifndef DECNET_HTTP_SERVER_H
 #define DECNET_HTTP_SERVER_H
@@ -73,9 +61,7 @@ public:
     // port 0 and lets the system choose.
     unsigned port () const noexcept { return port_; }
 
-    // Exposed for testing: turn a request into a response without a socket
-    // in the way.  Runs on the caller's thread, so a test drives it
-    // directly while the server thread is not running.
+    // Turn a request into a response without a socket.  For tests.
     Response serve (const Request &req);
 
 private:

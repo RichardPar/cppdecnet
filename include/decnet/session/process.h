@@ -1,18 +1,11 @@
-// decnet/session/process.h -- objects implemented as separate processes.
+// decnet/session/process.h -- objects run as separate processes.
 //
-// Port of session.ProcessConnector.  An object declared with --file is a
-// program the daemon runs, talking to it over three pipes: one JSON object
-// per line to its standard input carrying what session control has for it,
-// one per line back on its standard output carrying what it wants done,
-// and its standard error going to the log.
+// Port of session.ProcessConnector.  An object declared with --file is run
+// as a child process.  Session control sends JSON lines on its stdin, the
+// program replies on stdout, and stderr goes to the log.  Compatible with
+// PyDECnet applications.
 //
-// The protocol is byte-compatible with the Python's, so an application
-// written for the Python runs unchanged here.  Verified by running
-// the Python's own applications/mirror.py as an object of this daemon.
-//
-// One process serves one connection.  That is what the Python does, since it
-// builds a connector per inbound connect, and it is why an application
-// like mirror.py exits when its connection closes.
+// One process per connection.
 
 #ifndef DECNET_SESSION_PROCESS_H
 #define DECNET_SESSION_PROCESS_H
@@ -42,9 +35,8 @@ public:
     void interrupt_received (SessionConnection &c, ByteView data) override;
     void disconnected (SessionConnection &c, unsigned reason) override;
 
-    // Whether the program is running.  A program that will not start is
-    // reported to the far end as "no such object", since from its point of
-    // view that is exactly what happened.
+    // Whether the program is running.  A program that fails to start is
+    // reported as "no such object".
     bool started () const noexcept { return pid_ > 0; }
 
 private:
@@ -54,9 +46,7 @@ private:
     // Send one message to the program.
     void send (const json::Object &o);
 
-    // Reader threads.  Neither touches layer state directly: each posts a
-    // callback to the node, so everything the application asks for happens
-    // on the node thread like any other work.
+    // Reader threads.  They post callbacks to the node thread.
     void read_stdout ();
     void read_stderr ();
 

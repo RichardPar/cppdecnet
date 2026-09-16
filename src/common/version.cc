@@ -21,10 +21,7 @@ std::string ident ()
 
 std::string banner ()
 {
-    // This string is what the node tells other nodes about itself, so it
-    // stays short.  The copyright is the port author's; the credit is to
-    // the author of the Python this was ported from, whose own copyright
-    // and licence are in LICENSE.
+    // Kept short, since it is sent to other nodes.
     return ident () + " © " + cyear + " by " + authors
         + "; after Paul Koning's Python";
 }

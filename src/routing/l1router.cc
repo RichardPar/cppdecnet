@@ -34,14 +34,8 @@ L1Router::L1Router (Element *parent, const Config &config)
     endnodes_ = std::make_unique<EndnodesRouteInfo> (maxnodes_);
     selfadj_ = std::make_unique<SelfAdjacency> (this, nodeid_, L1ROUTER);
 
-    // One update process per circuit.  A level 2 router adds a second one
-    // per circuit for the area table; see L2Router.
-    //
-    // A broadcast circuit uses a much shorter period.  Neighbours on a LAN
-    // come up independently, so a triggered update is often sent while the
-    // far end's adjacency is still forming; the periodic update is what
-    // recovers from that.  At the point to point period of ten minutes,
-    // that miss looks like a dead route.
+    // One update process per circuit (L2Router adds one for the area table).
+    // Broadcast circuits use the shorter --bct1 period.
     for (PtpCircuit *c : circuit_order_)
         updates_[c] = std::make_unique<Update> (c, this, ptp_t1_, 1);
     for (LanCircuit *c : lan_order_)
@@ -149,9 +143,8 @@ void L1Router::routing_message (const RoutingMessage &msg, Adjacency *from,
 
 namespace {
 
-// The "Packet header" event parameter: the flag byte, the two addresses and
-// the visit count, as a coded multiple.  This is what tells whoever reads
-// the log which packet was dropped.
+// "Packet header" event parameter: flags, addresses and visit count, as a
+// coded multiple.
 nice::Value packet_header (const ShortData &pkt)
 {
     std::uint8_t flags = static_cast<std::uint8_t> (
@@ -165,9 +158,7 @@ nice::Value packet_header (const ShortData &pkt)
 
 }   // namespace
 
-// Report that a destination came into or went out of reach.  entity is the
-// thing that changed -- a node for level 1, an area for level 2 -- and the
-// event is the matching one of the two reachability change events.
+// Report a reachability change for a node (level 1) or area (level 2).
 void L1Router::reach_event (events::EventId ev, nice::Entity entity,
                             bool reachable)
 {
@@ -192,9 +183,7 @@ void L1Router::compute (RouteMatrix &m, unsigned first, unsigned last,
 
         auto consider = [&] (const RouteInfo &r) {
             Adjacency *a = r.adjacency (i);
-            // Lowest cost wins.  On a tie, the higher neighbour address
-            // wins, which is what makes every router agree on the same
-            // route rather than oscillating between two equal ones.
+            // Lowest cost wins; ties go to the higher neighbour address.
             if (r.cost[i] < bestc
                 || (r.cost[i] == bestc && a && besta
                     && a->nodeid () > besta->nodeid ())) {
@@ -252,9 +241,7 @@ Adjacency *L1Router::find_oadj (Nodeid dest, bool &out_of_range) const
     unsigned area = dest.area ();
     unsigned t = dest.tid ();
     if (area != homearea ()) {
-        // Out of area traffic goes to the nearest level 2 router, which
-        // this table holds at entry zero.  A level 1 router that knows of
-        // none simply cannot reach it.
+        // Out of area traffic goes to entry zero, the nearest level 2 router.
         t = 0;
     }
     if (t >= l1_.oadj.size ()) {
@@ -321,9 +308,8 @@ void L1Router::forward (ShortData &pkt)
         }
     }
 
-    // Undeliverable: unreachable, out of range, or too many visits.  If the
-    // sender asked for it back and it is not already on its way back, turn
-    // it round; otherwise drop it and count why.
+    // Undeliverable: unreachable, out of range, or too many visits.  Return to
+    // sender if requested and not already returning; otherwise drop and count.
     if (pkt.rqr && !pkt.rts) {
         std::swap (pkt.dstnode, pkt.srcnode);
         pkt.rts = true;
@@ -348,9 +334,8 @@ void L1Router::forward (ShortData &pkt)
         ev = { 4, 1 };                      // node unreachable packet loss
     }
     if (Node *n = node ()) {
-        // PORT: the architecture names the circuit the packet arrived on.
-        // forward() is not told which circuit that was, so the event
-        // carries only the packet header.  See NOTDONE.md.
+        // PORT: the event should name the arrival circuit, which forward() does
+        // not have.  See NOTDONE.md.
         events::Event e { ev, nice::Entity::make_none () };
         e.param (events::param::packet_header, packet_header (pkt));
         n->logevent (e);
@@ -463,14 +448,7 @@ void L2Router::compute_areas (unsigned first, unsigned last)
                               reachable);
              });
 
-    // Re-derive the attached flag: can we reach any area other than our
-    // own?
-    //
-    // This is the DNA Routing 2.0.0 definition.  the Python notes it is not
-    // the best one: it makes every area router look attached as soon as
-    // the area is attached at all, so out of area traffic can be drawn to
-    // a router with no out of area link, which then has to pass it on.
-    // Following the spec keeps us interoperable.
+    // Attached if any other area is reachable (DNA Routing 2.0.0 definition).
     bool attached = false;
     for (unsigned i = 1; i <= maxarea_; ++i)
         if (i != homearea () && l2_.oadj[i]) { attached = true; break; }
@@ -479,9 +457,8 @@ void L2Router::compute_areas (unsigned first, unsigned last)
     DN_DEBUG ("level 2 attached state changed to {}", attached);
     attached_ = attached;
 
-    // Destination 0 in the level 1 table is "nearest level 2 router".  An
-    // attached area router advertises itself as being that, at no cost; a
-    // detached one withdraws the claim.
+    // Destination 0 in the level 1 table is "nearest level 2 router".
+    // Attached area routers advertise it at zero cost.
     auto it = l1_.columns.find (selfadj_.get ());
     if (it != l1_.columns.end () && it->second) {
         RouteInfo &self = *it->second;
@@ -603,19 +580,9 @@ void Update::send_now ()
     std::fill (srm_.begin (), srm_.end (), false);
     any_srm_ = false;
 
-    // What to set the timer to depends on which kind of update that was.
-    //
-    // A periodic one restarts the full interval, and is the thing the
-    // interval is about.  A triggered one must not: restarting t1 after
-    // every send means a circuit whose topology keeps changing pushes its
-    // periodic sweep back indefinitely and never sends one, which is what
-    // this used to do.  The sweep is what recovers from a lost triggered
-    // update, so losing it is not harmless.
-    //
-    // the Python schedules the next one at the time elapsed since the last
-    // full update, capped at t1 (Update.dispatch).  The effect is that a
-    // full update follows a triggered one within at most another t1, so
-    // the sweep happens every t1 to 2*t1 however busy the circuit is.
+    // A full update restarts the t1 interval.  After a triggered update the
+    // next is scheduled relative to the last full update, capped at t1, so
+    // periodic updates are not postponed (Update.dispatch).
     double delta = t1_;
     auto now = std::chrono::steady_clock::now ();
     if (triggered) {

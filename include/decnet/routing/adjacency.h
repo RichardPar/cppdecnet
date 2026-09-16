@@ -1,13 +1,11 @@
-// decnet/routing/adjacency.h -- routing layer adjacencies.
+// decnet/routing/adjacency.h -- routing adjacencies.
 //
-// Port of adjacency.py.  An adjacency is what the routing layer knows
-// about one neighbour: its address, type, block size and version, plus the
-// listen timer that takes it down if the neighbour stops talking.
+// Port of adjacency.py.  An adjacency holds a neighbour's address, type,
+// block size and version, and the listen timer that takes it down when the
+// neighbour goes silent.
 //
-// Ownership is where this differs from the Python.  An adjacency is
-// referenced by its circuit, by the routing layer's table and by in-flight
-// work items at once, so it is held by shared_ptr.  This is the case where
-// Python's collector was doing real work for us.
+// Adjacencies are shared_ptr: the circuit, the routing table and pending
+// work items all refer to them.
 
 #ifndef DECNET_ROUTING_ADJACENCY_H
 #define DECNET_ROUTING_ADJACENCY_H
@@ -60,9 +58,8 @@ public:
     // adjacency, which costs nothing to reach.
     unsigned circuit_cost () const noexcept;
 
-    // Bring the adjacency up: start the listen timer and tell the routing
-    // layer.  Phase II neighbours are exempt from the timer, since they are
-    // not required to send anything periodically.
+    // Bring the adjacency up: start the listen timer and notify routing.
+    // Phase II neighbours have no listen timer.
     void up ();
     void down ();
 
@@ -88,9 +85,8 @@ protected:
     bool          up_ = false;
 };
 
-// The routing architecture shows this node itself as column 0 of the
-// routing matrix, so that a packet addressed to us resolves to an output
-// adjacency like any other destination.  Port of routing.SelfAdj.
+// This node as column 0 of the routing matrix, so packets for us resolve
+// to an adjacency like any other.  Port of routing.SelfAdj.
 class SelfAdjacency : public Adjacency {
 public:
     SelfAdjacency (BaseRouter *router, Nodeid id, std::uint8_t ntype);

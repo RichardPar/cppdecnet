@@ -1,21 +1,14 @@
-// src/nice/nml.cc -- the network management listener, object 19.
+// src/nice/nml.cc -- network management listener, object 19.
 //
-// Port of modules/nml.py.  NCP on another node connects here and sends
-// NICE requests; this decodes each one, collects the answer from the
-// layers through Node::nice_read, and sends the replies back.
+// Port of modules/nml.py.  Decodes NICE requests, collects answers through
+// Node::nice_read and sends replies.
 //
-// The reply framing is the fiddly part, and it is worth stating because
-// the shape of the code follows it.  A request about exactly one thing is
-// answered with one reply carrying "success".  A request about several --
-// "known circuits", or one circuit with three adjacencies -- is answered
-// with a "multiple items" reply, then the items, then an end marker.
-// Within that, the replies about one entity travel as a group: all but the
-// last carry "more for this entity", which is how NCP knows to print them
-// under one heading rather than as separate entries.
+// A request for one entity gets a single "success" reply.  A request that
+// produces several replies gets "multiple items", the replies, then an end
+// marker.  Replies for the same entity are grouped with "more for this
+// entity" on all but the last.
 //
-// PORT: only read information and loop node are implemented, as nml.h
-// says.  Set and zero answer "privilege violation" because this listener
-// is read only; everything else answers "unrecognized function".
+// PORT: only READ INFORMATION and LOOP NODE.  See nml.h.
 
 #include "decnet/nice/nml.h"
 
@@ -48,9 +41,8 @@ unsigned mirror_detail (unsigned reason)
 
 class NmlApplication;
 
-// The application on the loop connection -- our end of the link to the
-// far node's MIRROR.  It does nothing but forward what happens to the
-// listener, which owns the state machine for the loop.
+// Application for the loop connection to the remote MIRROR.  Forwards
+// events to the listener.
 class LoopApplication : public session::Application {
 public:
     explicit LoopApplication (NmlApplication *nml) noexcept : nml_ (nml) {}
@@ -72,9 +64,7 @@ public:
 
     ~NmlApplication () override
     {
-        // The loop connection outlives this object only if something went
-        // very wrong, but if it does, make sure it cannot call back into
-        // a destroyed listener.
+        // Detach from the listener in case the connection outlives it.
         if (loop_app_) loop_app_->orphan ();
     }
 
@@ -82,10 +72,8 @@ public:
 
     void connect_received (session::SessionConnection &c, ByteView data) override
     {
-        // The connect data is the NICE version the far end speaks.  No
-        // version at all means a Phase II NCP, which is a different
-        // protocol sharing this object number; we do not implement it, so
-        // the link is accepted and every request will be refused.
+        // Connect data is the NICE version.  No version means Phase II NCP, which
+        // is not supported; requests will be refused.
         phase2_ = data.empty ();
         if (phase2_) {
             DN_TRACE ("NICE connection from {} is Phase II, unsupported",
@@ -121,20 +109,12 @@ public:
         case fn_read: read (req); return;
         case fn_test: loop (req); return;
         case fn_set:
-            // Not implemented, and the Python does not implement it either:
-            // its nml falls through to "Unsupported NICE request" and
-            // answers -1.  Match that rather than claiming a privilege
-            // problem, because the two make NCP print different things and
-            // only one of them is true -- there is no privilege that would
-            // make this work.
+            // Not implemented, same as PyDECnet: "unrecognized function" (-1).
             send (NiceReply::error (rc_unrecognized_function));
             return;
         case fn_zero:
-            // Zeroing counters is a write, and refusing a write for want
-            // of authentication is exactly a privilege violation.  This is
-            // what the Python answers when its own read-only flag is set.
-            // See NOTDONE.md: the credentials a request carries are not
-            // authenticated, so nothing here may act on them.
+            // Writes are refused with "privilege violation", as PyDECnet does when
+            // read-only.  Credentials are not authenticated.  See NOTDONE.md.
             send (NiceReply::error (rc_privilege_violation));
             return;
         default:
@@ -228,9 +208,7 @@ private:
     {
         NiceRequest req = creq;
         if (req.permanent) {
-            // The permanent database is the one on disk that survives a
-            // restart.  There is no such thing here: the configuration
-            // file is it, and it is not writable through NICE.
+            // No permanent database; configuration is not writable via NICE.
             send (NiceReply::error (rc_unrecognized_function));
             return;
         }
@@ -241,9 +219,8 @@ private:
 
         auto groups = replies.sorted (req);
         if (groups.empty ()) {
-            // Nothing came back.  For a request about one specific entity
-            // that means the entity is not one we know; for a plural
-            // request it is a legitimate empty answer.
+            // No replies: unknown entity for a singular request, empty result for a
+            // plural one.
             if (req.entity.mult ()) {
                 send (NiceReply (rc_multiple));
                 send (NiceReply (rc_done));
@@ -291,7 +268,7 @@ private:
             return;
         }
 
-        // Argument validation, in the Python's order so the same bad request
+        // Argument validation, in PyDECnet's order so the same bad request
         // gets the same complaint.
         std::uint8_t fill = 0x55;
         unsigned badarg = 0;
@@ -309,10 +286,8 @@ private:
             return;
         }
 
-        // Which node to loop off.  A loop request is not a read, so it
-        // does not go through Node::nice_read and nothing has resolved a
-        // name into an address for us -- the entity arrives exactly as NCP
-        // sent it, and "LOOP NODE FOO" sends the name.
+        // Loop requests do not go through Node::nice_read, so resolve a node name
+        // here.
         Nodeid target = req.entity.id;
         if (req.entity.code > 0) {
             Nodeinfo *info = node_ ? node_->find_node (req.entity.name)

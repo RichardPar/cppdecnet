@@ -1,16 +1,9 @@
-// decnet/nice/entity.h -- the thing a NICE message or an event is about.
+// decnet/nice/entity.h -- NICE entities.
 //
-// Port of the entity classes at the top of nice_coding.py.  Network
-// management names five kinds of thing: a node, a line, a logging sink, a
-// circuit and a module, plus an area.  Every one of them is encoded as a
-// one byte kind followed by a body whose shape depends on the kind, and
-// every one of them formats as "Label = value".
-//
-// the Python gives each kind a class and indexes the classes on the code
-// byte, generating a class on the fly for a code it has not seen.  A kind
-// enumeration and a body that is either a string, a node or an area number
-// says the same thing with less machinery, and an unrecognised code needs
-// no class of its own: it keeps its number and formats as "Entity #9".
+// Port of the entity classes in nice_coding.py: node, line, logging,
+// circuit, module and area.  Each is encoded as a one byte kind followed
+// by a kind-specific body, and formats as "Label = value".  Unknown kinds
+// format as "Entity #n".
 
 #ifndef DECNET_NICE_ENTITY_H
 #define DECNET_NICE_ENTITY_H
@@ -26,10 +19,8 @@ namespace decnet::nice {
 using packet::Decoder;
 using packet::Encoder;
 
-// A node address that may carry the node's name, and may be flagged as the
-// executor -- the node the management request is talking to.  Port of
-// common.NiceNode.  The name length byte carries the executor flag in its
-// top bit, which is why this is not simply a Nodeid and a string.
+// Node address with optional name and executor flag.  Port of
+// common.NiceNode.  The executor flag is the top bit of the name length.
 struct NiceNode {
     Nodeid      id;
     std::string name;
@@ -84,9 +75,7 @@ public:
     // Just the value: "DMC-0", "2.5 (ARK)", "51".
     std::string value () const;
 
-    // A stable string identifying this entity, for use as a map key: the
-    // kind number and the value, so a circuit and a line of the same name
-    // are different keys.
+    // Unique key: kind and value.
     std::string key () const;
 
     // "Circuit = DMC-0".  Empty for the none entity, which is how an event
@@ -96,9 +85,8 @@ public:
     void encode (Encoder &e) const;
     static Entity decode (Decoder &d);
 
-    // The same without the leading kind byte.  A NICE reply does not carry
-    // one -- the request said which kind of entity it was asking about --
-    // while an event record does, which is why both forms exist.
+    // Encoding without the kind byte, as used in NICE replies.  Event records
+    // include it.
     void encode_body (Encoder &e) const;
     static Entity decode_body (std::uint8_t kind, Decoder &d);
 

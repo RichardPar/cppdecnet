@@ -1,19 +1,14 @@
 // decnet/common/statemachine.h -- state machine base class.
 //
-// Port of statemachine.py.  In Python a state is a bound method and the
-// action returns the next state, or None to stay put.  The C++ equivalent
-// is a pointer to member function paired with its name, so that ported
-// state functions read almost like their originals and trace output still
-// names states the way the Python's does:
+// Port of statemachine.py.  A state is a pointer to member function plus
+// its name, so trace output matches PyDECnet:
 //
 //     State Circuit::ds (Work &w) {
 //         if (is<DlUp> (w)) return DN_STATE (Circuit, ri);
-//         return nullptr;                     // Python's "return None"
+//         return nullptr;                     // stay in this state
 //     }
 //
-// State machines derive from Timer because, as the Python comment observes,
-// as a rule every state machine needs timeouts; a timer expiry is fed in as
-// just another input.
+// State machines derive from Timer; a timer expiry is just another input.
 
 #ifndef DECNET_COMMON_STATEMACHINE_H
 #define DECNET_COMMON_STATEMACHINE_H
@@ -29,9 +24,7 @@ namespace decnet {
 template <typename Derived>
 class StateMachine : public Timer {
 public:
-    // A state action's result: the next state, or an empty State to stay
-    // where we are.  The self reference is why this is a struct rather
-    // than a plain pointer to member typedef.
+    // A state action's result: the next state, or empty to stay.
     struct State {
         using Fn = State (Derived::*) (Work &);
 
@@ -49,7 +42,7 @@ public:
         { return a.fn == b.fn; }
     };
 
-    // The initial state is Derived::s0, exactly as in the Python version.
+    // The initial state is Derived::s0, exactly as in PyDECnet.
     StateMachine () noexcept : state_ (&Derived::s0, "s0") {}
 
     // Run the current state's action over one input.
@@ -85,7 +78,7 @@ public:
     virtual std::string statename () const
     { return std::string (Derived::class_name) + "<state: " + state_.name + ">"; }
 
-    // A timer expiry is an input like any other.  The Python version passes
+    // A timer expiry is an input like any other.  PyDECnet passes
     // a Timeout object to the state action; so do we.
     void timeout () override
     {
@@ -97,9 +90,7 @@ private:
     State state_;
 };
 
-// Spell a state constant: DN_STATE (Circuit, running) -> { &Circuit::running,
-// "running" }.  Keeping the name with the pointer is what lets trace output
-// match the Python original.
+// DN_STATE (Circuit, running) -> { &Circuit::running, "running" }.
 #define DN_STATE(cls, m) typename cls::State (&cls::m, #m)
 
 // The same, used inside the class itself where "typename" is not wanted.

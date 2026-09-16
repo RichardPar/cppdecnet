@@ -1,19 +1,15 @@
-// decnet/events/logger.h -- where event records go.
+// decnet/events/logger.h -- event sinks.
 //
-// Port of event_logger.py.  The architecture gives every sink its own
-// filter, and a filter is a set of event numbers, optionally qualified by
-// the entity the event is about.  An event is offered to every sink; each
-// one decides for itself.
+// Port of event_logger.py.  Each sink has a filter: a set of event
+// numbers, optionally qualified by entity.  Every event is offered to
+// every sink.
 //
-// There are three local sink types -- the console, a file, and the
-// monitoring interface -- and a remote sink, which is another node's event
-// logger reached over a logical link to object 26.  A remote sink is one
-// connection carrying up to three filters, because the record says which
-// of the far end's own sinks it is destined for.
+// Local sinks are console, file and monitor.  A remote sink is another
+// node's event logger, reached over a logical link to object 26; one
+// connection carries records for all three of the far end's sink types.
 //
-// The one subtlety is what happens when the far end is unreachable: events
-// queue, the queue is bounded, and when it fills the oldest entry becomes
-// an "events lost" record rather than being dropped silently.
+// While a remote sink is unreachable, events queue.  When the queue is full
+// an "events lost" record is queued instead.
 
 #ifndef DECNET_EVENTS_LOGGER_H
 #define DECNET_EVENTS_LOGGER_H
@@ -45,16 +41,12 @@ namespace decnet::events {
 // A set of event numbers.  Ordered so that formatting can collapse runs.
 using EventSet = std::set<EventId>;
 
-// Parse an event list: "3.1,4.1-12,5.2,4,7" or "*.*".  This accepts what
-// the Network Management specification calls an event-list, plus the
-// extension the Python allows of naming several classes in one list.  Throws
-// std::invalid_argument on anything else.
+// Parse an event list: "3.1,4.1-12,5.2,4,7" or "*.*".  Accepts the NM
+// spec event-list format plus PyDECnet's extension of several classes in
+// one list.  Throws std::invalid_argument on error.
 EventSet parse_events (const std::string &s);
 
-// Every event a filter may select: the ones this build can actually raise.
-// Filtering applies to locally generated events, so enabling one we never
-// generate would do nothing, and events belonging to other vendors'
-// implementations (classes 31 to 479) are excluded for the same reason.
+// All events a filter may select: those this build can raise.
 const EventSet &filterable_events ();
 
 class EventFilter {
@@ -112,9 +104,8 @@ protected:
     void writeevent (const Event &e, unsigned mask) override;
 };
 
-// A file of encoded records, each with a two byte little endian length in
-// front of it.  That is the RMS variable length record format, so the file
-// can be read on the operating systems this protocol came from.
+// File of encoded records, each preceded by a two byte little endian
+// length (RMS variable length record format).
 class LocalFile : public EventSink {
 public:
     LocalFile (Element *parent, std::string path);
@@ -150,12 +141,10 @@ private:
 
 // Another node's event logger, reached over a logical link to object 26.
 //
-// One connection carries records for all three of the far end's sink
-// types, so this holds three filters and stamps each record with the ones
-// that wanted it.  While the link is down records queue; the queue is
-// bounded, and when it fills the newest entry is replaced by an "events
-// lost" record, so the far end learns that there is a hole rather than
-// seeing a shorter history than really happened.
+// Holds a filter for each of the far end's sink types and marks each
+// record with the sinks that want it.  Records queue while the link is
+// down; when the queue is full the newest entry becomes an "events lost"
+// record.
 class RemoteSink : public EventSink, public Timer {
 public:
     RemoteSink (Element *parent, const LoggingConfig &config);
@@ -179,11 +168,8 @@ public:
 
     std::size_t queued () const noexcept { return queue_.size (); }
 
-    // Is the logical link to the far end open?  A sink with no link
-    // queues what it is given and retries the connect every conn_retry
-    // seconds, so "the event was raised" and "the event can travel" are
-    // half a minute apart in the worst case.  Exposed so a test can wait
-    // for the second rather than assume it follows the first.
+    // Is the logical link open?  Connects are retried every conn_retry
+    // seconds.
     bool connected () const noexcept { return conn_ != nullptr; }
 
 protected:
@@ -199,9 +185,7 @@ private:
     session::SessionConnection *conn_ = nullptr;
     bool         connecting_ = false;
     bool         stopped_ = false;
-    // True while send_events is working through the queue.  Sending is a
-    // synchronous call down the stack that can raise events of its own,
-    // and those come back here; see the comment on send_events.
+    // True while send_events is running.  See send_events.
     bool         sending_ = false;
 };
 
@@ -215,12 +199,8 @@ public:
     void start ();
     void stop ();
 
-    // Close the links to remote sinks.  A remote sink is an application
-    // sitting on session control, so it has to let go before session
-    // control and NSP are torn down under it -- the same reason session
-    // control stops before NSP does.  Local sinks keep working until
-    // stop(), so events raised while the layers below are shutting down
-    // still reach the console and the log file.
+    // Close links to remote sinks.  Called before session control and NSP
+    // stop.  Local sinks keep working until stop().
     void stop_remote ();
 
     void dispatch (Work &) override {}
@@ -228,9 +208,8 @@ public:
     // Offer a locally generated event to every sink.
     void logevent (const Event &e);
 
-    // A record that arrived from another node.  Filtering already happened
-    // at the source, so this goes straight to whichever local sinks the
-    // record itself asks for.
+    // A record received from another node.  Already filtered at the source,
+    // so it goes to the local sinks the record names.
     void logremoteevent (const Event &e);
 
     void register_monitor (LocalMonitor::Callback cb, const EventSet &events);
@@ -238,9 +217,7 @@ public:
     // The filter for a local sink type, for tests and for NCP.
     EventFilter *local_filter (const std::string &type);
 
-    // Answer the logging half of a NICE read.  Port of
-    // EventLogger.nice_read, which upstream leaves as a stub -- see the
-    // implementation for why this one does too.
+    // NICE read for logging.  Port of EventLogger.nice_read, a stub upstream.
     void nice_read (const nice::NiceRequest &req, nice::ReplyDict &resp);
 
     // The remote sink for a node name, for tests.
@@ -253,9 +230,8 @@ private:
     std::map<std::string, RemoteSink *>          remote_;
 };
 
-// The receiving half of remote logging: object 26, which another node
-// connects to in order to send us its event records.  It reads a record per
-// message and hands it to the local sinks the record asks for.
+// Object 26: receives event records from other nodes and passes them to
+// the local sinks.
 std::unique_ptr<session::Application> make_event_receiver (Node *node);
 
 }   // namespace decnet::events

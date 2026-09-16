@@ -64,7 +64,7 @@ std::vector<std::string> split_config_line (const std::string &line)
             continue;
         }
         if (c == '"' || c == '\'') { quote = c; in_word = true; continue; }
-        // A '#' outside quotes starts a comment, as in the Python's files.
+        // A '#' outside quotes starts a comment, as in PyDECnet's files.
         if (c == '#') break;
         if (c == ' ' || c == '\t') {
             if (in_word) { words.push_back (cur); cur.clear (); in_word = false; }
@@ -184,9 +184,7 @@ void Config::apply (ConfigLine line)
     }
 
     if (line.command == "http") {
-        // the Python's http command carries both ports; https is not offered
-        // here, so it is accepted and ignored rather than rejected, which
-        // keeps a real configuration file loading.
+        // --https-port is accepted and ignored.
         if (has (line, "http-port"))
             http_port_ = to_uint (opt (line, "http-port", empty), "http-port");
         return;
@@ -312,9 +310,8 @@ void Config::apply (ConfigLine line)
         return;
     }
 
-    // PORT: session, http, api, bridge, ... land here
-    // until their layer is ported.  Keeping them rather than erroring means
-    // a real pydecnet.conf still loads.
+    // PORT: commands for unported layers (bridge, api, ...) are kept so
+    // PyDECnet configuration files load.
     unhandled_.push_back (std::move (line));
 }
 

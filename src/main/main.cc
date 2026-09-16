@@ -79,15 +79,14 @@ int main (int argc, char **argv)
     DN_INFO ("{} starting", decnet::version::ident ());
 
     try {
-        // PORT: the Python builds one Node per config file and runs them all
+        // PORT: PyDECnet builds one Node per config file and runs them all
         // in one process.  Only the first is started here so far.
         decnet::Config cfg = decnet::Config::from_file (config_files.front ());
         if (config_files.size () > 1)
             DN_WARN ("only the first configuration file is used so far");
 
-        // Take delivery of the shutdown signals on this thread with
-        // sigwait rather than in a handler: the handler would have to reach
-        // the work queue, and none of the queue is async-signal-safe.
+        // Handle shutdown signals with sigwait on this thread; the work queue is
+        // not async-signal-safe.
         sigset_t stopset;
         sigemptyset (&stopset);
         sigaddset (&stopset, SIGINT);

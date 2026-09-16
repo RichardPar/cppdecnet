@@ -1,14 +1,8 @@
-// src/nice/nicedefs.cc -- what each NICE parameter means.
+// src/nice/nicedefs.cc -- NICE parameter definitions.
 //
-// Port of the parameter tables in nicepackets.py: the _layout of each reply
-// class, plus the counter tables from nice_coding.py.  the Python uses these
-// both to decode a request (where the type code is missing) and to format a
-// reply; here decoding never needs them -- a reply is self describing -- so
-// they exist for display, and for the reply builders to know which number
-// carries which fact.
-//
-// The tables are in parameter number order, which is also the order NCP
-// prints them in.
+// Port of the parameter tables in nicepackets.py and the counter tables
+// from nice_coding.py.  Used for display and by the reply builders.
+// Tables are in parameter number order.
 
 #include "decnet/nice/packets.h"
 
@@ -18,9 +12,8 @@ namespace {
 
 // ---------------------------------------------------------------- labels
 
-// The node type codes, shared by "Type" as an adjacency property (810) and
-// as a node characteristic (901).  Note these are not the routing layer's
-// type numbers.
+// Node type codes for adjacency type (810) and node type (901).  These
+// differ from the routing layer's type numbers.
 constexpr const char *const rvalues[] = {
     "Routing III", "Non-Routing III", "Phase II", "Area",
     "Routing IV", "Non-Routing IV"
@@ -127,7 +120,7 @@ constexpr const char *const receive_failure[] = {
 
 // ------------------------------------------------------------ the tables
 
-// Shorthands, so a table row reads like the Python tuple it came from.
+// Shorthands, so a table row reads like PyDECnet tuple it came from.
 constexpr ParamDef P (std::uint16_t n, const char *d,
                       Labels l = {}, Style s = Style::plain)
 {
@@ -209,9 +202,7 @@ constexpr ParamDef node_defs[] = {
     P ( 931, "Buffer size"),
     P ( 932, "Segment buffer size"),
     P ( 933, "Maximum path splits"),
-    // The counters.  Bit 15 of the number separates them from the
-    // parameters above, so 600 as a parameter and 600 as a counter are
-    // different things and both may be present.
+    // Counters.  Numbered separately from parameters.
     C (   0, "Seconds since last zeroed"),
     C ( 600, "User bytes received"),
     C ( 601, "User bytes sent"),
@@ -299,11 +290,8 @@ constexpr ParamDef circuit_defs[] = {
     C ( 900, "Peak adjacencies"),
     C (1000, "Bytes received"),
     C (1001, "Bytes sent"),
-    // A circuit read picks up the port's counters as well as routing's, so
-    // the two multicast counters the broadcast datalink keeps have to be
-    // named here too, not only under line.  Without them a circuit's
-    // counters read "Counter #1002", which is what the monitoring pages
-    // showed.
+    // Multicast counters from the broadcast datalink, which also appear in
+    // circuit reads.
     C (1002, "Multicast bytes received"),
     C (1010, "Data blocks received"),
     C (1011, "Data blocks sent"),
@@ -316,7 +304,7 @@ constexpr ParamDef circuit_defs[] = {
     C (1041, "Local buffer errors", local_buffer_errors),
     C (1050, "Selection intervals elapsed"),
     C (1065, "User buffer unavailable"),
-    // the Python's own: how long the circuit has been up, which is not
+    // PyDECnet's own: how long the circuit has been up, which is not
     // architected but is the first thing anyone wants to know.
     C (3900, "Seconds since last circuit up"),
 };

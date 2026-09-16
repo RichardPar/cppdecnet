@@ -1,12 +1,10 @@
 // decnet/datalink/datalink.h -- the datalink layer.
 //
-// Port of datalink.py's DatalinkLayer, Datalink and Port, plus the work
-// items the point to point state machine runs on.
+// Port of DatalinkLayer, Datalink and Port from datalink.py, plus the work
+// items for the point to point state machine.
 //
-// The shape is the one the DNA specs describe: an upper layer creates a
-// Port on a Datalink, and everything flowing upward -- received frames and
-// status changes -- arrives as work items on the node queue rather than as
-// direct calls, so the receiving layer stays single threaded.
+// An upper layer creates a Port on a Datalink.  Received frames and status
+// changes are delivered as work items on the node queue.
 
 #ifndef DECNET_DATALINK_DATALINK_H
 #define DECNET_DATALINK_DATALINK_H
@@ -97,7 +95,7 @@ public:
 
 // -------------------------------------------------------------- counters
 
-// The subset of the architected counters the Python keeps for a point to
+// The subset of the architected counters PyDECnet keeps for a point to
 // point circuit.
 struct PtpCounters {
     std::uint64_t bytes_sent = 0, pkts_sent = 0;
@@ -122,13 +120,11 @@ public:
 
     virtual void send (Bytes msg) = 0;
 
-    // False when the datalink cannot detect that the remote end restarted,
-    // so the routing sublayer has to work around it.  Multinet over UDP is
-    // the case that needs this.
+    // False when the datalink cannot detect a remote restart (Multinet over
+    // UDP).
     virtual bool start_works () const noexcept { return true; }
 
-    // Add this port's contribution to a circuit reply: the circuit type as
-    // a characteristic, the traffic counters as counters.  Port of
+    // Add circuit type and traffic counters to a NICE circuit reply.  Port of
     // Port.nice_read_port.
     virtual void nice_read_port (const nice::NiceRequest &req,
                                  nice::NiceReply &r);
@@ -149,9 +145,8 @@ public:
 
     const std::string &name () const noexcept { return name_; }
 
-    // Called by the datalink layer at node start and stop.  For point to
-    // point links these are no-ops: control is through the port, as
-    // PtpDatalink.open and close document.
+    // Called at node start and stop.  No-ops for point to point links, which
+    // are controlled through the port.
     virtual void open () {}
     virtual void close () {}
 
@@ -163,9 +158,7 @@ public:
 
     virtual const PtpCounters *counters () const noexcept { return nullptr; }
 
-    // The NICE circuit type code for this kind of datalink: 6 for
-    // Ethernet, 0 for a DDCMP point to point link.  Port of the port_type
-    // class attribute.
+    // NICE circuit type code: 6 for Ethernet, 0 for DDCMP point to point.
     virtual unsigned nice_type () const noexcept { return 0; }
 
     // The NICE line protocol code, which is the same list with a different
@@ -205,9 +198,8 @@ public:
     // DatalinkLayer.nice_read.
     void nice_read (const nice::NiceRequest &req, nice::ReplyDict &resp);
 
-    // Build one circuit from its configuration line.  Returns null and logs
-    // if the type is unknown or construction fails, which is what
-    // DatalinkLayer.__init__ does rather than aborting startup.
+    // Build one circuit from its configuration line.  Logs and returns null
+    // on failure.
     static std::unique_ptr<Datalink> create (Element *owner,
                                              const CircuitConfig &c);
 

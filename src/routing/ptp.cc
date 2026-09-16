@@ -22,20 +22,13 @@ PtpCircuit::PtpCircuit (BaseRouter *parent, std::string name,
         expect_verify_.assign (config.verify.begin (), config.verify.end ());
     }
     clear_neighbour ();
-    // The init message is not built here.  A circuit is created from the
-    // router's constructor, and for a derived router that runs while the
-    // base class part is still the most derived one, so asking the router
-    // for its node type here answers with the base class's.  An area
-    // router would announce itself as a level 1 router and every
-    // cross-area adjacency would be rejected as an address out of range.
-    // Built when it is sent instead.
+    // The init message is built when sent, since the router's node type is
+    // not available during construction.
 }
 
 void PtpCircuit::build_initmsg ()
 {
-    // PORT: Phase II and Phase III nodes send different init messages.
-    // Only the Phase IV form is built here, matching the node types this
-    // pass supports.
+    // PORT: Phase II and III init messages.
     initmsg_ = PtpInit {};
     initmsg_.srcnode = parent_->nodeid ();
     initmsg_.ntype   = parent_->ntype ();
@@ -117,13 +110,8 @@ void PtpCircuit::routeevent (events::EventId ev, int reason,
     if (!packet_beginning.empty ())
         e.image (events::param::packet_beginning, std::move (packet_beginning));
 
-    // Build the record now, but report it after this dispatch finishes.
-    //
-    // The state machine assigns the new state only once the state function
-    // returns, so a circuit-up event raised from inside up() is seen by a
-    // circuit that still says it is not running -- and anything the event
-    // logger tries to send in response is dropped on the floor.  See
-    // BUGS.md.
+    // Report the event after this dispatch, once the state change has been
+    // applied.
     n->add_work (std::make_unique<CallbackWork> ([n, e] () mutable {
         n->logevent (e);
     }));
@@ -170,7 +158,7 @@ bool PtpCircuit::validate (Work &w)
         return false;
     }
     // Decode once, here, so each state works with a typed packet -- which
-    // is what the Python's validate does before dispatching to the state.
+    // is what PyDECnet's validate does before dispatching to the state.
     decoded_ = RoutingPacketBase::parse_frame (r->packet ());
     if (!decoded_) {
         DN_DEBUG ("undecodable routing packet on {}: {}", name_,
@@ -259,9 +247,8 @@ PtpCircuit::State PtpCircuit::ri (Work &w)
 
         unsigned area = init->srcnode.area ();
         unsigned tid  = init->srcnode.tid ();
-        // An address is in range if the node number fits our table and the
-        // area is ours -- unless both ends are area routers, which are the
-        // only pair allowed to be in different areas.
+        // In range if the node number fits and the area matches, unless both ends
+        // are area routers.
         bool both_l2 = init->ntype == L2ROUTER
                     && parent_->ntype () == L2ROUTER;
         bool router = parent_->ntype () == L1ROUTER
@@ -278,7 +265,7 @@ PtpCircuit::State PtpCircuit::ri (Work &w)
         info_.timer   = init->timer;
         info_.ntype   = init->ntype;
         // Obey the smaller of the two block sizes: some implementations
-        // send silly values, so the Python clamps to its own MTU too.
+        // send silly values, so PyDECnet clamps to its own MTU too.
         info_.blksize = std::min (init->blksize, MTU);
         info_.tiver   = init->tiver;
 
@@ -309,9 +296,7 @@ PtpCircuit::State PtpCircuit::ri (Work &w)
     }
 
     if (dynamic_cast<PtpInit3 *> (packet_)) {
-        // PORT: a Phase III neighbour needs us to answer with a Phase III
-        // init and to carry its eight bit addresses.  Not built yet, so
-        // the circuit restarts rather than half-initialising.
+        // PORT: Phase III neighbours.  Restart the circuit for now.
         DN_DEBUG ("{} phase III neighbour not supported yet", name_);
         return restart ("phase III neighbour");
     }
@@ -452,14 +437,8 @@ void PtpCircuit::send_hello ()
 
 void PtpCircuit::adj_timeout (Adjacency *)
 {
-    // The adjacency's listen timer expired.  It has already taken itself
-    // down, so restart the circuit and go back to waiting for the datalink.
-    //
-    // The event matters as much as the restart: a neighbour going quiet is
-    // the one circuit failure nothing else reports, so without it the log
-    // shows a working circuit right up to the moment it stops carrying
-    // traffic.  Raised before clearing the neighbour so that it still
-    // names it.  Port of PtpCircuit.adj_timeout.
+    // Listen timer expired.  Raise the event (before clearing the neighbour)
+    // and restart the circuit.  Port of PtpCircuit.adj_timeout.
     routeevent ({ 4, 8 }, events::reason::listener_timeout);
     adj_.reset ();
     set_state (restart ("listen timeout"));

@@ -1,11 +1,9 @@
-// decnet/routing/packets.h -- routing layer packet formats.
+// decnet/routing/packets.h -- routing packet formats.
 //
-// Port of routing_packets.py.  Everything here is a member of one indexed
-// family rooted at RoutingPacketBase, keyed on the first byte, so a frame
-// off the wire turns into the right packet class with one lookup.
+// Port of routing_packets.py.  All classes are in one indexed family
+// rooted at RoutingPacketBase, keyed on the first byte.
 //
-// PORT: the Phase II NodeInit/NodeVerify formats are not here yet.  They
-// are needed only by Phase II nodes, and are a self contained addition.
+// PORT: Phase II NodeInit/NodeVerify.
 
 #ifndef DECNET_ROUTING_PACKETS_H
 #define DECNET_ROUTING_PACKETS_H
@@ -40,9 +38,8 @@ const char *ntype_string (unsigned t) noexcept;
 inline constexpr std::uint16_t MTU = 576;
 inline constexpr double PTP_T3MULT = 2.1;
 
-// The values that mean "no route".  A routing message entry packs the hop
-// count into the top six bits and the cost into the low ten, so these are
-// the largest each field can hold.  Ports of common.INFHOPS and INFCOST.
+// "No route" values.  Routing message entries hold hops in the top 6 bits
+// and cost in the low 10.  Ports of common.INFHOPS and INFCOST.
 inline constexpr unsigned INFHOPS = 31;
 inline constexpr unsigned INFCOST = 1023;
 
@@ -63,20 +60,15 @@ inline constexpr std::uint16_t ETHMTU = MTU + 21 - 6;
 
 // ------------------------------------------------------------ family root
 
-// Registers every routing packet class.  Defined in packets.cc and named
-// by the index below so that the linker keeps that object file; see the
-// comment on DN_PACKET_INDEX_REGISTERED for why a static initializer will
-// not do the job inside a static library.
+// Registers all routing packet classes.  See DN_PACKET_INDEX_REGISTERED.
 void register_routing_packets ();
 
 struct RoutingPacketBase : Indexed<RoutingPacketBase> {
     static std::uint64_t index_key (ByteView b) { return require_byte (b, 0); }
     DN_PACKET_INDEX_REGISTERED (RoutingPacketBase, 128, register_routing_packets)
 
-    // Parse a frame into the right routing packet class.  Returns null for
-    // anything malformed, which is what a receive path wants.  Named
-    // distinctly from the per-class Packet::parse, which each concrete
-    // class also inherits.
+    // Parse a frame into the right routing packet class.  Returns null if
+    // malformed.
     static std::unique_ptr<RoutingPacketBase> parse_frame (ByteView b) noexcept
     { return try_parse_indexed (b); }
 };
@@ -96,10 +88,8 @@ struct ShortData : IndexedBody<ShortData, RoutingPacketBase, Extra::allow> {
     std::uint8_t visit = 0;
     Bytes        payload;
 
-    // "Intra Ethernet", which the short header has no room for.  It is
-    // carried here so that a packet converted from the long form can be
-    // handled uniformly; it is never encoded.  Port of the ROAnyField of
-    // the same name.
+    // "Intra Ethernet" flag from the long header.  Never encoded.  Port of the
+    // ROAnyField of the same name.
     bool ie = false;
 
     static constexpr auto layout = fields (
@@ -150,10 +140,8 @@ struct LongData : IndexedBody<LongData, RoutingPacketBase, Extra::allow> {
 
 // ------------------------------------------------------- control packets
 
-// The fields every control packet starts with.  Port of CtlHdr.  These are
-// spelled as a macro pair rather than a base class because the layout
-// machinery binds pointers to member, and repeating the members in each
-// packet is what lets one flat layout describe the whole packet.
+// Fields at the start of every control packet.  Port of CtlHdr.  A macro
+// rather than a base class, because layouts bind pointers to members.
 #define DN_CTL_HDR_FIELDS                                                     \
     bool         control = true;                                              \
     std::uint8_t type = 0;                                                    \
@@ -281,14 +269,10 @@ Bytes hello_testdata (std::size_t n = 10);
 
 // ---------------------------------------------------- LAN hello messages
 //
-// On a broadcast circuit there is no handshake: each node announces itself
-// periodically to a multicast address, and neighbours are learned by
-// listening.  Ports of routing_packets.RouterHello and EndnodeHello.
+// Ports of routing_packets.RouterHello and EndnodeHello.
 
-// A router's hello.  The elist field carries, for each adjacent router the
-// sender can hear, its address and whether the sender considers it
-// two-way -- which is how a router discovers that its neighbours can hear
-// it as well as the other way round.
+// Router hello.  elist lists each router the sender hears, with a two-way
+// flag.
 struct RouterHello : IndexedBody<RouterHello, RoutingPacketBase> {
     static constexpr const char *name = "RouterHello";
 
@@ -317,9 +301,8 @@ struct RouterHello : IndexedBody<RouterHello, RoutingPacketBase> {
         reserved<RES<1>, RouterHello> ("mpd"),
         field<I<244>>       (&RouterHello::elist,   "elist"));
 
-    // The ntype values a router hello carries differ from the ones an init
-    // message uses: here 1 means area router and 2 level 1.  Ports of
-    // RouterHello.ntype_l1 and ntype_l2.
+    // Router hello ntype values: 1 is area router, 2 is level 1 router.
+    // Ports of RouterHello.ntype_l1 and ntype_l2.
     static constexpr std::uint8_t ntype_l2 = 1;
     static constexpr std::uint8_t ntype_l1 = 2;
 };
@@ -334,10 +317,8 @@ struct Elist : Packet<Elist> {
         field<I<236>> (&Elist::rslist, "rslist"));
 };
 
-// One entry of that list: a router the sender can hear, and whether the
-// sender has heard itself named in that router's list in turn.  Seeing our
-// own address here with twoway set is what tells us a neighbour can hear
-// us, which is the only handshake a LAN circuit has.  Port of RSent.
+// One router list entry: address, priority and two-way flag.  Port of
+// RSent.
 struct RSent : Packet<RSent> {
     Bytes        hiid { HIORD, HIORD + 4 };
     Nodeid       router;
@@ -386,20 +367,12 @@ struct EndnodeHello : IndexedBody<EndnodeHello, RoutingPacketBase> {
 
 // ======================================================= routing messages
 //
-// A routing message is a four byte header, then some number of segments,
-// then a one's complement checksum word.  Its body is not a fixed list of
-// fields, so unlike every other packet here these classes do their own
-// encoding rather than describing a layout -- which is what RoutingMessage
-// does in the Python too.
+// Four byte header, segments, then a one's complement checksum.  These
+// classes do their own encoding instead of using a layout.
 //
-// The interesting part is how the class is chosen.  Code point 0x07 is
-// *either* a Phase III routing message or a Phase IV level 1 one, and
-// nothing in the header says which.  They are told apart by the checksum:
-// the sum is seeded with 1 for Phase IV and 0 for Phase III, so summing a
-// valid message with its checksum word complemented leaves a residue of
-// 0xfffe or 0xffff respectively.  That residue is the index key -- the
-// same nested lookup the point to point inits use, with a key function
-// that reads the whole packet instead of one byte.
+// Code 0x07 is either a Phase III or a Phase IV level 1 routing message.
+// The checksum is seeded with 1 for Phase IV and 0 for Phase III, so the
+// residue (0xfffe or 0xffff) is used as a nested index key.
 
 // One entry of a routing message: hops in the top six bits, cost in the
 // low ten.  Port of routing_packets.RouteSegEntry.
@@ -409,9 +382,8 @@ constexpr std::uint16_t route_entry (unsigned hops, unsigned cost) noexcept
 constexpr unsigned entry_hops (std::uint16_t e) noexcept { return e >> 10; }
 constexpr unsigned entry_cost (std::uint16_t e) noexcept { return e & 0x3ff; }
 
-// A segment of a Phase IV routing message: a run of entries for
-// consecutive destinations starting at startid.  Ports L1Segment and
-// L2Segment, whose only difference is what counts as a valid range.
+// Phase IV routing message segment: entries for consecutive destinations
+// from startid.  Ports L1Segment and L2Segment.
 struct RouteSegment {
     std::uint16_t              startid = 0;
     std::vector<std::uint16_t> entries;
@@ -419,9 +391,8 @@ struct RouteSegment {
     friend bool operator== (const RouteSegment &, const RouteSegment &) = default;
 };
 
-// What a routing message says about one destination, from the point of
-// view of the circuit it arrived on: the circuit's own cost is added, and
-// the hop count incremented.  Port of the entries() generators.
+// One destination entry, with the circuit cost added and hop count
+// incremented.  Port of the entries() generators.
 struct RouteUpdate {
     unsigned id;
     unsigned hops;
@@ -437,9 +408,8 @@ public:
     bool          pf = false;
     std::uint16_t srcnode = 0;
 
-    // The checksum residue of a whole routing message, which is what picks
-    // the concrete class.  Throws DecodeError if the message is too short
-    // or its payload has an odd length.
+    // Checksum residue of a routing message, used to select the class.  Throws
+    // DecodeError if too short or odd length.
     static std::uint64_t index_key (ByteView b);
 
     // Every destination this message describes, with the receiving
@@ -480,9 +450,7 @@ public:
     Bytes       encode_packet () const override;
     std::vector<RouteUpdate> updates (unsigned circuit_cost) const override;
 
-    // The lowest destination a message of this type describes: 0 for level
-    // 1 (node numbers), 1 for level 2 (area numbers, and there is no area
-    // zero).  Port of the lowid class attribute.
+    // Lowest destination: 0 for level 1, 1 for level 2.  Port of lowid.
     virtual unsigned lowid () const noexcept = 0;
 
 protected:

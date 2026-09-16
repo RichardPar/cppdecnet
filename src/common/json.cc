@@ -96,10 +96,7 @@ std::string quote (const std::string &s)
         case '\r': out += "\\r";  break;
         case '\t': out += "\\t";  break;
         default:
-            // Control characters must be escaped; so must anything above
-            // 0x7f, because the stream is read as UTF-8 at the far end and
-            // a bare high byte is not valid there.  \u00XX round trips
-            // through latin-1 exactly.
+            // Escape control characters and bytes above 0x7f as \u00XX.
             if (c < 0x20 || c > 0x7e) {
                 std::snprintf (buf, sizeof buf, "\\u%04x", c);
                 out += buf;

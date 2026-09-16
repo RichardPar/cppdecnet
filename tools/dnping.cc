@@ -1,18 +1,7 @@
-// tools/dnping.cc -- loop test a node, the way NCP's LOOP NODE does.
+// tools/dnping.cc -- loop test a node through its MIRROR object (25).
 //
-// Port of applications/dnping.  The far end needs nothing running for it:
-// MIRROR is object 25, every DECnet node has one, and looping through it
-// is how you find out whether the whole stack reaches a node rather than
-// just whether routing thinks it does.
-//
-// This is the client half.  The server half -- answering someone else's
-// LOOP NODE -- is in the NICE listener, src/nice/nml.cc.
-//
-// It needs a node of its own to speak from, because DECnet has no
-// connectionless way to ask this: a loop test is a logical link to an
-// object, so there has to be a node to open it from.  That is what the
-// configuration file argument is for.  Once the API server exists this
-// could instead talk to a running daemon; see TASKS.md.
+// Port of applications/dnping.  Runs its own node from the given
+// configuration file to open the logical link.
 
 #include "decnet/common/logging.h"
 #include "decnet/common/types.h"
@@ -145,8 +134,7 @@ int main (int argc, char **argv)
         Config cfg = Config::from_file (cfgfile);
         Node node (cfg);
 
-        // A name is resolved against the configuration, as the Python tool
-        // does: "dnping BAJI" has to work, not only "dnping 29.159".
+        // Accept a node name from the configuration as well as an address.
         Nodeid dest;
         if (Nodeinfo *info = node.find_node (target)) {
             dest = info->id;
@@ -162,20 +150,12 @@ int main (int argc, char **argv)
 
         node.start ();
 
-        // Wait for the destination to be reachable, not merely for a
-        // circuit to exist.
-        //
-        // An adjacency is not a route.  Waiting only for one had this tool
-        // connecting while the routing table still said the destination
-        // was unreachable, so the connect was dropped before it reached
-        // the wire and the only symptom was an NSP timeout thirty seconds
-        // later reported as "did not accept".  The far end had never heard
-        // anything at all.
+        // Wait for a route to the destination, not just an adjacency, or
+        // the connect initiate is dropped.
         auto reachable = [&] {
             if (auto *l1 = dynamic_cast<routing::L1Router *> (node.routing ()))
                 return l1->reachable (dest.value () & 1023u);
-            // An endnode has no table: having an adjacency is as much as
-            // it can know, since everything goes to its router.
+            // An endnode has no routing table; an adjacency is enough.
             return node.routing () && node.routing ()->adjacency_count () > 0;
         };
         if (!wait_until (reachable, std::chrono::seconds (30))) {
@@ -208,8 +188,7 @@ int main (int argc, char **argv)
         std::printf ("PING %s: %u byte messages through MIRROR\n",
                      dest.str ().c_str (), length);
 
-        // The payload is the usual alternating pattern, so a bit that
-        // sticks either way shows up.
+        // Alternating bit pattern.
         Bytes pattern;
         for (unsigned i = 0; i < length; ++i)
             pattern.push_back (static_cast<std::uint8_t> ((i & 1) ? 0x55 : 0xaa));
@@ -232,7 +211,7 @@ int main (int argc, char **argv)
             }
 
             Reply r = p->at (before);
-            // The reply is the success status byte and then the data back.
+            // Reply is a status byte (1 = success) followed by the data.
             bool same = r.data.size () == pattern.size () + 1
                      && r.data[0] == 0x01
                      && std::memcmp (r.data.data () + 1, pattern.data (),

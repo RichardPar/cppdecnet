@@ -1,22 +1,10 @@
 #!/usr/bin/env python3
-"""Ask a station to loop a frame back, over the Ethernet loopback protocol.
+"""Send Ethernet loopback requests to a MAC address and report replies.
 
-Answers one question: is that station receiving unicast frames we send to
-this address?  It runs entirely at the Ethernet level -- it claims no
-DECnet node address and speaks no routing -- so a result here is about the
-wire and the far station's address filter, nothing else.
+Shows which address a station receives unicast frames on.
 
-That is the point.  A node announces a Phase IV id of aa-00-04-00-xx-xx
-inside its hellos but may transmit from, and listen on, the address its
-card came with.  If so, multicast hellos work and unicast data vanishes.
-Probing both addresses in turn says which one it answers to.
-
-    sudo tools/mop-loop-probe.py enx00051be19c68 aa:00:04:00:13:04
-    sudo tools/mop-loop-probe.py enx00051be19c68 08:00:2b:11:22:33
-
-Needs root, for the raw socket.  The message layout matches
-LoopSkip/LoopFwd/LoopReply in include/decnet/mop/packets.h, so what this
-sends is what decnetd would send.
+    sudo tools/mop-loop-probe.py <iface> <mac> [count]
+    tools/mop-loop-probe.py --self-test
 """
 
 import fcntl
@@ -43,23 +31,18 @@ def mac_str(b):
 
 
 def build(forward_to, receipt, data):
-    """A loop message: forward to us, then reply.
-
-    The far station reads the first function, "forward to this address",
-    and sends the message back with the skip count advanced past it.  We
-    then read the second, "reply", and that round trip is the answer.
-    """
-    msg = struct.pack('<H', 0)                  # skip count, we start at 0
-    msg += struct.pack('<H', FUNC_FORWARD)      # function: forward data
-    msg += forward_to                           # ... to here: us
-    msg += struct.pack('<H', FUNC_REPLY)        # function: reply
+    """Loop message: forward to us, then reply."""
+    msg = struct.pack('<H', 0)                  # skip count
+    msg += struct.pack('<H', FUNC_FORWARD)
+    msg += forward_to
+    msg += struct.pack('<H', FUNC_REPLY)
     msg += struct.pack('<H', receipt)
     msg += data
     return msg
 
 
 def parse_reply(payload, expect_receipt):
-    """A reply has the skip count stepped past the forward block, 8 bytes."""
+    """Return the reply payload, or None."""
     if len(payload) < 6:
         return None
     skip = struct.unpack_from('<H', payload, 0)[0]
@@ -124,7 +107,7 @@ def probe(iface, target, count, timeout):
                 continue
             if struct.unpack_from('!H', buf, 12)[0] != LOOP_PROTO:
                 continue
-            if buf[6:12] == src:            # our own frame, echoed by the tap
+            if buf[6:12] == src:
                 continue
             body = parse_reply(buf[14:], receipt)
             if body is None:
@@ -139,14 +122,12 @@ def probe(iface, target, count, timeout):
     if good:
         print("That station receives unicast sent to %s." % mac_str(dst))
     else:
-        print("No reply. Either it does not listen on %s, or it does not\n"
-              "answer the loopback protocol at all. Try the other address\n"
-              "before concluding anything." % mac_str(dst))
+        print("No reply from %s." % mac_str(dst))
     return 0 if good else 1
 
 
 def self_test():
-    """Check the encoding without a wire, so the layout can be reviewed."""
+    """Check the message encoding."""
     src = mac_bytes('00:05:1b:e1:9c:68')
     msg = build(src, 1, b'ab')
     print("built:", ' '.join('%02x' % c for c in msg))
@@ -156,11 +137,10 @@ def self_test():
     assert struct.unpack_from('<H', msg, 10)[0] == 1,  "reply function"
     assert struct.unpack_from('<H', msg, 12)[0] == 1,  "receipt"
     assert msg[14:] == b'ab',                          "payload"
-    # What comes back: same message, skip stepped past the 8 byte forward.
     returned = struct.pack('<H', 8) + msg[2:]
     assert parse_reply(returned, 1) == b'ab',          "reply parse"
     assert parse_reply(returned, 2) is None,           "receipt mismatch"
-    print("self test passed: layout matches mop/packets.h")
+    print("self test passed")
     return 0
 
 

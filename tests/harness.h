@@ -1,9 +1,7 @@
-// tests/harness.h -- a small unit test harness.
+// tests/harness.h -- minimal unit test harness.
 //
-// the Python's tests use unittest.  Rather than take on a dependency for the
-// port, this provides the same shape: test cases register themselves, the
-// runner runs them all and reports failures, and each assertion macro
-// prints the file, line and the values involved.
+// Tests register themselves, the runner runs them all, and assertions
+// print the file, line and values.
 
 #ifndef DECNET_TESTS_HARNESS_H
 #define DECNET_TESTS_HARNESS_H
@@ -67,9 +65,7 @@ struct Registrar {
             ::dntest::fail (__FILE__, __LINE__, "assertion failed: " #cond); \
     } while (0)
 
-// The operands are copied, not bound by reference: an accessor returning a
-// reference into a temporary (v.parse (x).as_string (), say) would otherwise
-// leave the reference dangling before the comparison runs.
+// Operands are copied, so references into temporaries do not dangle.
 #define DN_ASSERT_EQ(a, b)                                                   \
     do {                                                                     \
         const auto dn_a_ = (a);                                              \

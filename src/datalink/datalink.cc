@@ -81,10 +81,7 @@ DatalinkLayer::~DatalinkLayer () = default;
 
 Datalink *DatalinkLayer::circuit (const std::string &name) const
 {
-    // Circuit names are canonicalised to upper case when the configuration
-    // is read, so canonicalise the lookup too rather than making every
-    // caller remember.  the Python does the same thing at its NICE entry
-    // point, with an explicit .upper ().
+    // Circuit names are stored upper case, so upper case the lookup.
     std::string key;
     try {
         key = circname (name);

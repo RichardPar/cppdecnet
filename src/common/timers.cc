@@ -58,9 +58,8 @@ void TimerWheel::start (Timer *t, std::chrono::milliseconds ms)
     std::lock_guard lock (mutex_);
     std::size_t slot = (pos_ + ticks) % wheel_.size ();
     t->unlink ();
-    // Add at the end of the slot's list so that timers armed for the same
-    // instant fire in the order they were started.  NSP depends on that to
-    // keep retransmissions in sequence.
+    // Append, so timers for the same tick fire in start order.  NSP relies on
+    // this.
     wheel_[slot].add_before (t);
 }
 

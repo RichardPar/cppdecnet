@@ -1,8 +1,6 @@
 // Port of tests/test_modulo.py: RFC 1982 sequence number arithmetic.
 //
-// The Python tests use moduli 15 and 16 to exercise the odd and even cases,
-// where "even" is the one with a half-way distance that has no defined
-// order.  Same values here.
+// Moduli 15 and 16 cover the odd and even cases, as in PyDECnet.
 
 #include "harness.h"
 

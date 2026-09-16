@@ -10,7 +10,7 @@ namespace decnet::datalink::ddcmp {
 
 namespace {
 
-// Which counter a NAK reason belongs to.  the Python's nak_map; R_OVER and
+// Which counter a NAK reason belongs to.  PyDECnet's nak_map; R_OVER and
 // R_FMT are deliberately unmapped there and here.
 bool is_data_error (std::uint8_t reason)
 {
@@ -39,9 +39,8 @@ const char *Protocol::state_name () const noexcept
 
 void Protocol::init_state ()
 {
-    // The names are the spec's.  T and X have no representation here:
-    // retransmission is just resending what is still in unack_, and
-    // "transmission complete" is not something a socket tells us.
+    // Names from the spec.  T and X are not represented: retransmission resends
+    // unack_, and sockets do not report transmission complete.
     r_ = Seq (0);
     a_ = Seq (0);
     n_ = Seq (0);
@@ -153,7 +152,7 @@ void Protocol::receive (const Message &m)
         if (m.kind == MsgKind::maintenance) {
             DN_TRACE ("DDCMP maintenance message, {} bytes", m.payload.size ());
             // Nothing opens a maintenance port yet, so this is counted and
-            // dropped.  the Python does the same, with the same comment.
+            // dropped.  PyDECnet does the same, with the same comment.
         } else if (m.kind == MsgKind::start) {
             do_restart ();
         }
@@ -238,11 +237,8 @@ void Protocol::timeout ()
         send_msg (make_stack (), stacktmr_.next ());
         return;
     case State::running:
-        // DDCMP does not retransmit on a timeout the way most ARQ
-        // protocols do.  It asks the far end to say again where it has
-        // got to, and retransmits only when the answer says to.  That
-        // makes a lost acknowledgement cost one small message rather than
-        // the whole window.
+        // On timeout, send REP rather than retransmitting.  The far end's reply
+        // says what needs resending.
         send_msg (make_rep (n_), acktmr_.next ());
         return;
     default:
@@ -257,10 +253,9 @@ bool Protocol::process_ack (const Message &m)
     unsigned count = a_.distance (m.resp);
     unsigned pend  = a_.distance (n_);
     if (count > pend) {
-        // Sequence numbers wrap, so an acknowledgement that is merely old
-        // looks like one that acknowledges far too much: one message
-        // stale reads as an ack for 255.  Rejecting it is how they are
-        // told apart.
+        // Reject acknowledgements outside the window.  Because sequence numbers
+        // wrap, a stale ack would otherwise look like an ack for nearly 256
+        // messages.
         DN_TRACE ("DDCMP stale ack, resp={} a={} n={}", m.resp.value (),
                   a_.value (), n_.value ());
         return false;
@@ -278,9 +273,8 @@ bool Protocol::process_ack (const Message &m)
         acktmr_.reset ();
     }
 
-    // Room in the window may have freed something that was waiting.  After
-    // a NAK the new messages are queued rather than sent, so that they go
-    // out behind the retransmission and the far end sees them in order.
+    // Send queued messages that now fit in the window.  After a NAK they are
+    // sent after the retransmission, to keep order.
     send_queued (m.kind == MsgKind::nak);
     return true;
 }

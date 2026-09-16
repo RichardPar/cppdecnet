@@ -182,20 +182,10 @@ bool PtpDatalink::validate (Work &w)
         return false;
     }
     if (dynamic_cast<Restart *> (&w)) {
-        // "Protocol restart", which the routing layer asks for whenever it
-        // gives up on a neighbour -- a listen timeout above all.  A
-        // datalink with a protocol of its own restarts that and keeps the
-        // connection, which is what Ddcmp overrides this to do.  For one
-        // with no protocol, Multinet being the case here, the connection
-        // is the only thing there is to start over, and with no holdoff:
-        // the layer above has already waited out a timeout.  This is what
-        // _Multinet.validate does in the Python.
-        //
-        // Handling it here rather than only in Multinet is deliberate.
-        // Dropping this item silently -- which is what used to happen --
-        // leaves the routing circuit waiting in ds for a DlStatus UP that
-        // the datalink has no reason to send, and the circuit never comes
-        // back at all.  See BUGS.md.
+        // Protocol restart, requested by routing (e.g. on listen timeout).  The
+        // default reconnects immediately, as _Multinet.validate does.  DDCMP
+        // overrides this to restart its protocol and keep the connection.  If this
+        // were ignored, the routing circuit would wait in ds indefinitely.
         Reconnect again (this, true);
         set_state (handle_reconnect (again));
         return false;
@@ -226,9 +216,7 @@ PtpDatalink::State PtpDatalink::connecting (Work &w)
     if (dynamic_cast<Connected *> (&w))
         return connected ();
     if (dynamic_cast<Timeout *> (&w)) {
-        // Give up on this attempt and start over.  Immediately: we have
-        // already waited once, and waiting twice for one retry is just
-        // dead time.
+        // Give up on this attempt and retry immediately.
         reconnect (true);
         return nullptr;
     }

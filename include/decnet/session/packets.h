@@ -1,9 +1,7 @@
-// decnet/session/packets.h -- session control message formats.
+// decnet/session/packets.h -- session control messages.
 //
-// Port of the packet classes in session.py.  Session control rides inside
-// NSP's connect messages: the payload of a Connect Initiate is a session
-// control connect message naming the object being asked for, and the
-// payload of a Connect Confirm is whatever the object chose to send back.
+// Port of the packet classes in session.py.  The session control connect
+// message is the payload of an NSP Connect Initiate.
 
 #ifndef DECNET_SESSION_PACKETS_H
 #define DECNET_SESSION_PACKETS_H
@@ -30,10 +28,9 @@ enum Reason : std::uint16_t {
     ABORT     = 9     // connection aborted
 };
 
-// Who a connection is from or to.  An end user is named in one of three
-// ways, and which one is in force is the first byte.  Port of the EndUser
-// family; it is written as a codec rather than an indexed packet because
-// it appears inline inside another message, not on its own.
+// End user (source or destination): format 0 by number, 1 by name, 2 by
+// name and UIC.  Port of the EndUser family.  A codec, since it appears
+// inside other messages.
 struct EndUser {
     enum Format : std::uint8_t {
         by_number = 0,    // an object number
@@ -52,10 +49,7 @@ struct EndUser {
     static EndUser named (std::string n)
     { EndUser e; e.fmt = by_name; e.name = std::move (n); return e; }
 
-    // A format 0 end user must have a non-zero number -- zero is not an
-    // object number -- and a format 1 must have a name.  the Python rejects
-    // the invalid combinations, so a message built with one will be
-    // refused by a real node.
+    // Format 0 requires a non-zero number and format 1 a name.
     bool valid () const noexcept;
 
     std::string str () const;
@@ -69,13 +63,10 @@ struct EndUserField {
     static void decode (Decoder &d, value_type &v);
 };
 
-// The session control connect message, carried as the payload of an NSP
-// Connect Initiate.  Port of session.SessionConnInit.
+// Session control connect message.  Port of session.SessionConnInit.
 //
-// The optional fields at the end are not described by the layout, because
-// whether they are present is decided by flag bits earlier in the message;
-// they are unpacked from the payload afterwards, as check() does in the
-// Python.
+// The optional trailing fields depend on flag bits and are unpacked after
+// the layout, as check() does in PyDECnet.
 struct ConnectData : Packet<ConnectData, Extra::allow> {
     EndUser      dstname;      // the object being asked for
     EndUser      srcname;      // who is asking

@@ -1,17 +1,11 @@
 // decnet/mop/mop.h -- the MOP layer.
 //
 // Port of the handler classes in mop.py.  One MopCircuit per Ethernet
-// circuit, each with a system ID handler on protocol 60-01 and a loopback
-// handler on 90-00.
+// circuit, with a system ID handler on 60-01 and a loopback handler on
+// 90-00.
 //
-// MOP is what makes a node visible to maintenance tools: NCP SHOW MODULE
-// CONFIGURATOR lists what a node has heard, and NCP LOOP CIRCUIT uses the
-// loopback protocol.  It runs only on broadcast circuits.
-//
-// PORT: the console carrier, both client and server, is not here.  Its
-// messages parse, but reserving a console and carrying a terminal session
-// over it is a state machine of its own.  Load and dump are not here
-// either, and the Python does not implement them.
+// PORT: no console carrier.  Load and dump are not implemented (nor are
+// they in PyDECnet).
 
 #ifndef DECNET_MOP_MOP_H
 #define DECNET_MOP_MOP_H
@@ -41,10 +35,7 @@ struct HeardSystem {
     Macaddr                               address;
     SysId                                 sysid;
     std::chrono::steady_clock::time_point last_heard;
-    // The same instant on the wall clock.  Network management reports the
-    // last report as a date and time, which a steady clock cannot give:
-    // it has no relationship to the calendar.  Both are kept because the
-    // steady one is what any interval should be measured with.
+    // Wall clock time of the same instant, for NICE reporting.
     std::chrono::system_clock::time_point last_report;
 };
 
@@ -77,9 +68,7 @@ public:
 private:
     void send_counters (Macaddr dest, std::uint16_t receipt);
 
-    // How long until we announce ourselves again.  Randomised between
-    // eight and twelve minutes, so that a room full of nodes does not
-    // synchronise on one instant.
+    // Time until the next announcement, randomised between 8 and 12 minutes.
     double next_id_delay () const;
 
     MopCircuit                        *parent_;
@@ -88,9 +77,7 @@ private:
     std::chrono::steady_clock::time_point started_;
 };
 
-// The loopback protocol.  A message carries a skip count and a list of
-// functions; a station asked to forward bumps the count and passes it on,
-// so the reply retraces the path it came by.  Port of mop.LoopHandler.
+// Loopback protocol handler.  Port of mop.LoopHandler.
 class LoopHandler : public Element {
 public:
     LoopHandler (MopCircuit *parent, datalink::BcDatalink *dl);
@@ -146,9 +133,8 @@ public:
     void start ();
     void stop ();
 
-    // Answer the module half of a NICE read: the configurator, which
-    // reports what other stations on each circuit have announced about
-    // themselves.  Port of Mop.nice_read.
+    // NICE read for the configurator module: what other stations on each
+    // circuit have announced.  Port of Mop.nice_read.
     void nice_read (const nice::NiceRequest &req, nice::ReplyDict &resp);
 
     MopCircuit *circuit (const std::string &name) const;

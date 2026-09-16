@@ -1,6 +1,5 @@
-// NSP logical links: connect, accept, reject, data transfer with
-// segmentation and reassembly, and disconnect -- run between two real
-// nodes over a Multinet circuit, so the whole stack is in the path.
+// NSP logical links between two nodes over Multinet: connect, accept,
+// reject, segmented data and disconnect.
 
 #include "harness.h"
 
@@ -214,10 +213,7 @@ DN_TEST (nsp, connect_and_accept)
 
 DN_TEST (nsp, the_retransmit_timer_follows_the_measured_round_trip)
 {
-    // The timer is not a constant.  It starts at two seconds because
-    // nothing has been measured, then follows the round trip actually seen
-    // to that node -- so a link across an ocean and a link across a room
-    // do not wait the same time before deciding a packet was lost.
+    // Initial timeout is two seconds, then based on measured round trip time.
     Link l;
     l.start ();
 
@@ -226,11 +222,7 @@ DN_TEST (nsp, the_retransmit_timer_follows_the_measured_round_trip)
     DN_ASSERT (c != nullptr);
     DN_ASSERT (wait_until ([&] { return c->running (); }));
 
-    // Something has now been sent and acknowledged over the loopback, so
-    // an estimate exists.  It is floored at one second: a tenth of a
-    // second of timer granularity is not the constraint, packet length on
-    // a slow serial line is, and an estimate taken from short packets
-    // produces false timeouts the moment a long one goes out.
+    // After a measurement the estimate is at least one second.
     Nodeinfo *info = l.b->find_node (Nodeid::parse ("1.1"), false);
     DN_ASSERT (info != nullptr);
     DN_ASSERT (info->delay >= 1.0);
@@ -241,9 +233,7 @@ DN_TEST (nsp, the_retransmit_timer_follows_the_measured_round_trip)
 
 DN_TEST (nsp, the_estimate_is_an_average_not_the_last_measurement)
 {
-    // One slow round trip must not move the timer far, or a single hiccup
-    // lengthens every timeout after it.  The weight decides how slowly it
-    // moves: each measurement is folded in as 1/(weight+1) of the change.
+    // One slow round trip moves the estimate by 1/(weight+1) of the change.
     Config c = Config::from_string (
         "routing 1.1 --type endnode\nnode 1.1 NODEA\n"
         "circuit mul-0 Multinet 127.0.0.1:1:connect\n"
@@ -269,9 +259,7 @@ DN_TEST (nsp, the_timer_settings_come_from_the_configuration)
     DN_ASSERT_EQ (c.nsp ().delay_factor, 3.5);
     DN_ASSERT_EQ (c.nsp ().retransmits, 9u);
 
-    // And a value nobody meant is refused rather than quietly clamped: a
-    // weight of zero would divide by one and make the estimate the last
-    // measurement, which is the behaviour the averaging exists to avoid.
+    // A weight of zero is rejected.
     DN_ASSERT_THROWS (std::runtime_error,
                       Config::from_string ("nsp --nsp-weight 0\n"));
     DN_ASSERT_THROWS (std::runtime_error,
@@ -280,11 +268,7 @@ DN_TEST (nsp, the_timer_settings_come_from_the_configuration)
 
 DN_TEST (nsp, closed_connections_are_reclaimed)
 {
-    // A closed connection is not destroyed at once, because it is retired
-    // from inside a callback into its own owner and freeing it there is a
-    // use-after-free.  It must not be kept forever either: that was the
-    // slow leak in BUGS.md item 6, where a node that opened and closed
-    // many links grew without bound.
+    // Closed connections are kept for a grace period, then freed.
     Link l;
     l.start ();
     // Nothing is waited out: the grace period is the rule being checked,
@@ -479,9 +463,7 @@ DN_TEST (nsp, phase_and_segment_size_are_negotiated)
 
 DN_TEST (nsp, out_of_order_segments_are_held_not_dropped)
 {
-    // A segment that arrives early used to be discarded and recovered by
-    // retransmission.  Now it waits for the gap to be filled, so only what
-    // is actually missing has to be sent again.
+    // Early segments are held until the gap is filled.
     Link l;
     l.start ();
     Connection *c = l.b->nsp ()->connect (Nodeid::parse ("1.1"), {});
@@ -606,9 +588,8 @@ DN_TEST (nsp, xoff_stops_transmission_and_xon_resumes_it)
         LinkSvcMsg ls;
         ls.dstaddr   = c->srcaddr ();
         ls.srcaddr   = far->srcaddr ();
-        // Each one gets the next number on the other subchannel, as a real
-        // peer sends them: a repeat of a number already seen is a
-        // retransmission, and its credit must not be applied twice.
+        // Each gets the next number; a repeated number is a retransmission and
+        // its credit is not applied again.
         ls.segnum    = Seq (++lsnum);
         ls.fcval_int = LinkSvcMsg::DATA_REQ;
         ls.fcmod     = mod;
@@ -634,10 +615,7 @@ DN_TEST (nsp, xoff_stops_transmission_and_xon_resumes_it)
 
 DN_TEST (nsp, the_window_limits_how_much_is_in_flight)
 {
-    // Even with no flow control, only qmax segments may be outstanding at
-    // once.  The far end acknowledges as it goes, so the window opens
-    // again and everything arrives, but never more than qmax is on the
-    // wire at any moment.
+    // With no flow control, at most qmax segments are outstanding.
     Link l ("nsp --qmax 4\n");
     l.start ();
     Connection *c = l.b->nsp ()->connect (Nodeid::parse ("1.1"), {});

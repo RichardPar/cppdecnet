@@ -1,7 +1,6 @@
 // src/http/monitor.cc -- the HTTP monitoring interface.
 //
-// Port of http.py and html.py.  See the header for why the pages are
-// rendered on the node thread rather than on the server's own.
+// Port of http.py and html.py.
 
 #include "decnet/http/monitor.h"
 
@@ -34,10 +33,7 @@ namespace {
 
 // ------------------------------------------------------------- HTML bits
 
-// Escape the five characters that matter.  Every string that reaches a
-// page goes through this: node names, circuit names and event text all
-// come from the wire or from a configuration file, and neither is a place
-// to trust.
+// HTML escape.  Applied to all strings from the wire or configuration.
 std::string esc (const std::string &s)
 {
     std::string out;
@@ -55,9 +51,7 @@ std::string esc (const std::string &s)
     return out;
 }
 
-// The style sheet, inline so the server has exactly one thing to serve and
-// no resource directory to find.  Dark and light both come from the
-// reader's own setting rather than from a toggle here.
+// Inline style sheet.  Follows the browser's light/dark preference.
 constexpr const char *stylesheet = R"(
 :root { color-scheme: light dark;
         --fg: #111; --bg: #fff; --dim: #666; --line: #d4d4d4;
@@ -126,9 +120,7 @@ struct Page {
     }
 };
 
-// A table.  Small helper rather than a template, because every table here
-// is built the same way: a header row, then rows of already formatted
-// cells.
+// A table: header row, then rows of formatted cells.
 class Table {
 public:
     explicit Table (std::initializer_list<const char *> headings)
@@ -262,9 +254,7 @@ std::string page_overview (Node *n)
         Table t ({ "Number", "Name" });
         if (auto *s = n->session ())
             for (std::size_t i = 0; i < s->object_count (); ++i) {
-                // The database is small and the accessors are by key, so
-                // walk the numbers rather than adding an iterator for one
-                // caller.
+                // Walk node numbers; the database has no iterator.
                 (void) i;
             }
         for (unsigned no = 1; no < 256; ++no) {
@@ -601,9 +591,8 @@ Response HttpMonitor::render_on_node (const Request &req)
     if (!n) { Response r; r.status = 503; r.body = page_not_found (req.path);
               return r; }
 
-    // Hand the work to the node thread and wait for it.  If the node is
-    // stopping, the item may never run, so the wait is bounded and a
-    // timeout answers "unavailable" rather than hanging the connection.
+    // Run on the node thread and wait, with a timeout in case the node is
+    // stopping.
     auto promise = std::make_shared<std::promise<Response>> ();
     std::future<Response> f = promise->get_future ();
     std::deque<events::Event> recent;

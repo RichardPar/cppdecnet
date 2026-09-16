@@ -86,9 +86,8 @@ public:
 
     ByteView peek_rest () const noexcept { return buf_.subspan (pos_); }
 
-    // Look at the next n bytes as a little endian integer without
-    // consuming them.  A field that is present only when a flag bit is set
-    // -- NSP's acknowledgement numbers -- has to decide before it commits.
+    // Peek at the next n bytes as a little endian integer, for optional fields
+    // whose presence depends on a flag bit.
     std::uint64_t peek_uint (std::size_t n) const
     {
         if (remaining () < n) return 0;

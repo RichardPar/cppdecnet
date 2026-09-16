@@ -1,10 +1,7 @@
-// decnet/common/types.h -- the small value types shared by every layer.
+// decnet/common/types.h -- small value types shared by all layers.
 //
-// Port of the corresponding classes in the Python's decnet/common.py.  In
-// Python these all subclass Field so they can appear directly in a packet
-// layout; here they instead satisfy the Codec concept in
-// decnet/packet/field.h, which the layout machinery picks up by ADL-free
-// static dispatch.
+// Port of the corresponding classes in common.py.  They satisfy the Codec
+// concept in decnet/packet/field.h so they can be used in packet layouts.
 
 #ifndef DECNET_COMMON_TYPES_H
 #define DECNET_COMMON_TYPES_H
@@ -18,9 +15,7 @@
 
 namespace decnet {
 
-// A packet under construction or being parsed.  the Python passes bytes and
-// memoryview objects around; we use a vector for owned data and a span for
-// borrowed slices, which keeps the decoders allocation free.
+// Owned packet data is a vector; borrowed slices are spans.
 using Bytes     = std::vector<std::uint8_t>;
 using ByteView  = std::span<const std::uint8_t>;
 
@@ -29,9 +24,8 @@ std::string hexdump (ByteView b, std::size_t bytes_per_line = 16);
 
 // ---------------------------------------------------------------- Nodeid
 //
-// A Phase IV node address: 6 bits of area, 10 bits of node number, held as
-// the 16 bit value the wire format uses.  Phase II and III addresses have
-// area 0.  Mirrors common.Nodeid.
+// Phase IV node address: 6 bits of area and 10 bits of node number, stored
+// as the 16 bit wire value.  Phase II and III addresses have area 0.
 class Nodeid {
 public:
     constexpr Nodeid () noexcept = default;
@@ -92,8 +86,7 @@ private:
 
 // --------------------------------------------------------------- Version
 //
-// A three part DECnet version number as it appears in routing and NSP
-// initialisation messages.  Mirrors common.Version.
+// Three part DECnet version number from routing and NSP init messages.
 struct Version {
     std::uint8_t v1 = 0, v2 = 0, v3 = 0;
 
@@ -103,7 +96,7 @@ struct Version {
     friend bool operator== (Version, Version) noexcept = default;
 };
 
-// The version numbers the Python reports; kept here so every layer agrees.
+// The version numbers PyDECnet reports; kept here so every layer agrees.
 inline constexpr Version tiver_ph2 { 3, 1, 0 };
 inline constexpr Version tiver_ph3 { 1, 3, 0 };
 inline constexpr Version tiver_ph4 { 2, 0, 0 };
@@ -113,10 +106,8 @@ inline constexpr Version nspver_ph4 { 4, 1, 0 };
 
 // ------------------------------------------------------------------ misc
 
-// Validate and canonicalise a node name: alphanumeric, at least one letter,
-// at most six characters, upper cased.  Port of common.nodename.  A real
-// the Python node rejects a longer name at config read-in, so accepting one
-// here would only defer the failure to the far end.
+// Validate and canonicalise a node name: 1 to 6 alphanumeric characters,
+// at least one letter, upper cased.  Port of common.nodename.
 std::string nodename (std::string_view s);
 
 // The same for a circuit name: letters, then letters, digits or hyphens.

@@ -12,7 +12,7 @@ namespace decnet {
 
 class Backoff {
 public:
-    // Like the Python constructor: one argument is the upper bound with a
+    // Like the PyDECnet constructor: one argument is the upper bound with a
     // lower bound of 1, two arguments are the bounds.
     explicit Backoff (double high) : Backoff (1.0, high) {}
 

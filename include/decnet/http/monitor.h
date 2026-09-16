@@ -1,22 +1,12 @@
 // decnet/http/monitor.h -- the HTTP monitoring interface.
 //
-// Port of http.py and html.py.  A small web server that shows what the
-// node is doing: its identity, its circuits and adjacencies, the logical
-// links NSP is carrying, what MOP has heard on each LAN, and the recent
-// event records.
+// Port of http.py and html.py.
 //
-// The one design decision worth stating is where the pages are rendered.
-// The node is single threaded by design -- every layer assumes it is the
-// only thing touching its state -- so the server thread must not read that
-// state directly.  Instead it posts a CallbackWork to the node and waits
-// for it: the page is built on the node thread, between two work items,
-// with the same guarantees every other part of the system has.  A request
-// therefore costs one round trip through the work queue, which is the
-// price of not having to lock anything.
+// Pages are rendered on the node thread: the server thread posts a
+// CallbackWork and waits for it, so no layer state is accessed from the
+// server thread.
 //
-// PORT: the Python also serves HTTPS, a REST style API under /api, and the
-// network map; and it can front several nodes in one process, which is why
-// its URLs start with a node name.  This serves one node over plain HTTP.
+// PORT: no HTTPS, /api or network map, and only one node per server.
 // See NOTDONE.md.
 
 #ifndef DECNET_HTTP_MONITOR_H
@@ -54,9 +44,7 @@ struct Response {
     std::string body;
 };
 
-// The pages.  Free functions taking the node, so they can be tested
-// without a socket anywhere near them.  Each must be called on the node
-// thread; the server arranges that.
+// Page renderers.  Must be called on the node thread.
 std::string page_overview (Node *n);
 std::string page_routing (Node *n);
 std::string page_nsp (Node *n);
@@ -104,9 +92,8 @@ private:
     std::thread       thread_;
     std::atomic<bool> stopping_ { false };
 
-    // The recent events ring.  Written on the node thread, read on the
-    // node thread (inside the render callback), so the mutex is only
-    // guarding against the two ends of that hop, not against the layers.
+    // Recent events.  The mutex covers the handoff between the node thread and
+    // the render callback.
     std::mutex                 events_mutex_;
     std::deque<events::Event>  recent_;
     static constexpr std::size_t max_events = 100;

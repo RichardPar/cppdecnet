@@ -1,9 +1,7 @@
 // Port of tests/test_packet.py: the layout machinery.
 //
-// These exercise the same properties the Python tests do -- round trip,
-// field order, overflow rejection, truncation rejection, extra data
-// handling and layout inheritance -- against the compile time layout
-// described in decnet/packet/field.h.
+// Round trip, field order, overflow, truncation, extra data and layout
+// inheritance.
 
 #include "harness.h"
 
@@ -28,7 +26,7 @@ struct Simple : Packet<Simple> {
         field<NodeidField> (&Simple::src,   "src"));
 };
 
-// A subclass adding fields to a base layout, the way the Python packet
+// A subclass adding fields to a base layout, the way PyDECnet packet
 // classes extend a common header.
 struct Header : Packet<Header> {
     std::uint8_t flags = 0;

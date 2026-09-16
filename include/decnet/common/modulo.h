@@ -1,18 +1,14 @@
 // decnet/common/modulo.h -- sequence number arithmetic.
 //
-// Port of modulo.py.  Values are integers modulo N compared by the rules of
-// RFC 1982: a value is "less than" another when the forward distance to it
-// is at most half the modulus.  NSP uses this for its 12-bit sequence
-// numbers, where 4095 must compare less than 0.
+// Port of modulo.py.  Integers modulo N compared per RFC 1982: a is less
+// than b when the forward distance from a to b is at most half the modulus.
+// NSP uses this for 12-bit sequence numbers.
 //
-// In Python the modulus is a class keyword handled by a metaclass.  Here
-// it is a template parameter, so two moduli are two types and mixing them
-// is a compile error rather than a runtime NotImplemented.
+// The modulus is a template parameter, so mixing moduli is a compile error.
 //
-// One case stays a runtime property: with an even modulus, two values
-// exactly half the modulus apart have no defined order.  Python raises
-// TypeError; we return std::partial_ordering::unordered, which makes each
-// of <, <=, > and >= false.  comparable() asks the question directly.
+// With an even modulus, values exactly half the modulus apart are
+// unordered.  Python raises TypeError; here comparison returns
+// std::partial_ordering::unordered and comparable() returns false.
 
 #ifndef DECNET_COMMON_MODULO_H
 #define DECNET_COMMON_MODULO_H
@@ -45,7 +41,7 @@ public:
 
     constexpr Mod () noexcept = default;
 
-    // Out of range construction throws, as the Python __new__ does.  Use
+    // Out of range construction throws, as PyDECnet's __new__ does.  Use
     // wrap() for values that are meant to be reduced.
     constexpr explicit Mod (value_type v) : value_ (v)
     {
@@ -82,7 +78,7 @@ public:
                                  : std::partial_ordering::greater;
     }
 
-    // True when a and b have a defined order.  The Python version signals
+    // True when a and b have a defined order.  PyDECnet signals
     // this by raising; being able to ask is more useful in a receive path.
     static constexpr bool comparable (Mod a, Mod b) noexcept
     {

@@ -1,4 +1,4 @@
-// Port of tests/test_config.py: reading a the Python configuration file.
+// Port of tests/test_config.py: reading a PyDECnet configuration file.
 
 #include "harness.h"
 
@@ -69,9 +69,7 @@ DN_TEST (config, option_equals_form)
 
 DN_TEST (config, unknown_commands_are_kept_not_rejected)
 {
-    // Layers that are not ported yet must not make a real config file fail.
-    // This used to use "http" as its example, which stopped being one when
-    // the monitoring server landed and claimed the line.
+    // Commands for unported layers must not make a config file fail to load.
     Config c = Config::from_string ("api /tmp/decnet.sock\n"
                                     "bridge br-0 --pcap eth0\n");
     DN_ASSERT_EQ (c.unhandled ().size (), 2u);
@@ -80,9 +78,7 @@ DN_TEST (config, unknown_commands_are_kept_not_rejected)
 
 DN_TEST (config, names_are_validated)
 {
-    // A node name is at most six characters and must contain a letter; a
-    // real the Python node rejects anything else, so accepting it here would
-    // only defer the failure.
+    // Node names: at most six characters, at least one letter.
     DN_ASSERT_THROWS (std::runtime_error,
                       Config::from_string ("node 1.1 TOOLONGNAME\n"));
     DN_ASSERT_THROWS (std::runtime_error,

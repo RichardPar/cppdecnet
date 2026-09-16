@@ -77,9 +77,7 @@ ReplyDict::sorted (const NiceRequest &req) const
     };
 
     if (kind_ == Entity::node) {
-        // The executor first, whatever its address sorts as: that is where
-        // NCP expects to find it, and it is the one entry the reader is
-        // most likely to have asked about.
+        // Executor first.
         Nodeid exec = node_ ? node_->id () : Nodeid ();
         auto self = numeric_.find (exec.value ());
         if (self != numeric_.end () && req.entity.match (exec))

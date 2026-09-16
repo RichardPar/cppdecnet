@@ -1,17 +1,10 @@
-// decnet/nice/value.h -- NICE data value encoding.
+// decnet/nice/value.h -- NICE data values.
 //
-// Port of the data type classes in nice_coding.py (DU, DS, H, O, AI, HI, C
-// and CM).  A NICE data value carries its own type code, so unlike every
-// other field in DECnet the reader learns the type from the data rather
-// than from the layout.  the Python models that with a class per type code
-// and an index that maps a code to its class, generating classes on the fly
-// for byte counts it has not seen.
+// Port of the data types in nice_coding.py (DU, DS, H, O, AI, HI, C, CM).
+// Each value carries its own type code, represented here as a code plus a
+// variant payload.
 //
-// A tagged value is the better fit in C++: one type, a code, and a variant
-// payload.  The "generate a class per length" machinery then disappears
-// entirely, because the length is just a field.
-//
-// The type code byte:
+// Type code byte:
 //
 //     0x00 + n   DU-n   unsigned decimal, n bytes
 //     0x10 + n   DS-n   signed decimal, n bytes
@@ -21,10 +14,7 @@
 //     0x80 + n   C-n    coded, n bytes, formatted through a label list
 //     0xc0 + n   CM-n   coded multiple: n values, each with its own code
 //
-// PORT: the counter types (CTR/CTM, which use a two byte code combining the
-// counter kind with the parameter number) and the NICE parameter group that
-// carries them belong with nicepackets in phase 6, where their only callers
-// are.  This header is the value encoding those will build on.
+// Counter types (CTR/CTM) are in params.h.
 
 #ifndef DECNET_NICE_VALUE_H
 #define DECNET_NICE_VALUE_H
@@ -82,24 +72,20 @@ public:
     const List        &as_list   () const;
 
     // ----------------------------------------------------------- encoding
-    // Both include the type code, as the Python encode methods do.
+    // Both include the type code, as PyDECnet's encode methods do.
     void  encode (Encoder &e) const;
     Bytes encode () const;
 
     // Read a type code and the value that follows it.
     static Value decode (Decoder &d);
 
-    // The same, for a caller that already has the type code.  A NICE
-    // *request* omits the code byte -- the reader is expected to know what
-    // each parameter means -- so the request decoder looks the code up in a
-    // table and calls this.  See nice/packets.h.
+    // Decode with a known type code.  Used for requests, which omit the code
+    // byte.  See nice/packets.h.
     static Value decode_body (std::uint8_t code, Decoder &d);
     static Value parse (ByteView buf);
 
     // ---------------------------------------------------------- formatting
-    // The display form NICE uses.  labels applies to a coded value, and to
-    // nothing else; for CM it is ignored, since each element carries its
-    // own type.
+    // NICE display form.  labels applies only to coded values.
     std::string format (Labels labels = {}) const;
 
     friend bool operator== (const Value &, const Value &);

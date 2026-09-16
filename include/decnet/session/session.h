@@ -1,16 +1,10 @@
 // decnet/session/session.h -- session control.
 //
-// Port of session.py.  Session control is what turns "a logical link to a
-// node" into "a conversation with a named application on that node": it
-// keeps the object database, decides which object an inbound connection is
-// asking for, and hands the connection to it.
+// Port of session.py.  Maintains the object database and hands inbound
+// connections to the requested object.
 //
-// PORT: access control is parsed but not enforced -- the request id,
-// password and account travel, and an object may look at them, but nothing
-// authenticates them. the Python uses PAM for that. Objects implemented as
-// separate processes (the Python runs them over a JSON protocol on a pipe)
-// are not here either; see TASKS.md, where keeping that protocol
-// byte-compatible is called out as worth doing.
+// PORT: access control data is carried but not verified (PyDECnet uses
+// PAM).
 
 #ifndef DECNET_SESSION_SESSION_H
 #define DECNET_SESSION_SESSION_H
@@ -118,9 +112,7 @@ public:
                                 Bytes connectdata,
                                 std::unique_ptr<Application> app);
 
-    // The same, for a caller that needs the access control fields as well.
-    // We send what we are given; nothing here checks what arrives, which is
-    // noted in NOTDONE.md.
+    // Same, with access control fields.
     SessionConnection *connect (Nodeid dest, ConnectData cd,
                                 std::unique_ptr<Application> app);
 
@@ -145,25 +137,16 @@ private:
 
     Live *find_live (nsp::Connection &c);
 
-    // Retire a conversation.  The Live is moved aside rather than
-    // destroyed: this is called from inside a callback into the
-    // application, which would otherwise be freeing the very object whose
-    // stack frame it is going to return into.
+    // Retire a conversation.  Moved aside rather than destroyed, since this is
+    // called from inside a callback into the application.
     void retire (nsp::Connection &c);
 
     std::vector<Object>                          objects_;
     std::map<std::uint8_t, std::size_t>          by_number_;
     std::map<std::string, std::size_t>           by_name_;
     std::map<nsp::Connection *, Live>            live_;
-    // Conversations that have ended.  Kept for the reason above, and
-    // because an application may still hold its connection.
-    //
-    // PORT: nothing reclaims these, nor NSP's closed connections; a long
-    // running node grows slowly.  See BUGS.md.
-    // Finished conversations, kept for the same reason NSP keeps closed
-    // connections and reclaimed the same way: retirement happens inside a
-    // callback into the application being retired, so it cannot be freed
-    // there, but keeping it forever is a slow leak.  See BUGS.md.
+    // Finished conversations, freed after a grace period, as NSP does with
+    // closed connections.
     struct Retired {
         Live                                  live;
         std::chrono::steady_clock::time_point when;
@@ -184,9 +167,7 @@ private:
     void sweep_finished ();
 };
 
-// The DECnet network management loopback application, object 25.  Port of
-// decnet/modules/mirror.py.  It is built in because it is what every other
-// implementation uses to prove a path works -- NCP LOOP NODE talks to it.
+// Loopback application, object 25.  Port of decnet/modules/mirror.py.
 std::unique_ptr<Application> make_mirror ();
 
 // Register the objects that are enabled by default.

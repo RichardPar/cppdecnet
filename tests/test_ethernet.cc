@@ -86,7 +86,7 @@ DN_TEST (eth, device_udp)
     DN_ASSERT_EQ (d.destination, std::string ("127.0.0.1"));
     DN_ASSERT_EQ (d.dest_port, 4742);
 
-    // SIMH says "udp", the Python also accepts "bridge"; they are the same.
+    // SIMH says "udp", PyDECnet also accepts "bridge"; they are the same.
     EthernetDevice b = EthernetDevice::parse ("bridge:4711:host:4742");
     DN_ASSERT (b.mode == Mode::udp);
     DN_ASSERT_EQ (b.dest_port, 4742);
@@ -158,13 +158,8 @@ DN_TEST (eth, short_frames_are_padded_to_the_minimum)
     DN_ASSERT_EQ (p.payload.size (), 1u);
     DN_ASSERT_EQ (p.payload[0], 0xaa);
 
-    // The fill is 0x42, not zero.  That looks like it cannot matter -- the
-    // length field two bytes into the frame says where the payload ends --
-    // but a PDP-11 running RSX reads past it, and what it finds there ends
-    // up in the address it records.  Sent a hello filled with zeros it
-    // built an adjacency to node 21.426, which exists nowhere; sent the
-    // same 27 payload bytes filled with 0x42 it built a correct one.  See
-    // BUGS.md.  Zeros here would pass every other test in this file.
+    // Padding is 0x42, as in PyDECnet.  Some RSX systems read past the length
+    // field.
     for (std::size_t i = 17; i < f.size (); ++i) DN_ASSERT_EQ (f[i], 0x42);
 }
 
@@ -184,9 +179,7 @@ DN_TEST (eth, malformed_frames_rejected)
 
 DN_TEST (eth, two_nodes_exchange_frames_over_a_udp_lan)
 {
-    // Two nodes pointed at each other are a degenerate two station LAN --
-    // enough to exercise the whole datalink without a kernel device or any
-    // privilege.
+    // Two nodes over UDP form a two station LAN.
     std::uint16_t pa = free_udp_port (), pb = free_udp_port ();
 
     Config acfg = Config::from_string (
@@ -340,9 +333,8 @@ DN_TEST (eth, filter_expression_names_every_address_and_protocol)
 
 DN_TEST (eth, filter_expression_is_empty_with_no_ports)
 {
-    // Nothing has asked for anything, so there is nothing to ask the
-    // kernel for either.  An empty expression means "leave the filter
-    // alone" rather than "accept everything".
+    // No ports, no filter.  An empty expression means "leave the filter
+    // alone".
     Config c = Config::from_string ("routing 1.1 --type l1router\n"
                                     "node 1.1 NODEA\n");
     Node n (c);
@@ -353,15 +345,13 @@ DN_TEST (eth, filter_expression_is_empty_with_no_ports)
 
 DN_TEST (eth, pcap_interface_address)
 {
-    // Loopback exists everywhere and has an all zero hardware address;
-    // a name that cannot exist has none at all.  Both come back as the
-    // null address, which is how the caller knows to leave hwaddr alone.
+    // Loopback has an all zero address and a nonexistent interface has none;
+    // both return the null address.
     DN_ASSERT_EQ (PcapEthernet::interface_address ("no-such-if-42"),
                   Macaddr ());
 
-    // Any real Ethernet interface on this machine should give a real
-    // address.  Skip quietly if there is none: a build machine may have
-    // nothing but loopback.
+    // A real Ethernet interface should have an address.  Skipped if there is
+    // none.
     Macaddr found;
     for (const char *name : { "eth0", "en0", "enp0s3" }) {
         Macaddr a = PcapEthernet::interface_address (name);
@@ -372,9 +362,8 @@ DN_TEST (eth, pcap_interface_address)
 
 DN_TEST (eth, a_pcap_circuit_can_be_created)
 {
-    // Creating one needs no privilege; opening it does.  This checks the
-    // wiring -- that a pcap: device produces a PcapEthernet rather than
-    // the "not supported" path it used to take.
+    // Creating a pcap device needs no privilege; opening it does.  Checks that
+    // pcap: produces a PcapEthernet.
     auto dl = Ethernet::create (nullptr, "ETH-9", "pcap:no-such-if-42", true);
     DN_ASSERT (dl != nullptr);
     DN_ASSERT (dynamic_cast<PcapEthernet *> (dl.get ()) != nullptr);

@@ -1,12 +1,7 @@
 // decnet/routing/routing.h -- the routing layer.
 //
-// Port of routing.BaseRouter and routing.EndnodeRouting.  The router owns
-// the circuits and the adjacency table, and decides what to do with a
-// packet that arrives from one of them.
-//
-// Only the endnode lives here.  L1Router and L2Router, which add the
-// routing tables, the forwarding decision and the routing message
-// exchange, are in l1router.h.
+// Port of routing.BaseRouter and routing.EndnodeRouting.  Owns the
+// circuits and adjacency table.  L1Router and L2Router are in l1router.h.
 
 #ifndef DECNET_ROUTING_ROUTING_H
 #define DECNET_ROUTING_ROUTING_H
@@ -36,9 +31,7 @@ public:
     BaseRouter (Element *parent, const Config &config);
     ~BaseRouter () override;
 
-    // Virtual: a router does more at startup than an endnode -- it has to
-    // establish its own column in the routing matrix before any route can
-    // be computed.
+    // Virtual: routers set up their routing matrix column.
     virtual void start ();
     virtual void stop ();
 
@@ -66,21 +59,17 @@ public:
     // an endnode that means accept or drop, for a router it means route.
     virtual void forward (ShortData &pkt) = 0;
 
-    // The packet is addressed to this node: hand it up.  Called through
-    // the self adjacency, so that a packet for us resolves to an output
-    // adjacency like any other.
+    // Deliver a packet addressed to this node.  Called via the self adjacency.
     virtual void deliver (ShortData &pkt);
 
-    // Originate a packet carrying NSP data.  Each node type reaches the
-    // wire differently -- an endnode through its one circuit, a router
-    // through its routing table -- so this is virtual.
+    // Send an NSP packet.  Endnodes use their circuit, routers the routing
+    // table.
     virtual void send_nsp (const Bytes &data, Nodeid dest, bool rqr = false) = 0;
 
     // Where a packet for this node goes.  NSP registers itself here.
     void set_nsp (nsp::NSP *n) noexcept { nsp_ = n; }
 
-    // Answer the part of a NICE read request routing knows about: node
-    // reachability, circuits, and (for an area router) areas.  Port of
+    // NICE read for node reachability, circuits and areas.  Port of
     // BaseRouter.nice_read.
     virtual void nice_read (const nice::NiceRequest &req, nice::ReplyDict &resp);
 
@@ -103,12 +92,9 @@ protected:
     virtual void reach (const nice::NiceRequest &req, nice::ReplyDict &resp,
                         const std::string *circuit_qual);
 
-    // Create the routing circuits.  This is deliberately NOT called from
-    // this class's constructor: building a circuit asks the router for its
-    // node type, which is virtual, and during a base class constructor
-    // that call would land on the pure virtual.  Each concrete router
-    // calls this from its own constructor body, where the vtable is its
-    // own.
+    // Create the routing circuits.  Called from each concrete router's
+    // constructor, not from here, because circuits query the virtual node
+    // type.
     void init_circuits (const Config &config);
 
 public:
@@ -130,9 +116,8 @@ public:
     { return lan_order_; }
     LanCircuit *lan_circuit (const std::string &name) const;
 
-    // Where a packet addressed to this node goes.  Until NSP exists there
-    // is nowhere to send it, so the router counts it and drops it; the
-    // count is what the tests look at.
+    // Packets addressed to this node with nowhere to deliver them are counted
+    // and dropped.
     std::uint64_t packets_for_us () const noexcept { return for_us_; }
 
 protected:

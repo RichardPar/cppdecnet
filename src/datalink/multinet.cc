@@ -16,9 +16,7 @@ namespace {
 // The four byte Multinet header.
 constexpr std::size_t hdrlen = 4;
 
-// The largest frame we will accept.  Multinet carries routing layer
-// packets, which are far smaller; this only bounds what a confused or
-// hostile peer can make us allocate.
+// Largest accepted frame.  Limits allocation from a bad peer.
 constexpr std::size_t max_frame = 65535;
 
 bool to_port (std::string_view s, std::uint16_t &out)
@@ -37,9 +35,8 @@ bool to_port (std::string_view s, std::uint16_t &out)
 
 MultinetDevice MultinetDevice::parse (const std::string &device)
 {
-    // the Python's regex is (.*?):(\d*)(?:(:connect)|(:listen)|(:\d+))?$ --
-    // a non-greedy host, then a port, then an optional mode or local port.
-    // Splitting from the right is the same thing and is easier to read.
+    // Equivalent to PyDECnet's (.*?):(\d*)(?:(:connect)|(:listen)|(:\d+))?$,
+    // parsed from the right.
     MultinetDevice d;
     std::vector<std::string> parts;
     std::string cur;
@@ -118,7 +115,7 @@ std::unique_ptr<Datalink> Multinet::create (Element *owner,
     case MultinetDevice::Mode::listen:
         return std::make_unique<ListenMultinet> (owner, name, dev, source_host);
     case MultinetDevice::Mode::udp:
-        // the Python warns here, and it is right to: UDP Multinet violates
+        // PyDECnet warns here, and it is right to: UDP Multinet violates
         // most of the point to point datalink requirements.
         DN_WARN ("Multinet UDP mode is not recommended: it violates the "
                  "DECnet architecture");
@@ -138,9 +135,7 @@ PtpDatalink::State Multinet::connected ()
 PtpDatalink::State Multinet::running (Work &w)
 {
     if (auto *r = dynamic_cast<Received *> (&w)) {
-        // Pass the frame up.  It comes through the state machine rather
-        // than straight from the receive thread so that everything the
-        // layer above sees is serialised on the node thread.
+        // Pass the frame up via the state machine, on the node thread.
         if (port_) {
             counters_.bytes_recv += r->packet ().size ();
             ++counters_.pkts_recv;
@@ -242,9 +237,7 @@ void ConnectMultinet::connect ()
     // Try the next address next time, if the name gave us several.
     dest_.advance ();
 
-    // Bound the wait for the connection to complete.  A failed connect is
-    // not retried here; the timer expiry turns into a reconnect, so a host
-    // that is down is retried at a decreasing rate rather than in a spin.
+    // Connect timeout.  Expiry leads to a reconnect with backoff.
     if (node ()) node ()->timers ().jstart (this, conn_timer_.next ());
 }
 
@@ -383,9 +376,7 @@ void UdpMultinet::send (Bytes msg)
 
     Bytes frame;
     frame.reserve (hdrlen + msg.size ());
-    // Over UDP the first two bytes are a sequence number, which the
-    // receiver ignores -- the Linux implementation does not look at it
-    // either -- but we count it up anyway to match what a peer expects.
+    // UDP sequence number.  Receivers ignore it.
     frame.push_back (static_cast<std::uint8_t> (seq_ & 0xff));
     frame.push_back (static_cast<std::uint8_t> (seq_ >> 8));
     frame.push_back (0);

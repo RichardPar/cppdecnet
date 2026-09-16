@@ -1,22 +1,15 @@
 // decnet/events/events.h -- DECnet event records.
 //
-// Port of events.py.  An event is a numbered thing that happened: class 4
-// code 7 is "circuit down, circuit fault".  It carries a timestamp, the
-// node it happened on, the entity it happened to, and a NICE parameter list
-// saying more.  The same record is what goes on the console, into a log
-// file, and down a logical link to a remote sink, so there is one encoding
-// and three ways of presenting it.
+// Port of events.py.  An event has a class and code (4.7 is "circuit down,
+// circuit fault"), a timestamp, the source node, an entity and a NICE
+// parameter list.  The same encoding is used for console, file and remote
+// sinks.
 //
-// the Python writes one Python class per event, several hundred of them, and
-// leans on the class hierarchy for the shared parameter definitions.  That
-// does not port: a class per event in C++ buys nothing, because none of
-// them add behaviour, only a number, a sentence and a parameter table.  So
-// there is one Event type and a table of definitions beside it.
+// PyDECnet has a class per event.  Here there is one Event type and a
+// table of definitions.
 //
-// The timestamp is the awkward part.  It counts half-days and seconds from
-// 1 January 1977 in local wall clock time with no daylight saving rule
-// applied, which is what the other implementations show, so it cannot be
-// derived from a UTC clock reading alone.
+// Timestamps are half-days and seconds since 1 January 1977, local time
+// without daylight saving adjustment.
 
 #ifndef DECNET_EVENTS_EVENTS_H
 #define DECNET_EVENTS_EVENTS_H
@@ -38,9 +31,8 @@ using nice::Value;
 using packet::Decoder;
 using packet::Encoder;
 
-// An event class and code together.  Two 32 entry code spaces per class,
-// 512 classes; classes 0 to 30 are architectural, the rest belong to
-// particular implementations.
+// Event class and code.  32 codes per class, 512 classes; classes 0 to 30
+// are architectural.
 struct EventId {
     std::uint16_t cls  = 0;
     std::uint8_t  code = 0;
@@ -64,14 +56,11 @@ struct EventDef {
 // The definition for an event, or null if this build has never heard of it.
 const EventDef *find_event (EventId id);
 
-// Every event this implementation can name.  A filter can only select from
-// these, because filtering applies to locally generated events and there is
-// no point enabling one we never raise.
+// All events this implementation can raise.  Filters select from these.
 std::span<const EventDef> known_events ();
 
-// The values the "Reason" parameter of a class 4 (routing) event takes.
-// The numbers are the ones the display table above is indexed by, so a
-// call site that picks the right one gets the right sentence for free.
+// Values of the "Reason" parameter in class 4 (routing) events, matching
+// the display table.
 namespace reason {
 inline constexpr std::uint64_t
     sync_lost = 0, data_errors = 1, unexpected_packet_type = 2,
@@ -96,10 +85,8 @@ inline constexpr std::uint16_t
     adjacent_node = 8;
 }
 
-// A node as a NICE parameter value: the address, and the name beside it
-// when we know one.  Several events name a node this way, and the display
-// form ("2.5 (ARK)") comes out of the two element list rather than out of
-// any special case in the formatter.
+// A node as a NICE parameter value: the address and, if known, the name.
+// Displays as "2.5 (ARK)".
 Value node_value (const NiceNode &n);
 
 class Event {
@@ -109,9 +96,7 @@ public:
 
     // ------------------------------------------------------------ header
     EventId id { };
-    // Always 1: "event log".  The field exists because the record format
-    // shares its first byte with the rest of the logging protocol, which
-    // has other functions we do not implement.
+    // Always 1 (event log).
     std::uint8_t function = 1;
     // Which sinks the originating node asked for.  A record arriving from
     // another node carries its wishes here, and a local sink honours them.
@@ -132,8 +117,7 @@ public:
     void stamp_now ();
 
     // ------------------------------------------------------- convenience
-    // Add a parameter.  The overloads cover what the call sites need; the
-    // Value form is there for anything else.
+    // Add a parameter.
     Event &param (std::uint16_t n, Value v);
     Event &coded (std::uint16_t n, std::uint64_t v, unsigned bytes = 1);
     Event &number (std::uint16_t n, std::uint64_t v, unsigned bytes = 1);

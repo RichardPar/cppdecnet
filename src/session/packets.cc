@@ -89,9 +89,7 @@ std::string get_string (Decoder &d, std::size_t max)
 
 Bytes ConnectData::encode_message ()
 {
-    // The flags are derived from what is actually present, not set by the
-    // caller: that is the only way they can be consistent with the
-    // payload they describe.
+    // Flags are derived from the fields present.
     payload.clear ();
     auth = !(rqstrid.empty () && passwrd.empty () && account.empty ());
     if (auth) {
@@ -136,7 +134,7 @@ ConnectData ConnectData::parse_message (ByteView buf)
         ByteView b = d.raw (n);
         c.connectdata.assign (b.begin (), b.end ());
     }
-    // Anything left over is not an error in the Python, only a debug note.
+    // Anything left over is not an error in PyDECnet, only a debug note.
     return c;
 }
 

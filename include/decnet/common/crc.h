@@ -1,10 +1,6 @@
-// decnet/common/crc.h -- the CRC variants DECnet data links need.
+// decnet/common/crc.h -- CRC variants used by DECnet data links.
 //
-// Port of crc.py, which builds CRC classes from a polynomial, width, seed
-// and reflection flags.  The Python version does that at class creation
-// time with a metaclass; here the table is a constexpr array, so each
-// variant costs nothing at runtime and the compiler can inline the update
-// loop.
+// Port of crc.py.  Tables are constexpr arrays.
 
 #ifndef DECNET_COMMON_CRC_H
 #define DECNET_COMMON_CRC_H
@@ -117,7 +113,7 @@ private:
     Word value_;
 };
 
-// The variants the Python defines, with the names it uses.
+// The variants PyDECnet defines, with the names it uses.
 
 // DDCMP header and data block check: CRC-16, reflected, seed 0.
 using CRC16 = Crc<std::uint16_t, 0x8005, 16, 0, true, 0>;

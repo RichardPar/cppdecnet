@@ -20,9 +20,8 @@ namespace {
 
 Bytes bytes_of (const std::string &s) { return Bytes (s.begin (), s.end ()); }
 
-// A mirror message: a function code byte followed by text.  Built this way
-// because a string literal cannot carry an embedded NUL through the
-// std::string constructor -- it would stop there.
+// Mirror message: function code byte followed by text.  Built explicitly
+// so a NUL code byte is kept.
 Bytes mirror_msg (std::uint8_t fn, const std::string &text)
 {
     Bytes b { fn };
@@ -75,7 +74,7 @@ DN_TEST (session, end_user_formats)
 
 DN_TEST (session, connect_message_matches_python)
 {
-    // The exact bytes the Python builds for a connect to object 25 from a
+    // The exact bytes PyDECnet builds for a connect to object 25 from a
     // named source, which is what its own client sends.
     ConnectData c;
     c.dstname = EndUser::number (25);
@@ -120,7 +119,7 @@ DN_TEST (session, connect_message_with_data_and_access_control)
 
 DN_TEST (session, malformed_connect_messages_are_rejected)
 {
-    // A source that names nothing, which the Python also refuses.
+    // A source that names nothing, which PyDECnet also refuses.
     DN_ASSERT_THROWS (DecodeError,
                       ConnectData::parse_message (
                           Bytes { 0x00, 0x19, 0x00, 0x00, 0x00 }));
@@ -282,11 +281,7 @@ DN_TEST (session, mirror_loop_by_object_number)
 
 DN_TEST (session, finished_conversations_are_reclaimed)
 {
-    // The same rule as NSP's closed connections, and for the same reason:
-    // a conversation is retired from inside a callback into the
-    // application being retired, so it is moved aside rather than
-    // destroyed -- and then it has to be destroyed eventually, or a node
-    // that serves many connections grows without bound.  BUGS.md item 6.
+    // Finished conversations are freed after the grace period.
     Pair p;
     p.start ();
     p.a->session ()->set_finished_grace (std::chrono::seconds (0));

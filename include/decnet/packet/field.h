@@ -1,12 +1,10 @@
 // decnet/packet/field.h -- field codecs.
 //
-// Port of the field classes in packet.py.  A the Python layout row is
+// Port of the field classes in packet.py.  The PyDECnet layout row
 //
 //     ( packet.B, "srcnode", 2 )
 //
-// which a metaclass resolves at class creation time.  Here the same thing
-// resolves at compile time: field class -> template argument, attribute
-// name -> pointer to member, arguments -> template parameters.
+// is written here as
 //
 //     field<B<2>> (&Msg::srcnode, "srcnode")
 //
@@ -96,7 +94,7 @@ struct BV {
             throw FieldOverflow ("value too long for BV<"
                                  + std::to_string (N) + ">");
         e.raw (ByteView (v.data (), v.size ()));
-        e.zeros (N - v.size ());     // BV pads on the right, as the Python does
+        e.zeros (N - v.size ());     // BV pads on the right, as PyDECnet does
     }
 
     static void decode (Decoder &d, value_type &v)
@@ -223,8 +221,7 @@ struct Payload {
 
 // ---------------------------------------------------- self-coding types
 //
-// Nodeid, Macaddr and Version know their own wire format, so they act as
-// their own codec.  This matches the Python, where they subclass Field.
+// Nodeid, Macaddr and Version are their own codecs.
 struct NodeidField {
     using value_type = Nodeid;
     static void encode (Encoder &e, const value_type &v) { e.uint (v.value (), 2); }
@@ -254,11 +251,8 @@ struct VersionField {
 
 // ------------------------------------------------------------- BM: bitmap
 //
-// One or more named bit ranges packed into a single integer field.
-// packet.BM.  In a layout, each range is its own row referring to the same
-// underlying byte offset; here each range is a separate BM entry and the
-// packet's encode collects them.  Position and width are compile time, so
-// the shift and mask fold away.
+// Named bit ranges packed into one integer field.  packet.BM.  Each range
+// is a separate BM entry at the same offset.
 template <std::size_t Bits, typename T = std::uint32_t>
 struct BMField {
     using value_type = T;
@@ -268,7 +262,7 @@ struct BMField {
 // ------------------------------------------------------ layout machinery
 
 // One row of a layout: a codec, the member it reads and writes, and the
-// name the Python version used (kept for error messages and monitoring).
+// name PyDECnet used (kept for error messages and monitoring).
 template <typename Codec, typename Packet, typename Member>
 struct FieldSpec {
     using codec_type = Codec;
@@ -327,7 +321,7 @@ constexpr auto reserved (const char *name = "reserved")
 template <typename... F>
 constexpr auto fields (F... f) { return std::tuple<F...> (f...); }
 
-// Layout inheritance: the Python subclasses append their _layout to the base
+// Layout inheritance: PyDECnet subclasses append their _layout to the base
 // class's.  extend (Base::layout, ...) does the same thing here.
 template <typename... B, typename... F>
 constexpr auto extend (const std::tuple<B...> &base, F... f)

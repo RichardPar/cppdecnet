@@ -1,10 +1,8 @@
 // decnet/config.h -- the configuration file.
 //
-// Port of config.py.  the Python reuses argparse: each line of the config
-// file is a command word followed by Unix style options, and each layer
-// registers a subparser.  We keep the syntax exactly -- existing the Python
-// configuration files must work unchanged -- but parse it with a small
-// hand written option parser rather than dragging in a dependency.
+// Port of config.py.  Each line is a command followed by Unix style
+// options.  The syntax is the same as PyDECnet's, parsed by a small option
+// parser here instead of argparse.
 //
 //     circuit eth-0 Ethernet tap:/dev/tap0 --console Plugh
 //     routing 9.54 --type l2router
@@ -77,9 +75,7 @@ struct NodeConfig {
 
 // object --number N --name X --file PROG [--argument A]...
 //
-// An object implemented as a separate process.  the Python also supports
-// --module for one implemented inside the daemon; here the built-in
-// objects are registered in code, so only --file is read.
+// An object run as a separate process.  --module is not supported.
 struct ObjectConfig {
     unsigned                 number = 0;
     std::string              name;
@@ -93,16 +89,11 @@ struct NspConfig {
     // Unacknowledged data segments allowed in flight at once.
     unsigned qmax = 20;
 
-    // The retransmission timer is not a constant: it follows the round
-    // trip time actually measured to each node.  Two numbers shape it.
+    // NSP retransmission timing.  The timer follows the measured round trip
+    // time to each node.
     //
-    // weight is how slowly the estimate moves -- each measurement is
-    // averaged in as 1/(weight+1) of the new value, so a larger weight
-    // means a steadier estimate and a slower response to a change.
-    //
-    // delay_factor is how much longer than the estimate we wait before
-    // deciding a packet was lost.  Waiting exactly the round trip time
-    // would make every ordinary variation look like a loss.
+    // weight: each measurement contributes 1/(weight+1) to the estimate.
+    // delay_factor: the timeout is the estimate multiplied by this.
     unsigned weight = 3;
     double   delay_factor = 2.0;
 
@@ -112,10 +103,9 @@ struct NspConfig {
 
 // logging <type> [--sink-node N] [--events E] [--sink-file F] ...
 //
-// One sink for event records.  A local sink is the console, a file or the
-// monitoring interface; a remote sink is another node's event logger,
-// reached over a logical link.  Several logging lines naming the same sink
-// node make one connection with a filter per sink type at the far end.
+// One event sink.  Local sinks are console, file and monitor; a remote sink
+// is another node's event logger.  Lines naming the same sink node share
+// one connection.
 struct LoggingConfig {
     std::string type;            // console, file, monitor
     std::string sink_node;       // empty for a local sink
@@ -128,7 +118,7 @@ struct LoggingConfig {
 
 class Config {
 public:
-    // Read a the Python configuration file.  Throws std::runtime_error with a
+    // Read a PyDECnet configuration file.  Throws std::runtime_error with a
     // file:line prefix on a syntax error, as config.py does.
     static Config from_file (const std::string &path);
 
@@ -146,23 +136,18 @@ public:
     const std::string &identification () const noexcept { return identification_; }
     const std::string &node_name () const noexcept { return node_name_; }
 
-    // The monitoring server.  Zero means "not configured", which is also
-    // what "--http-port 0" means to the Python: the port is how the feature
-    // is turned on and off.
+    // HTTP port.  Zero means not configured.
     unsigned http_port () const noexcept { return http_port_; }
 
-    // Lines whose command no layer has claimed yet.  Everything the port
-    // has not reached is parsed and kept here rather than rejected, so a
-    // real configuration file still loads.
+    // Lines no layer has claimed.  Kept rather than rejected so PyDECnet
+    // configuration files load.
     const std::vector<ConfigLine> &unhandled () const noexcept { return unhandled_; }
 
 private:
     void apply (ConfigLine line);
 
-    // Directory of the file being read.  A "@file" include resolves against
-    // it, not against the working directory, which is what config.py does
-    // (os.path.join (os.path.dirname (f.name), ifn)) and what lets a
-    // configuration directory be moved as a unit.
+    // Directory of the file being read.  "@file" includes are relative to it,
+    // as in config.py.
     std::string base_dir_;
 
     std::vector<CircuitConfig>   circuits_;

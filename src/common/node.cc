@@ -71,18 +71,15 @@ Node::Node (const Config &config)
     logging::set_thread_name (name_);
     DN_DEBUG ("initializing node {}", name_);
 
-    // Layer objects, in node.Node.__init__ order.  The event logger comes
-    // first, so that everything built after it can report what it does.
-    // PORT: a bridge-only configuration replaces the lot with a bridge.
+    // Layer objects, in node.Node.__init__ order.  The event logger is first.
+    // PORT: bridge-only configurations.
     event_logger_ = std::make_unique<events::EventLogger> (this, config);
     datalink_ = std::make_unique<datalink::DatalinkLayer> (this, config);
     // MOP runs on broadcast circuits that ask for it, whether or not this
     // node routes.
     mop_ = std::make_unique<mop::Mop> (this, config);
 
-    // The monitoring server, if the configuration asked for one.  It is
-    // not a protocol layer: nothing below it depends on it, and a node
-    // without one behaves identically.
+    // Monitoring server, if configured.
     if (config.http_port ())
         http_ = std::make_unique<http::Server> (this, config.http_port ());
     if (config.routing ()) {
@@ -185,8 +182,7 @@ int Node::nice_read (nice::NiceRequest &req, nice::ReplyDict &replies)
 {
     using namespace nice;
 
-    // Two rewrites before anything else sees the request, so that no layer
-    // below has to know about either form.  Port of the head of
+    // Resolve executor and node name forms.  Port of the start of
     // Node.nice_read.
     if (req.entity_type == Entity::node && req.entity.code == 0
         && req.entity.id.value () == 0) {
@@ -208,9 +204,8 @@ int Node::nice_read (nice::NiceRequest &req, nice::ReplyDict &replies)
     }
     if (req.events ()) return rc_unrecognized_function;
 
-    // Hand it to the layers.  NSP goes first because it is what knows the
-    // whole node database, so the entries exist before routing fills in
-    // reachability for them.
+    // NSP first, since it has the node database; routing then adds
+    // reachability.
     if (nsp_)      nsp_->nice_read (req, replies);
     if (routing_)  routing_->nice_read (req, replies);
     if (datalink_) datalink_->nice_read (req, replies);
@@ -243,9 +238,7 @@ int Node::nice_read (nice::NiceRequest &req, nice::ReplyDict &replies)
 
 void Node::logevent (events::Event &e)
 {
-    // The source is always this node: an event is reported by whoever saw
-    // it, and a record forwarded from elsewhere goes through
-    // logremoteevent instead.
+    // Local events only; received records go through logremoteevent.
     e.source = nicenode ();
     if (event_logger_) event_logger_->logevent (e);
 }
@@ -267,10 +260,8 @@ void Node::start ()
 
 void Node::stop_layers ()
 {
-    // The reverse of the order they were started, and each one above the
-    // layer it depends on: session control lets go of its connections
-    // before NSP frees them, and the event logger's remote sinks let go
-    // before session control does.
+    // Reverse start order: session control releases connections before NSP
+    // frees them, and remote event sinks close before session control stops.
     if (event_logger_) event_logger_->stop_remote ();
     if (session_)  session_->stop ();
     if (nsp_)      nsp_->stop ();
@@ -282,25 +273,14 @@ void Node::stop_layers ()
 
 void Node::stop ()
 {
-    // The monitoring server goes first, and from this thread rather than
-    // the node's.  Its helper thread answers a request by posting work to
-    // the node and waiting for the result, so it has to be joined while
-    // that loop is still running: stopping it from inside stop_layers
-    // would have it waiting on a queue nothing was draining.
+    // Stop the monitoring server first, from this thread.  It posts work to
+    // the node loop, so it must be joined while the loop is still running.
     if (http_) http_->stop ();
 
     if (thread_.joinable ()) {
-        // Stopping happens on the node's own thread, not the caller's.
-        //
-        // Every layer here holds state that the main loop dispatches into,
-        // and the whole design rests on only one thread touching it.  A
-        // caller that stopped the layers itself would be freeing objects
-        // out from under work already in flight -- NSP connections being
-        // the ones that showed it.  See BUGS.md.
-        //
-        // The work queue is FIFO, so this runs after everything already
-        // queued and before the shutdown sentinel behind it, which is what
-        // gives the layers a running loop to stop against.
+        // Stop the layers on the node thread, since only that thread may touch
+        // layer state.  The queue is FIFO, so this runs after pending work and
+        // before the shutdown sentinel.
         add_work (std::make_unique<CallbackWork> ([this] { stop_layers (); }));
         add_work (std::make_unique<Shutdown> ());
         thread_.join ();

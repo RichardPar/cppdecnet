@@ -1,8 +1,4 @@
-// Tests for NICE data value coding (the data type classes in nice_coding.py).
-//
-// The wire forms here are the ones the Phase IV Network Management
-// specification defines: every value carries its own type code, so these
-// tests are as much about the code byte as about the payload.
+// Tests for NICE data value coding (nice_coding.py data types).
 
 #include "harness.h"
 
@@ -47,7 +43,7 @@ DN_TEST (nice, ds_signed_decimal)
     DN_ASSERT_EQ (v.encode (), bytes_of ({ 0x11, 0xfe }));
     DN_ASSERT_EQ (v.format (), std::string ("-2"));
 
-    // Sign extension on decode is the part worth checking.
+    // Check sign extension on decode.
     Value r = roundtrip (v);
     DN_ASSERT_EQ (r.as_int (), -2);
     DN_ASSERT_EQ (Value::parse (bytes_of ({ 0x12, 0x00, 0x80 })).as_int (),

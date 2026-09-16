@@ -1,15 +1,8 @@
-// src/routing/nice.cc -- what the routing layer tells network management.
+// src/routing/nice.cc -- NICE reads for routing.
 //
-// Port of the nice_read, read_node, reach and node_char methods of
-// routing.py, route_ptp.py and route_eth.py.  They are gathered here rather
-// than spread through those three files because they are one subject: what
-// NCP prints for SHOW NODE, SHOW CIRCUIT and SHOW AREA, and each of them is
-// only meaningful next to the others.
-//
-// The division of labour follows the Python's.  The router answers about
-// nodes and areas, because it owns the routing table; each circuit answers
-// about itself and about the neighbour at its far end, because that is
-// where the adjacency lives.
+// Ports of nice_read, read_node, reach and node_char from routing.py,
+// route_ptp.py and route_eth.py.  The router answers for nodes and areas;
+// each circuit answers for itself and its neighbours.
 
 #include "decnet/common/logging.h"
 #include "decnet/datalink/bc.h"
@@ -33,10 +26,8 @@ using nice::Value;
 
 namespace {
 
-// The NICE node type code for a neighbour, which is not the routing
-// layer's own numbering: Phase IV adds two to it, and Phase III has its own
-// pair of values.  Port of the identical arithmetic in read_node and in
-// each circuit's nice_read.
+// NICE node type code for a neighbour: routing type + 2 for Phase IV,
+// separate values for Phase III.
 unsigned nice_ntype (unsigned ntype, unsigned rphase)
 {
     if (rphase == 4) return ntype + 2;
@@ -94,9 +85,7 @@ void BaseRouter::nice_read (const NiceRequest &req, ReplyDict &resp)
             qual = &req.qual_circuit;
         if (req.counters ()) return;    // NSP owns the node counters
         if (req.chars ()) {
-            // Only the executor has node characteristics.  "Adjacent
-            // nodes" and "loop nodes" exclude it by definition, so those
-            // ask for nothing we have.
+            // Only the executor has node characteristics.
             if ((req.entity.one () && req.entity.id == nodeid_)
                 || (req.entity.mult () && !req.entity.is_adjacent ()
                     && !req.entity.is_loop ()))
@@ -172,9 +161,8 @@ void L1Router::read_node (const NiceRequest &req, Nodeid id, ReplyDict &resp)
     }
     if (!req.sumstat ()) return;
 
-    // Which matrix answers for this address, and whether we know the
-    // distance.  Out of area we do not: the level 2 route gives a next hop
-    // but the hops and cost belong to the area, not the node.
+    // Which matrix covers this address.  Hops and cost are unknown for nodes
+    // in other areas.
     bool in_area = id.area () == homearea ();
     Adjacency *a = nullptr;
     if (in_area) {
@@ -242,22 +230,9 @@ void L1Router::reach (const NiceRequest &req, ReplyDict &resp,
             }
         } else if (resp.every_address () || resp.contains_node (id)
                    || named_node (id)) {
-            // Unreachable, and worth saying so only for an address we
-            // actually know something about: one the configuration names,
-            // or one something else in this reply has already mentioned.
-            //
-            // DIVERGENCE FROM THE PYTHON, deliberate.  Its reach() adds an
-            // entry for every address from 1 to maxnodes when the request
-            // says "known", and ours did the same.  With the default
-            // maximum of 1023 that answers "show known nodes" with 1025
-            // messages, of which all but a handful say only "node 1.457 is
-            // unreachable" -- a thousand frames out and a thousand
-            // acknowledgements back for nothing.  Against a PDP-11 that is
-            // minutes, and the link times out part way through.  An address
-            // nothing has ever been heard from and no configuration names
-            // is not a node the system knows; it is a number.  The
-            // monitoring pages, which had already grown their own filter
-            // for this, ask for the full set explicitly.
+            // Report unreachable nodes only if named in the configuration or already
+            // in the reply, unless all nodes were requested.  PyDECnet reports every
+            // address up to maxnodes, which is over a thousand replies.
             resp.node_entry (id).params.set (0, Value::c (5));
         }
     }
@@ -405,11 +380,8 @@ void LanCircuit::nice_read (const NiceRequest &req, ReplyDict &resp,
     }
     if (req.entity_type != Entity::circuit) return;
 
-    // One reply per adjacency, or one bare reply if there are none.  Take
-    // every adjacency for status and characteristics; for a summary take
-    // them only if there is exactly one and nothing was asked for by name.
-    // That last rule is the Python's, and it exists to keep a summary of a
-    // busy LAN down to one line per circuit.
+    // One reply per adjacency, or one reply if none.  For summary, include the
+    // adjacency only if there is exactly one and no name was given.
     bool all = req.stat () || req.chars ()
         || (!adj_qual && adjacencies_.size () == 1);
     std::vector<NiceReply *> made;
@@ -445,9 +417,7 @@ void RoutingLanCircuit::nice_char (NiceReply &r) const
 {
     r.params.set (902, Value::du (prio_, 1));
     r.params.set (901, Value::du (maxrouters_, 1));
-    // The specification calls the designated router a status item, but RSX
-    // and VMS both report it as a characteristic, and following them keeps
-    // the status display from looking strange.
+    // Designated router reported as a characteristic, as RSX and VMS do.
     if (isdr_)
         r.params.set (801, Value::cm ({ Value::du (parent_->nodeid ().value (), 2) }));
     else if (dr_.value ())

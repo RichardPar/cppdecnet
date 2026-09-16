@@ -56,9 +56,8 @@ int run_all (const char *suite_filter)
 
 int main (int argc, char **argv)
 {
-    // Tests run quietly by default.  DN_TEST_LOG=trace (or debug, info...)
-    // turns the stack's own logging on, which is how you find out what a
-    // failing end to end test was actually doing.
+    // Stack logging is off by default.  Set DN_TEST_LOG=trace (or debug,
+    // info, ...) to enable it.
     if (const char *lvl = std::getenv ("DN_TEST_LOG"))
         ::decnet::logging::set_level (lvl);
     return dntest::run_all (argc > 1 ? argv[1] : nullptr);

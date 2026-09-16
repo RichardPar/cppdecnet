@@ -139,9 +139,7 @@ void Session::retire (nsp::Connection &c)
 {
     auto it = live_.find (&c);
     if (it == live_.end ()) return;
-    // Before, not after: see the note in NSP::close_connection.  The
-    // conversation being retired is retired from inside a callback into
-    // the application it owns, and must outlive this dispatch.
+    // Sweep before adding; see NSP::close_connection.
     sweep_finished ();
 
     finished_.push_back (Retired { std::move (it->second),
@@ -176,7 +174,7 @@ void Session::connect_received (nsp::Connection &c, ByteView payload)
     }
 
     // Which object is being asked for?  By number if it has one, else by
-    // name; that is the order the Python checks in.
+    // name; that is the order PyDECnet checks in.
     const Object *obj = nullptr;
     if (cd.dstname.fmt == EndUser::by_number && cd.dstname.num)
         obj = find_object (cd.dstname.num);
@@ -331,13 +329,7 @@ std::unique_ptr<Application> make_mirror ()
 
 void add_default_objects (Session &s)
 {
-    // Object 25 is MIRROR, which is enabled by default upstream too: it is
-    // what NCP LOOP NODE talks to, so a node without it cannot be tested
-    // by the standard means.
-    //
-    // A configuration line for the same object wins: the built-in is a
-    // default, not a fixture, and someone who names a program for object
-    // 25 means it.
+    // Built-in MIRROR (object 25), unless configured otherwise.
     if (!s.find_object (25) && !s.find_object ("MIRROR"))
         s.add_object (25, "MIRROR", [] { return make_mirror (); });
     // Object 26 is the event logger's receiving end: another node connects
@@ -353,7 +345,7 @@ void add_default_objects (Session &s)
         Node *n = s.node ();
         s.add_object (19, "NML", [n] { return nice::make_nml (n); });
     }
-    // PORT: pmr (123) is the other object the Python enables by default.
+    // PORT: pmr (123) is the other object PyDECnet enables by default.
 }
 
 }   // namespace decnet::session

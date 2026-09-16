@@ -1,17 +1,10 @@
 // decnet/nsp/packets.h -- NSP packet formats.
 //
-// Port of nsp_packets.py.  NSP is the transport layer: it turns the
-// unreliable datagram service routing provides into ordered, flow
-// controlled logical links.
+// Port of nsp_packets.py.
 //
-// One difference from the Python.  the Python describes the first byte as a
-// single bitmap whose fields overlap: "subtype" is bits 4 to 6, while
-// "int_ls" is bit 4, "bom" bit 5 and "eom" bit 6, and which reading
-// applies depends on the message type.  That works in Python because each
-// packet class supplies only the attributes that mean something for it.
-// In a struct with every field present at once, encoding would have to
-// reconcile two names for one bit, so the byte is carried raw with
-// accessors for each reading.
+// PyDECnet describes the first byte as a bitmap with overlapping fields
+// (subtype is bits 4-6; int_ls, bom and eom are bits 4, 5 and 6).  Here the
+// byte is stored raw with accessors for each interpretation.
 
 #ifndef DECNET_NSP_PACKETS_H
 #define DECNET_NSP_PACKETS_H
@@ -57,11 +50,9 @@ enum FlowControl : std::uint8_t { SVC_NONE = 0, SVC_SEG = 1, SVC_MSG = 2 };
 
 // --------------------------------------------------------------- AckNum
 //
-// An acknowledgement number: a sequence number plus a qualifier saying
-// which subchannel it refers to and whether it is an acknowledgement or a
-// negative one.  The field is optional -- it is present only when its top
-// bit is set -- which is why it decodes to an optional.  Port of
-// nsp_packets.AckNum.
+// Acknowledgement number: sequence number plus a qualifier for subchannel
+// and ACK/NAK.  Present only when the top bit is set, so it decodes to an
+// optional.  Port of nsp_packets.AckNum.
 struct AckNum {
     enum Qual : std::uint8_t { ACKQ = 0, NAK = 1, XACK = 2, XNAK = 3 };
 
@@ -84,9 +75,8 @@ struct AckNumField {
     static void decode (Decoder &d, value_type &v);
 };
 
-// Sequence numbers on the wire are two bytes little endian, with only the
-// low twelve bits meaningful; the high bits are flags belonging to whatever
-// field shares the word.
+// Sequence numbers are two bytes little endian; the low 12 bits are the
+// number and the high bits belong to the field sharing the word.
 struct SeqField {
     using value_type = Seq;
     static void encode (Encoder &e, const value_type &v)
@@ -106,10 +96,8 @@ struct NspPacketBase : Indexed<NspPacketBase> {
     static std::unique_ptr<NspPacketBase> parse_frame (ByteView b) noexcept
     { return try_parse_indexed (b); }
 
-    // The link address the packet is addressed to.  Every NSP message
-    // carries one, and the receive dispatcher needs it before it knows
-    // which class this is -- so it is a virtual rather than a chain of
-    // casts that a new packet type could silently be left out of.
+    // Destination link address.  Virtual so the receive dispatcher can read it
+    // before knowing the packet class.
     virtual std::uint16_t link_address () const noexcept = 0;
 };
 
@@ -166,9 +154,8 @@ struct AckOther : IndexedBody<AckOther, NspPacketBase> {
     static constexpr auto layout = fields (DN_NSP_ACK_LAYOUT (AckOther));
 };
 
-// A connect acknowledgement carries no payload, but VAXELN appends stray
-// bytes; treating them as payload suppresses a parse error rather than
-// dropping the packet.  the Python does the same.
+// Connect acknowledgement.  VAXELN appends extra bytes, which are accepted
+// as payload, as in PyDECnet.
 struct AckConn : IndexedBody<AckConn, NspPacketBase, Extra::allow> {
     static constexpr const char *name = "AckConn";
     static constexpr std::uint8_t flag = 0x24;
@@ -190,10 +177,8 @@ struct DataSeg : IndexedBody<DataSeg, NspPacketBase, Extra::allow> {
     static constexpr std::uint8_t flag = 0x00;
 
     DN_NSP_ACK_HDR;
-    // The segment number word carries a delayed-acknowledgement flag in
-    // bit 12 alongside the twelve bit sequence number, so the two are one
-    // bitmap.  The number is held as a plain integer because that is what
-    // the bitmap works on; segnum() is the typed view of it.
+    // The segment number word has a delayed-acknowledgement flag in bit 12,
+    // so it is a bitmap.  segnum() gives the typed sequence number.
     std::uint16_t segnum_bits = 0;
     bool          dly = false;
     Bytes         payload;
@@ -310,9 +295,8 @@ struct ConnConf : IndexedBody<ConnConf, NspPacketBase> {
         field<I<16>> (&ConnConf::data_ctl, "data_ctl"));
 };
 
-// Disconnect Confirm.  Three reason codes mean specific things; every
-// other value is, for Phase II compatibility, a synonym for disconnect
-// initiate.
+// Disconnect Confirm.  Reason codes other than the three defined ones are
+// treated as Disconnect Initiate, for Phase II compatibility.
 struct DiscConf : IndexedBody<DiscConf, NspPacketBase> {
     static constexpr const char *name = "DiscConf";
     static constexpr std::uint8_t flag = 0x48;

@@ -80,9 +80,7 @@ DN_TEST (crc, ccitt_and_32)
 
 DN_TEST (crc, residue_check)
 {
-    // Appending the check bytes little endian and running the CRC over the
-    // whole thing leaves the residue -- how a DDCMP receiver validates a
-    // block without recomputing and comparing.
+    // CRC over the data plus its little endian check bytes gives the residue.
     const char *s = "hello, decnet";
     Bytes b (s, s + 13);
     std::uint16_t c = CRC16::compute (b);

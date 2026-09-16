@@ -79,9 +79,8 @@ LanCircuit::decode (const Bytes &frame) const
     }
     ByteView buf (frame.data (), frame.size ());
 
-    // A padded packet: the low seven bits of the first byte give the total
-    // pad length, the pad header included.  Two layers of padding is not a
-    // thing, so a second one means the packet is malformed.
+    // Padding: the low seven bits of the first byte give the pad length,
+    // including this byte.  A second pad byte is malformed.
     if (buf[0] & 0x80) {
         std::size_t pad = buf[0] & 0x7f;
         if (pad == 0 || pad >= buf.size ()) {
@@ -102,10 +101,7 @@ void LanCircuit::dispatch (Work &w)
     auto *r = dynamic_cast<Received *> (&w);
     if (!r) return;
 
-    // The datalink hands up the frame's own source address alongside the
-    // payload.  That address, rather than one derived from the node id in
-    // the packet, is what a neighbour is addressed by; see the note in
-    // EndnodeLanCircuit::handle.
+    // The frame's source address is used to address the neighbour.
     auto pkt = decode (r->packet ());
     if (!pkt) return;
     handle (*pkt, r->src ());
@@ -113,14 +109,8 @@ void LanCircuit::dispatch (Work &w)
 
 bool LanCircuit::send_to (ShortData &pkt, const Adjacency &adj)
 {
-    // Address the neighbour where it demonstrably receives -- the source of
-    // the frames it sends us, recorded when its hello arrived -- rather than
-    // the address its node number implies.  See the note in
-    // EndnodeLanCircuit::handle: BAJI announces aa-00-04-00-13-04 and
-    // answers on 08-00-2b-11-22-33, so forwarding to the derived address
-    // loses every packet while the adjacency stays up.  The derived address
-    // is the fallback for a neighbour we have somehow not heard from, which
-    // is all the Python ever uses (`Adjacency.macid`).
+    // Send to the neighbour's recorded source address.  Fall back to the
+    // derived address if nothing has been heard from it.
     auto it = adjacencies_.find (adj.nodeid ().value ());
     Macaddr mac = adj.macid ();
     if (it != adjacencies_.end () && it->second.macaddr != Macaddr {})
@@ -136,21 +126,8 @@ void LanCircuit::send_update (const Bytes &frame)
 
 bool LanCircuit::wants_updates (unsigned level) const
 {
-    // Send only if somebody on this LAN would use it: any router for
-    // level 1, an area router for level 2.
-    //
-    // the Python has no such test -- it sends to ALL_ROUTERS every t1
-    // regardless (`routing.py`, Update.dispatch) -- and this was changed to
-    // match it on 10-Sep-2026. That made things worse against the real
-    // PDP-11 on the wired segment: with the gate the adjacency flapped,
-    // without it the adjacency stopped forming at all. Reverted, and the
-    // difference is recorded in BUGS.md rather than guessed at.
-    //
-    // The gate is still questionable on its own terms: a router that has
-    // just come up and has not yet heard a peer stays silent, and a peer
-    // waiting to hear from it waits for the message being withheld. Worth
-    // revisiting with a second router to test against, rather than an
-    // endnode that is upset by the extra traffic.
+    // Send only if a router (level 1) or area router (level 2) is present.
+    // PyDECnet sends unconditionally; see BUGS.md.
     for (const auto &[key, a] : adjacencies_) {
         if (a.state != AdjState::up || a.ntype == ENDNODE) continue;
         if (level == 2 && a.ntype != L2ROUTER) continue;
@@ -180,10 +157,8 @@ void LanCircuit::adjacency_up (std::uint16_t key, const AdjacencyInfo &info)
 {
     LanAdjacency &a = adjacencies_[key];
     a.state = AdjState::up;
-    // A router already has an adjacency object, made when its first hello
-    // arrived; only an endnode, which needs no handshake, is created here.
-    // Reused rather than replaced so that a timeout work item already in
-    // flight still refers to a live object.
+    // Routers already have an adjacency from their first hello; create one only
+    // for endnodes.  Reused so pending timeout work refers to a live object.
     if (!a.adj) a.adj = std::make_shared<Adjacency> (this, info, t3_);
     // This is what puts the neighbour into the routing table: a router
     // gets a column, an endnode an entry in the shared endnode column.
@@ -197,9 +172,7 @@ void LanCircuit::adjacency_down (std::uint16_t key)
 {
     auto it = adjacencies_.find (key);
     if (it == adjacencies_.end ()) return;
-    // An adjacency that never came up is dropped without an event: there
-    // was nothing for an operator to have seen come up.  Port of deladj,
-    // which logs only for state UP.
+    // No event for an adjacency that never came up, as in deladj.
     if (it->second.adj && it->second.state == AdjState::up) {
         DN_INFO ("{} adjacency down: {}", name_,
                  it->second.adj->nodeid ().str ());
@@ -213,7 +186,7 @@ void LanCircuit::adjacency_down (std::uint16_t key)
 void LanCircuit::send_to_mac (ShortData &pkt, Macaddr nexthop)
 {
     // A LAN carries the long header, which is what holds the Ethernet
-    // addresses.  the Python converts here for the same reason.
+    // addresses.  PyDECnet converts here for the same reason.
     LongData ld;
     ld.rqr     = pkt.rqr;
     ld.rts     = pkt.rts;
@@ -238,12 +211,8 @@ EndnodeLanCircuit::EndnodeLanCircuit (BaseRouter *parent, std::string name,
 
 void EndnodeLanCircuit::adj_timeout (Adjacency *adj)
 {
-    // Forget the router as well as the adjacency.  While dr_ still names
-    // it, its next hello takes the "the router we are already using" path
-    // in handle() below, which only refreshes the listen timer -- and the
-    // adjacency it would refresh has just been erased, so nothing rebuilds
-    // it and the endnode stays off the network for good.  The Python's
-    // EndnodeLanCircuit.adj_timeout clears self.dr for this reason.
+    // Clear the designated router too, so its next hello creates a new
+    // adjacency (EndnodeLanCircuit.adj_timeout).
     if (adj && dr_ && dr_->first == adj->nodeid ()) dr_.reset ();
     LanCircuit::adj_timeout (adj);
 }
@@ -267,16 +236,9 @@ void EndnodeLanCircuit::handle (RoutingPacketBase &pkt, Macaddr src)
 {
     if (auto *rh = dynamic_cast<RouterHello *> (&pkt)) {
         if (rh->id.area () != parent_->homearea ()) return;   // not ours
-    // Address a neighbour by the source of the frame it sent, not by the
-    // address derived from its node id.  The specification says the two are
-    // the same -- a Phase IV node programs AA-00-04-00-xx-xx into its card
-    // -- and the Python relies on that (`Adjacency.macid = Macaddr (nodeid)`).
-    // A real PDP-11, BAJI on the test segment, does not: it announces
-    // id aa-00-04-00-13-04 while transmitting from 08-00-2b-11-22-33, and a
-    // loopback probe gets no answer at all on the derived address.  Since
-    // hellos are multicast, believing the derived address gives an adjacency
-    // that comes up and stays up while every unicast packet vanishes.  The
-    // source we heard is the address the neighbour demonstrably receives on.
+    // Address neighbours by their frame source address rather than the
+    // derived Phase IV address.  Some systems do not receive on the derived
+    // address.
         Macaddr rmac = src;
 
         if (dr_ && dr_->first == rh->id) {
@@ -355,15 +317,7 @@ bool EndnodeLanCircuit::send (ShortData &pkt, bool tryhard)
         return true;
     }
     if (pkt.dstnode == parent_->nodeid ()) return false;
-    // No router known: address the destination directly and hope it is on
-    // this LAN.  That is all an endnode can do.
-    //
-    // The derived address has to serve here, because a node id is the only
-    // thing we have: nothing has been heard from this destination, so there
-    // is no source address to prefer.  A neighbour that does not listen on
-    // its derived address is unreachable this way until it sends us
-    // something and the cache above picks up where it really lives.
-    // the Python has the same fallback.
+    // No router known: send directly to the derived address.
     send_to_mac (pkt, Macaddr::from_nodeid (pkt.dstnode));
     return true;
 }
@@ -437,20 +391,12 @@ void RoutingLanCircuit::adjacency_down (std::uint16_t key)
 
     LanCircuit::adjacency_down (key);
 
-    // A designated router we can no longer hear is not the designated
-    // router.  Leaving dr_ naming it is quietly serious: calc_dr () below
-    // would see no change and do nothing, so nothing on this LAN ever
-    // takes over, and while isdr_ stays false this router sends its hellos
-    // only to the other routers -- the endnodes hear nobody, lose their
-    // own adjacency in turn, and the LAN stays down.  Port of
-    // RoutingLanCircuit.deladj.
+    // Forget the designated router if it went away and re-run the election
+    // (RoutingLanCircuit.deladj).
     if (dr_ == id) dr_ = Nodeid ();
     if (was_router) {
         calc_dr ();
-        // The hello's router list has changed, so say so now rather than
-        // at the next t3.  The Python's newhello holds this off for T2
-        // where one has just gone out; one extra frame on a neighbour
-        // loss is not worth the state to track that.
+        // Router list changed; send a hello now.
         send_hello ();
     }
 }
@@ -492,16 +438,9 @@ void RoutingLanCircuit::handle (RoutingPacketBase &pkt, Macaddr src)
         a.ntype   = (rh->ntype == RouterHello::ntype_l2) ? L2ROUTER : L1ROUTER;
         a.listen_time = rh->timer * BCT3MULT;
 
-        // Give it an adjacency object now, before two-way is confirmed,
-        // because that object owns the listen timer -- and something has to
-        // age this entry out. A router heard once and then gone otherwise
-        // stays in this table for good and goes on winning the designated
-        // router election below, so this node never takes over, and the
-        // endnodes on the LAN are left with no router at all.  The Python
-        // creates the adjacency on the first hello, in state INIT, for the
-        // same reason; it starts the timer on the second hello and we start
-        // it on the first, which only means a router heard exactly once
-        // also expires.
+        // Create the adjacency on the first hello, before two-way is confirmed, so
+        // its listen timer can expire the entry.  PyDECnet also creates it in
+        // state INIT.
         if (!a.adj) {
             AdjacencyInfo init;
             init.id       = rh->id;
@@ -634,9 +573,7 @@ void RoutingLanCircuit::calc_dr ()
     bool self = best_dr (who);
 
     if (self) {
-        // Do not act on it for DRDELAY seconds: during startup several
-        // nodes may each briefly believe they have won, and acting at once
-        // would put two designated routers on the LAN.
+        // Wait DRDELAY before acting as designated router.
         if (!isdr_ && !drtimer_running_) {
             DN_DEBUG ("{} designated router will be self, after {} seconds",
                       name_, DRDELAY);

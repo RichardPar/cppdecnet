@@ -1,33 +1,23 @@
 // decnet/nsp/nsp.h -- NSP logical links.
 //
-// Port of nsp.py.  NSP turns the datagram service routing provides into
-// ordered logical links: it assigns link addresses, runs the connect and
-// disconnect handshakes, numbers and acknowledges data segments, and
-// reassembles messages that had to be split.
+// Port of nsp.py.  NSP provides ordered logical links over the routing
+// datagram service: link addresses, connect and disconnect handshakes,
+// data sequencing and acknowledgement, and segmentation.
 //
-// This state machine is smaller than the spec's.  The NSP spec models
-// session control as polling NSP for things it needs to hear, so it needs
-// a state for each "waiting to be polled".  Here, as in the Python, session
-// control is told rather than polled, so the O, DN, RJ, NC, NR, DRC, CN,
-// DIC and DR states do not exist.
+// Session control is notified rather than polling NSP, so the spec states
+// O, DN, RJ, NC, NR, DRC, CN, DIC and DR are not needed.
 //
-// Flow control here is outbound only, which is what the Python does too.
-// Our own connect message asks for SVC_NONE, so a peer sends to us without
-// credit; what the peer asks for in its connect message governs what we
-// send, and we honour segment and message modes and the link service
-// messages that carry credit.  A window of qmax unacknowledged segments
-// applies whatever the mode.
+// Flow control is outbound only, as in PyDECnet.  Our connect message
+// requests SVC_NONE.  The peer's requested mode (segment or message) and
+// link service credit govern what we send.  A window of qmax
+// unacknowledged segments always applies.
 //
-// A link has two subchannels.  Data carries the ordered byte stream;
-// "other" carries interrupt messages and the link service messages that
-// grant credit.  Each has its own sequence numbers, and an acknowledgement
-// can refer to either: a plain one refers to the subchannel the packet
-// arrived on, a "cross" one to the other.  route_ack does that.
+// Each link has two subchannels: data, and "other" (interrupts and link
+// service).  Each has its own sequence numbers.  A plain acknowledgement
+// refers to the subchannel the packet arrived on, a cross acknowledgement
+// to the other; see route_ack.
 //
-// PORT: still to do --
-//  * requesting flow control on our own inbound data, which needs us to
-//    send link service messages as a receiver.
-//  * Phase II connections, which have no connect acknowledgement.
+// PORT: inbound flow control and Phase II connections.
 
 #ifndef DECNET_NSP_NSP_H
 #define DECNET_NSP_NSP_H
@@ -117,18 +107,15 @@ public:
                                            : 0; }
 
     // ------------------------------------------- the session control API
-    // fcopt is the flow control this end wants for data coming to it.
-    // SVC_NONE, the default, is what the Python asks for.
+    // fcopt is the flow control requested for inbound data.  Default SVC_NONE.
     void accept (Bytes data = {}, std::uint8_t fcopt = SVC_NONE);
     void reject (unsigned reason = 0, Bytes data = {});
     void send_data (Bytes data);
     void disconnect (unsigned reason = 0, Bytes data = {});
 
-    // Send an interrupt message, at most 16 bytes.  Returns false if the
-    // link is not running, the data is too long, or the far end has not
-    // given us permission to send another.  A DECnet node typically allows
-    // one at a time, so the usual pattern is one interrupt, then wait for
-    // the credit that its handling releases.
+    // Send an interrupt message of at most 16 bytes.  Returns false if the
+    // link is not running, the data is too long, or there is no interrupt
+    // credit.
     bool send_interrupt (Bytes data);
 
     // Is an interrupt allowed right now?
@@ -173,9 +160,8 @@ private:
     void process_ack (Seq num);
     void process_int_ack (Seq num);
 
-    // Apply the acknowledgement fields of a packet.  on_data says which
-    // subchannel the packet itself belongs to; a cross acknowledgement
-    // refers to the other one.
+    // Apply a packet's acknowledgement fields.  on_data is the packet's own
+    // subchannel; a cross acknowledgement refers to the other.
     void route_ack (const std::optional<AckNum> &a, bool on_data);
 
     // Deliver one in-sequence segment to the assembly buffer, and hand a
@@ -190,11 +176,8 @@ private:
 
     SessionControl *session () const;
 
-    // One packet on the transmit queue, sent or waiting for flow control.
-    //
-    // segnum and msgnum are absolute counters rather than the twelve bit
-    // sequence number on the wire.  The window and credit comparisons are
-    // then plain arithmetic, with no modulo wraparound to get wrong.
+    // A packet on the transmit queue.  segnum and msgnum are absolute counts,
+    // not 12 bit wire values, so window arithmetic has no wraparound.
     struct TxEntry {
         Seq      seq;
         unsigned segnum = 0;
@@ -203,12 +186,9 @@ private:
         bool     sent = false;
         bool     is_data = false;
 
-        // When this packet was first put on the wire, for measuring the
-        // round trip.  Zero means "not being timed": only one packet is
-        // timed at a time, and a retransmitted packet is never timed,
-        // because there is no way to tell which transmission the
-        // acknowledgement answers.  Timing a retransmission is how a
-        // round trip estimate runs away under loss.
+        // First transmission time, for round trip measurement.  Zero if not being
+        // timed.  Only one packet is timed at a time, and retransmitted packets
+        // are never timed.
         std::chrono::steady_clock::time_point txtime {};
     };
 
@@ -255,18 +235,14 @@ private:
     // Segments received ahead of their turn, keyed by sequence number.
     std::map<std::uint16_t, DataSeg> ooo_;
 
-    // Acknowledgement holdoff.  A segment whose sender set the delay bit
-    // says its acknowledgement may wait, so that it can ride on something
-    // we were going to send anyway instead of costing a frame of its own.
-    // This needs a timer of its own: the connection's is the retransmit
-    // one, and the two run at once.  Port of Subchannel.ackpending and
-    // its HOLDOFF timer.
+    // Delayed acknowledgement for segments with the delay bit set.  Has its own
+    // timer, separate from retransmission.  Port of Subchannel.ackpending and
+    // HOLDOFF.
     bool          ackpending_ = false;
     CallbackTimer ack_timer_;
 
-    // The other subchannel.  Simpler than the data one: no segmentation,
-    // and credit counted in whole messages, of which one is allowed to
-    // start with.
+    // The other-data subchannel: no segmentation, credit counted in messages,
+    // initial credit of one.
     Seq                 int_next_send_ { 1 };
     Seq                 int_next_expect_ { 1 };
     std::deque<TxEntry> int_txq_;
@@ -280,9 +256,8 @@ private:
     // without every state function repeating the cast.
     const NspPacketBase *received_ = nullptr;
 
-    // How long to wait before deciding a packet was lost.  Not a constant:
-    // it follows the round trip time measured to this node.  Port of
-    // Connection.acktimeout.
+    // Retransmission timeout, based on the measured round trip time to the
+    // node.  Port of Connection.acktimeout.
     double acktimeout () const;
 
     // Fold one measurement into this node's estimate.  Port of
@@ -324,9 +299,7 @@ public:
     const std::map<std::uint16_t, std::unique_ptr<Connection>> &
     connections () const noexcept { return by_addr_; }
 
-    // Answer the part of a NICE read NSP knows about: the node entities,
-    // since NSP is what knows which nodes have links to them.  Port of
-    // NSP.nice_read.
+    // NICE read for node entities.  Port of NSP.nice_read.
     void nice_read (const nice::NiceRequest &req, nice::ReplyDict &resp);
     Connection *find (std::uint16_t srcaddr) const;
 
@@ -341,9 +314,8 @@ public:
     unsigned max_connections () const noexcept { return maxconns_; }
     unsigned qmax () const noexcept { return qmax_; }
 
-    // What shapes the retransmission timer.  A connection asks NSP rather
-    // than holding its own copy, so a configuration that changes applies
-    // to links already open.
+    // Retransmission timer parameters, read from NSP so configuration changes
+    // apply to open links.
     unsigned delay_weight () const noexcept { return weight_; }
     double   delay_factor () const noexcept { return delay_factor_; }
     unsigned retransmit_limit () const noexcept { return retransmits_; }
@@ -355,11 +327,9 @@ private:
     void read_node (const nice::NiceRequest &req, Nodeid id,
                     nice::ReplyDict &resp, unsigned links);
 
-    // Link address assignment.  Port of init_id/get_id/ret_id: addresses
-    // are taken from one end of a circular list and returned to the other,
-    // so a closed connection's address is not reused for as long as
-    // possible -- which is what the Phase II spec requires of a node
-    // talking to an intercept node.
+    // Link address assignment.  Port of init_id/get_id/ret_id.  Addresses come
+    // from one end of a circular list and return to the other, so they are not
+    // reused sooner than necessary (required by Phase II intercept).
     void init_ids ();
     bool get_id (std::uint16_t &out);
     void return_id (std::uint16_t id);
@@ -380,20 +350,10 @@ private:
     // Inbound connections are also indexed by who sent them and their own
     // address, so a retransmitted connect initiate finds the same link.
     std::map<std::pair<std::uint16_t, std::uint16_t>, Connection *> by_remote_;
-    // Connections NSP has finished with.  A caller may still hold a
-    // pointer to one, so they are kept rather than destroyed; each reports
-    // itself closed.
-    // Connections that have closed.  They are not destroyed at once: a
-    // closed connection is retired from inside a callback into the
-    // application that owns it, so freeing it there is a use-after-free --
-    // see BUGS.md.  They are not kept forever either, which used to be the
-    // trade: a node that opens and closes many links grew without bound.
-    //
-    // Each carries the time it was retired, and the list is swept whenever
-    // another joins it.  Anything past the grace period is destroyed, by
-    // which time the dispatch that retired it has long returned.  Sweeping
-    // on arrival rather than on a timer means the work happens exactly
-    // when there is something to reclaim.
+    // Closed connections.  A connection is closed from inside a callback into
+    // its owner, so it cannot be freed immediately.  Each records when it was
+    // retired, and entries past the grace period are freed when another
+    // connection is retired.
     struct Closed {
         std::unique_ptr<Connection>           conn;
         std::chrono::steady_clock::time_point when;
@@ -401,10 +361,7 @@ private:
     std::vector<Closed> closed_;
 
 public:
-    // How many closed connections are still held, and how long they are
-    // kept.  Both are here for the tests: the reclamation rule is a
-    // question of counting and of elapsed time, and a test that had to
-    // wait out the real grace period would not be run.
+    // Number of retired connections held, and the grace period.  For tests.
     std::size_t closed_count () const noexcept { return closed_.size (); }
     void set_closed_grace (std::chrono::seconds g) noexcept
     { closed_grace_ = g; }

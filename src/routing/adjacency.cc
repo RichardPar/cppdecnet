@@ -68,9 +68,7 @@ SelfAdjacency::SelfAdjacency (BaseRouter *router, Nodeid id,
                  0.0),
       router_ (router)
 {
-    // The self adjacency is not on any circuit and never goes down; it is
-    // simply always up so that the routing computation has a column for
-    // this node.
+    // The self adjacency is always up.
     up_ = true;
 }
 

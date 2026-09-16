@@ -1,16 +1,10 @@
-// src/mop/nice.cc -- what MOP tells network management.
+// src/mop/nice.cc -- NICE reads for MOP.
 //
-// Port of Mop.nice_read.  The only module MOP has is the configurator,
-// which reports what other stations on each circuit have announced about
-// themselves in their system id messages.  That is the one NCP command
-// that shows a machine which has said nothing to routing at all: a station
-// only has to be powered on and talking MOP to appear here.
+// Port of Mop.nice_read.  The configurator module reports stations heard
+// on each circuit via system id messages.
 //
-// One circuit produces one reply per station heard, and they travel as a
-// group -- all but the last carry "more to come for this entity" -- which
-// is what ReplyDict::add_named is for.  A circuit that has heard nothing
-// still gets one reply, so that NCP prints the circuit with its
-// surveillance state rather than leaving it out.
+// One reply per station, grouped per circuit.  A circuit with no stations
+// still gets one reply.
 
 #include "decnet/mop/mop.h"
 #include "decnet/nice/nml.h"
@@ -30,7 +24,7 @@ namespace {
 
 constexpr const char *configurator = "CONFIGURATOR";
 
-// The functions bitmap, as a list of the bit numbers that are set.  the Python
+// The functions bitmap, as a list of the bit numbers that are set.  PyDECnet
 // builds the same list by walking the seven service flags in order.
 Value functions_value (const SysId &s)
 {
@@ -148,9 +142,7 @@ void Mop::nice_read (const NiceRequest &req, ReplyDict &resp)
             first = &resp.add_named (configurator);
             first->params.set (100, Value::ai (c->name ()));
         }
-        // Surveillance and elapsed time go on the first reply for the
-        // circuit, because they are about the circuit rather than about
-        // any one station on it.
+        // Surveillance and elapsed time go on the circuit's first reply.
         first->params.set (110, Value::c (0));      // Surveillance disabled
         first->params.set (111, elapsed_value (sysid->elapsed ()));
     }

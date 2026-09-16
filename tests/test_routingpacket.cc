@@ -96,7 +96,7 @@ DN_TEST (rpacket, ptp_init_phase4)
     p.timer   = 60;
 
     Bytes wire = p.encode ();
-    // The exact bytes a the Python endnode sends.
+    // The exact bytes a PyDECnet endnode sends.
     DN_ASSERT_EQ (wire, bytes_of ({ 0x01, 0x01, 0x04, 0x03, 0x40, 0x02,
                                     0x02, 0x00, 0x00, 0x3c, 0x00, 0x00 }));
 
@@ -179,10 +179,8 @@ DN_TEST (rpacket, family_dispatch_from_the_flags_byte)
 
 DN_TEST (rpacket, data_flags_bits_do_not_change_the_class)
 {
-    // The flags byte mixes the type with per-packet bits, so the class
-    // lookup is masked.  For a data packet the mask is 0xc7, so bits 3, 4
-    // and 5 -- rqr, rts and the long form's ie -- are the don't-care ones.
-    // vers and pf are inside the mask and so are part of the class key.
+    // Data packet mask is 0xc7: bits 3-5 (rqr, rts, ie) are ignored; vers and
+    // pf are part of the key.
     for (int extra : { 0x00, 0x08, 0x10, 0x18, 0x20, 0x38 }) {
         Bytes wire = bytes_of ({ 0x02 | extra, 0x01, 0x04, 0x36, 0x24, 0x00 });
         auto p = RoutingPacketBase::parse_frame (wire);

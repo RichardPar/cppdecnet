@@ -1,23 +1,19 @@
 // decnet/datalink/ptp.h -- point to point datalink base class.
 //
-// Port of datalink.PtpDatalink and PtpPort.  This is the state machine that
-// every point to point circuit runs: it owns a receive thread doing
-// blocking I/O, and turns everything that thread sees into work items so
-// the states run on the node thread.
+// Port of datalink.PtpDatalink and PtpPort.  A receive thread does
+// blocking I/O and posts work items; the state machine runs on the node
+// thread.
 //
-// States, with the Python's labels:
+// States:
 //
-//   s0           "Halted"        a Start item connects and starts the thread
+//   s0           "Halted"        Start connects and starts the thread
 //   connecting   "Connecting"    waiting for the thread to report Connected
 //   running                      supplied by the concrete datalink
 //   reconnecting "Reconnecting"  wait for the thread, then hold off and retry
 //   shutdown     "Shutdown"      wait for the thread, then stay down
 //
-// The design note in doc/internals.txt is worth keeping in mind here: the
-// routing layer has no timeout in its datalink-start state, because this
-// layer guarantees it will keep retrying forever and will always report
-// when it finally comes up.  That guarantee is what the reconnecting state
-// with its backoff implements.
+// The routing layer has no timeout while waiting for the datalink, so this
+// layer must keep retrying and report when it comes up.
 
 #ifndef DECNET_DATALINK_PTP_H
 #define DECNET_DATALINK_PTP_H
@@ -64,11 +60,8 @@ public:
     // Work items reach the state machine through here.
     void dispatch (Work &w) override { StateMachine<PtpDatalink>::dispatch (w); }
 
-    // Common handling done in every state, before the state action.
-    // Virtual for the same reason running() is: the state machine reaches
-    // it through a PtpDatalink reference, so a datalink that needs its own
-    // handling -- DDCMP, which restarts its protocol rather than its
-    // connection -- can only be reached if the base declares it virtual.
+    // Common handling for every state, before the state action.  Virtual so
+    // DDCMP can restart its protocol instead of its connection.
     virtual bool validate (Work &w);
 
     // ------------------------------------------------------------- states
@@ -77,10 +70,7 @@ public:
     State reconnecting (Work &w);
     State shutdown_state (Work &w);
 
-    // The running state, supplied by the concrete datalink.  It is a
-    // virtual member of this class rather than of the subclass so that a
-    // pointer to member of PtpDatalink still reaches the override -- which
-    // is what lets one state machine base serve every datalink type.
+    // The running state, supplied by the concrete datalink.
     virtual State running (Work &w) = 0;
 
     std::string statename () const override;
@@ -88,7 +78,7 @@ public:
     bool is_up () const noexcept { return is_up_; }
 
 protected:
-    // Report to the port owner.  Both are idempotent, as in the Python.
+    // Report to the port owner.  Both are idempotent, as in PyDECnet.
     void report_up ();
     void report_down ();
 
@@ -121,10 +111,8 @@ protected:
 
     bool stopping () const noexcept { return stopnow_.load (); }
 
-    // The socket the receive thread works on.  Written on the node thread
-    // during connect and disconnect, read on the receive thread; both
-    // happen only while the other side is quiescent, which the state
-    // machine guarantees.
+    // Socket used by the receive thread.  Written on the node thread only
+    // while the receive thread is not running.
     Socket socket_;
 
     PtpPort    *port_ = nullptr;

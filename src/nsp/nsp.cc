@@ -71,9 +71,7 @@ void Connection::send (const NspPacketBase &pkt)
     parent_->send_to (dest_, pkt.encode_packet ());
 }
 
-// How long an acknowledgement may be held back, waiting for something to
-// ride on.  The Python's Subchannel.HOLDOFF, and the same tenth of a
-// second: one timer tick.
+// Maximum acknowledgement delay.  Subchannel.HOLDOFF in PyDECnet: one tick.
 constexpr double ACK_HOLDOFF = 0.1;
 
 void Connection::delay_ack ()
@@ -119,18 +117,13 @@ void Connection::start_outbound (Bytes payload)
     ci_pkt.payload = std::move (payload);
 
     set_state (DN_MY_STATE (Connection, ci));
-    // The connect message is sequence number 0, so its acknowledgement is
-    // what the data subchannel treats as acknowledging number 0.  It is
-    // not subject to flow control: it is what asks for it.
+    // The connect message is sequence number 0.  Not subject to flow control.
     TxEntry e;
     e.seq   = Seq (0);
     e.frame = ci_pkt.encode_packet ();
     e.sent  = true;
-    // Time it.  The connect exchange is a round trip like any other, and
-    // timing it means there is an estimate from the moment the link comes
-    // up rather than only after the first data has been acknowledged --
-    // which matters, because the first retransmission decision may come
-    // before any data has been sent at all.
+    // Time the connect exchange so a round trip estimate exists before any
+    // data is sent.
     e.txtime = std::chrono::steady_clock::now ();
     txq_.push_back (std::move (e));
     send (ci_pkt);
@@ -147,9 +140,7 @@ void Connection::start_inbound (const ConnInit &pkt)
     flow_ = pkt.fcopt;
 
     if (cphase_ > 2) {
-        // Phase III and later acknowledge the connect message at once, so
-        // the far end can stop retransmitting while the application
-        // decides what to do.
+        // Phase III and later acknowledge the connect immediately.
         AckConn ca;
         ca.dstaddr = dstaddr_;
         send (ca);
@@ -222,9 +213,8 @@ void Connection::send_data (Bytes data)
 
 void Connection::send_segments (const Bytes &data)
 {
-    // Split the message into segments the far end said it would accept,
-    // marking the first and last.  A zero length message is still one
-    // segment: it is a message, and the far end must see it as one.
+    // Split into segments of the size the far end accepts, marking first and
+    // last.  An empty message is one segment.
     std::size_t limit = segsize_ ? segsize_ : MSS;
     std::size_t off = 0;
     bool first = true;
@@ -242,24 +232,10 @@ void Connection::send_segments (const Bytes &data)
         // Piggyback what we have received on the outgoing segment.
         seg.acknum = AckNum { next_expect_ - Seq (1), AckNum::ACKQ };
 
-        // Never ask the far end to delay its acknowledgement.
-        //
-        // The Python sets this bit when its queue is not over half full,
-        // and that was ported here, on the reasoning that it halves the
-        // acknowledgement frames coming back.  Two measurements say
-        // otherwise.  On a long reply it never fires: the queue is already
-        // deep by the time the first segment is built, so the condition is
-        // false for every segment -- confirmed against a live PyDECnet,
-        // which acknowledged 1019 of 1028 segments individually, exactly
-        // as we do.  On a short reply -- which is every NCP command, a
-        // handful of messages -- it fires on all of them, and then the
-        // only thing that can finish the exchange is an acknowledgement we
-        // have just told the far end it need not hurry over.  What that
-        // costs is the far end's holdoff, not ours, and RSX's is not a
-        // tenth of a second.
-        //
-        // So the bit buys nothing where it was meant to and paces us where
-        // it was not.  Receiving it is still honoured; see handle_data.
+        // Never set the delay bit.  PyDECnet sets it when the queue is less than
+        // half full, but on short exchanges (NCP commands) that leaves the last
+        // acknowledgement waiting on the far end's holdoff timer, which on RSX is
+        // long.  Received delay bits are still honoured; see handle_data.
         seg.dly = false;
 
         TxEntry e;
@@ -308,10 +284,7 @@ bool Connection::flow_ok (const TxEntry &e) const
 
 double Connection::acktimeout () const
 {
-    // With no measurement yet, two seconds.  The specification says five;
-    // the Python uses two on the grounds that it is plenty on anything
-    // built this century, and this has to match what it does or the two
-    // give up on each other at different times.
+    // Initial estimate of two seconds, as in PyDECnet (the spec says five).
     const Nodeinfo *info = parent_ && parent_->node ()
         ? parent_->node ()->find_node (dest_, false) : nullptr;
     if (!info || info->delay <= 0) return 2.0;
@@ -331,11 +304,9 @@ void Connection::update_delay (std::chrono::steady_clock::time_point txtime)
     std::chrono::duration<double> d = std::chrono::steady_clock::now () - txtime;
     double delta = d.count ();
 
-    // A floor of one second, which looks excessive next to a tenth of a
-    // second of timer granularity and is not.  On a DDCMP serial line the
-    // latency depends on the length of the packet, so an estimate taken
-    // from short packets produces false timeouts the moment a long one is
-    // sent.  The Python carries the same floor and says the same thing.
+    // One second minimum, as in PyDECnet.  On DDCMP serial lines latency
+    // depends on packet length, so an estimate from short packets causes false
+    // timeouts on long ones.
     if (delta < 1.0) delta = 1.0;
 
     if (info->delay > 0) {
@@ -347,9 +318,8 @@ void Connection::update_delay (std::chrono::steady_clock::time_point txtime)
         info->delay = delta;
     }
 
-    // Capped, because congestion makes the averaging misbehave: without a
-    // ceiling a congested path pushes the estimate up, which lengthens the
-    // timeout, which hides the congestion.
+    // Five second maximum, so congestion does not inflate the timeout without
+    // bound.
     if (info->delay > 5.0) info->delay = 5.0;
 }
 
@@ -384,9 +354,7 @@ void Connection::send_blocked ()
 
 void Connection::process_ack (Seq num)
 {
-    // Everything up to and including num is acknowledged.  Only entries
-    // that were actually sent can be: an unsent one further along the
-    // queue is not covered by an acknowledgement.
+    // Acknowledge everything up to num that has been sent.
     bool progress = false;
     while (!txq_.empty () && txq_.front ().sent && !(num < txq_.front ().seq)) {
         max_acked_seg_ = txq_.front ().segnum;
@@ -397,17 +365,9 @@ void Connection::process_ack (Seq num)
     }
     highest_acked_ = num;
     if (progress) {
-        // Anything acknowledged means the peer is alive and taking
-        // delivery, so the retransmit count starts again and the timeout
-        // is measured afresh from here.
-        //
-        // The Python keeps that count per packet, and an acknowledged
-        // packet takes its count away with it.  Ours is one count for the
-        // whole connection, so without this it records every timeout over
-        // the life of the link and gives up on the fifth -- even though
-        // each one was followed by delivery.  A long NICE reply to a slow
-        // peer is exactly that shape: it makes progress the whole way and
-        // the link is dropped part way through anyway.
+        // Progress resets the retransmit count and restarts the timer.  PyDECnet
+        // counts retries per packet; this implementation has one count per
+        // connection.
         retries_ = 0;
         if (node ()) {
             if (in_flight () > 0) {
@@ -499,9 +459,8 @@ void Connection::handle_interrupt (const IntMsg &msg)
         send (a);
         return;
     }
-    // Interrupts are not reordered or held: there is at most one in
-    // flight in each direction under normal flow control, and the Python
-    // does not police inbound interrupt credit either.
+    // Interrupts are delivered immediately.  Inbound interrupt credit is not
+    // enforced, as in PyDECnet.
     int_next_expect_ = got + Seq (1);
 
     AckOther a;
@@ -525,16 +484,9 @@ void Connection::handle_link_service (const LinkSvcMsg &ls)
     route_ack (ls.acknum, false);
     route_ack (ls.acknum2, false);
 
-    // And it is sequenced on that subchannel, which is why it carries a
-    // segment number at all, so it has to be acknowledged there -- exactly
-    // as an interrupt is, a few lines above.  Nothing here did.
-    //
-    // The far end will not send the next link service message until the
-    // last one is answered.  RSX waits out a four second timer instead and
-    // then grants one more message of credit, so every reply message after
-    // the first cost four seconds: "show executor" is one message and
-    // looks fine, "show known nodes" is four and takes sixteen.  Any NCP
-    // command that answers with more than one message pays it.
+    // Acknowledge the link service message on the other-data subchannel.  The
+    // far end waits for this before sending the next one (RSX falls back to a
+    // four second timer).
     Seq got = ls.segnum;
     if (got < int_next_expect_) {
         // Seen it before.  Acknowledge again, in case that is what went
@@ -661,12 +613,8 @@ void Connection::handle_data (const DataSeg &seg)
         ++next_expect_;
     }
 
-    // The sender said this one's acknowledgement may wait, so hold it back
-    // and let it ride on whatever we send next.  Anything else -- a sender
-    // that wants it now, a phase that has no delay bit, or a link that is
-    // not running -- is answered straight away, as everything used to be.
-    // The last of those matters: a shutdown must not leave an
-    // acknowledgement sitting on a timer behind it.
+    // Hold the acknowledgement if the sender set the delay bit and the link is
+    // running; otherwise send it now.
     if (seg.dly && cphase_ >= 4 && running ())
         delay_ack ();
     else
@@ -692,26 +640,17 @@ void Connection::retransmit ()
               retries_);
     for (TxEntry &e : txq_) {
         if (!e.sent) continue;
-        // Stop timing a packet once it has been sent twice: an
-        // acknowledgement no longer says which transmission it answers, and
-        // measuring from the first one inflates the estimate every time a
-        // packet is lost -- which lengthens the timeout, which loses more.
+        // Stop timing a packet once retransmitted.
         e.txtime = std::chrono::steady_clock::time_point {};
         parent_->send_to (dest_, e.frame);
-        // Only the oldest unacknowledged one.  The Python gives every
-        // packet its own timer, so a timeout there resends one packet;
-        // ours has a single timer, and resending the whole window on it
-        // turns one late acknowledgement into a burst of up to qmax
-        // frames at a peer that was merely slow.  Acknowledgements are
-        // cumulative, so the next timeout finds whatever is oldest then:
-        // one at a time still converges, without the burst.
+        // Retransmit only the oldest unacknowledged packet.  There is one timer
+        // per connection, and resending the whole window would send a burst of up
+        // to qmax frames.
         break;
     }
     timer_is_retransmit_ = true;
 
-    // Back off: each successive try waits longer, up to a ceiling.  A peer
-    // that is briefly unreachable is retried soon; one that is properly
-    // gone is not hammered for the whole retransmit limit at full rate.
+    // Exponential backoff up to a ceiling.
     double t = acktimeout ();
     for (unsigned i = 1; i < retries_ && t < 30.0; ++i) t *= 2.0;
     if (t > 30.0) t = 30.0;
@@ -808,14 +747,9 @@ Connection::State Connection::cd (Work &w)
         if (cphase_ > 2) send_ack ();
         arm_timer (inact_time_);
         timer_is_retransmit_ = false;
-        // Enter the running state before telling session control, not
-        // after.  An application is entitled to send on the link the
-        // moment it is told the connection was accepted, and send_data
-        // drops anything offered to a link that is not yet running -- so
-        // notifying first would silently lose that first message.  In
-        // the Python the notification is a queued work item and so cannot
-        // run before the state change; here the call is direct, which is
-        // what makes the order something this code has to get right.
+        // Enter run state before notifying session control, since the application
+        // may send data from the callback and send_data drops data on a link that
+        // is not running.
         set_state (DN_MY_STATE (Connection, run));
         if (session ())
             session ()->connect_confirmed (
@@ -997,10 +931,9 @@ void NSP::stop ()
 
 void NSP::init_ids ()
 {
-    // The addresses are drawn so that the low order bits are unique and
-    // non-zero, with a random high order part; a returned address goes to
-    // the back of the queue with its high part bumped, so it is not reused
-    // until every other address has been.
+    // Addresses have unique non-zero low bits and a random high part.  A
+    // returned address goes to the back of the queue with its high part
+    // incremented.
     std::mt19937 gen { std::random_device {} () };
     unsigned c = maxconns_ + 1;
     std::vector<std::uint16_t> ids;
@@ -1061,14 +994,9 @@ void NSP::close_connection (Connection *c)
     by_remote_.erase ({ static_cast<std::uint16_t> (c->dest ().value ()),
                         c->dstaddr () });
     return_id (addr);
-    // The object stays alive: a caller may still hold a pointer, and it
-    // reports itself closed.  Only the tables forget it.
-    // Sweep before adding, never after.  The connection being retired here
-    // is retired from inside a callback into its own owner, so it must
-    // survive this dispatch -- and a sweep that ran after the push could
-    // reclaim the very object whose stack frame is about to be returned
-    // into.  Sweeping first means only entries from earlier dispatches are
-    // ever candidates, which is true whatever the grace period is set to.
+    // Remove from the tables and retire.  Sweep before adding: the connection
+    // is retired from a callback into its owner and must survive this
+    // dispatch.
     sweep_closed ();
 
     auto it = by_addr_.find (addr);
@@ -1097,9 +1025,7 @@ void NSP::deliver (Nodeid src, ByteView payload)
     if (!pkt) {
         DN_DEBUG ("ill formatted NSP packet from {}", src.str ());
         if (Node *n = node ()) {
-            // Event 3.0, invalid message.  It carries the message itself
-            // and the node it came from, which is what an operator needs
-            // to work out whose implementation is at fault.
+            // Event 3.0, invalid message, with the message and source node.
             events::Event e { { 3, 0 }, nice::Entity::make_none () };
             e.param (0, nice::Value::hi (Bytes (payload.begin (),
                                                 payload.end ())));

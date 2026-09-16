@@ -266,10 +266,7 @@ DN_TEST (mop, loopback_round_trip)
 
 DN_TEST (mop, loop_message_structure)
 {
-    // A loop request carries two functions: forward to the requester,
-    // then reply.  The far station reads the first and sends the message
-    // back with the skip count advanced past it, which brings the second
-    // into view.
+    // Loop request: forward to the requester, then reply.
     LoopReply rep;
     rep.receipt = 7;
     rep.payload = bytes_of ("data");

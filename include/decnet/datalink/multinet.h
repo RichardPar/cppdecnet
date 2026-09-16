@@ -1,24 +1,20 @@
 // decnet/datalink/multinet.h -- Multinet over TCP or UDP.
 //
-// Port of multinet.py.  As that module's docstring says, Multinet fails a
-// number of the requirements the routing spec places on a point to point
-// datalink -- there is no datalink level startup, so a remote restart is
-// invisible.  The point to point sublayer works around that when the port
-// reports start_works() false, which the UDP form does.
+// Port of multinet.py.  Multinet has no datalink startup, so a remote
+// restart is not visible.  The UDP form reports start_works() false.
 //
-// The framing is four bytes of header then the payload.  Over TCP the first
-// two header bytes are the payload length, little endian; over UDP they are
-// a sequence number that the receiver ignores.  The remaining two bytes are
-// zero either way.
+// Four byte header then payload.  Over TCP the first two bytes are the
+// payload length, little endian; over UDP they are a sequence number the
+// receiver ignores.  The other two bytes are zero.
 //
-// Device syntax, unchanged from the Python:
+// Device syntax:
 //
 //     host[:port][:connect]    active end of a TCP connection
 //     host[:port][:listen]     passive end of a TCP connection
 //     host[:port][:localport]  UDP
 //
-// The port defaults to 700.  In listen mode the host may be empty, which
-// accepts a connection from any address.
+// The port defaults to 700.  In listen mode an empty host accepts any
+// address.
 
 #ifndef DECNET_DATALINK_MULTINET_H
 #define DECNET_DATALINK_MULTINET_H

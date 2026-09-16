@@ -1,14 +1,10 @@
 // decnet/common/socket.h -- sockets and host addresses.
 //
-// Port of the parts of host.py the datalinks need: resolve a host name and
-// port, create connected, listening and UDP sockets, and check whether an
-// inbound connection came from the address we expect.
+// Port of the parts of host.py used by the datalinks: name resolution,
+// TCP and UDP sockets, and checking the address of an inbound connection.
 //
-// PORT: the Python resolves names on a background thread and re-resolves
-// periodically, so a peer on a dynamic address is followed.  The interval
-// is kept here, but the lookup runs inline on the datalink's receive
-// thread, which is already allowed to block.  A background resolver only
-// matters when many circuits share one name.
+// PORT: PyDECnet re-resolves names on a background thread.  Here the
+// lookup runs inline on the datalink receive thread.
 
 #ifndef DECNET_COMMON_SOCKET_H
 #define DECNET_COMMON_SOCKET_H
@@ -113,9 +109,8 @@ public:
     // if any, are then kept, as host.py does.
     bool resolve ();
 
-    // The address to use next.  Cycles through the resolved list so that a
-    // host with several addresses is retried on a different one each time,
-    // which is what HostAddress.__next__ does.
+    // The address to use next.  Cycles through the resolved list, as
+    // HostAddress.__next__ does.
     const Endpoint *current () const noexcept;
 
     // Resolve if needed and return where to send; null if unresolvable.
@@ -166,13 +161,9 @@ Socket create_connection (HostAddress &dest, const SourceAddress &src);
 
 // A bound UDP socket.  Port of HostAddress.create_udp.
 //
-// Deliberately NOT connected.  A connected UDP socket receives ICMP
-// errors: send to a port nobody has bound yet -- which happens routinely
-// when the peer has not started, or restarts -- and the next poll reports
-// POLLERR.  A datalink that treated that as fatal would die because a
-// datagram bounced, which is precisely what a datagram service does not
-// promise.  So we bind only, send with send_datagram and check the sender
-// on receive, as the Python does with sendto and recvfrom.
+// Not connected: a connected UDP socket reports ICMP errors as POLLERR,
+// which would take the receive loop down when the peer is not running yet.
+// Use send_datagram and check the sender on receive.
 Socket create_udp (HostAddress &dest, const SourceAddress &src);
 
 // Send one datagram.  Returns false on error, which callers generally

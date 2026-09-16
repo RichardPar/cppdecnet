@@ -1,10 +1,8 @@
-// The event logger: event lists, filters, sinks, and a record travelling
-// from one node to another over a real logical link.
+// The event logger: event lists, filters, sinks, and remote logging
+// between two nodes.
 //
-// Ported from the filtering and sink code in event_logger.py.  There is no
-// upstream unit test for this part, so the checks are against the DNA
-// Network Management specification's description of an event-list and
-// against what the two ends of a remote sink have to agree on.
+// Ported from event_logger.py, which has no unit tests upstream.  Checked
+// against the NM spec's event-list definition.
 
 #include "harness.h"
 
@@ -77,9 +75,8 @@ DN_TEST (eventlog, parse_range)
 
 DN_TEST (eventlog, parse_class_carries_forward)
 {
-    // "3.1,4.1-12,5.2,4,7": once a class is named it applies to every
-    // entry after it until another class appears.  The trailing "4,7" are
-    // codes in class 5, not classes of their own.
+    // A class applies to following entries until another class is named, so
+    // "4,7" are codes in class 5.
     EventSet s = parse_events ("3.1,4.1-12,5.2,4,7");
     DN_ASSERT (in (s, 3, 1));
     DN_ASSERT (in (s, 4, 1));
@@ -302,9 +299,7 @@ struct Pair {
               "routing 1.1 --type l1router\nnode 1.1 NODEA\nnode 1.2 NODEB\n"
               "circuit mul-0 Multinet 127.0.0.1:" + std::to_string (port)
               + ":listen --t3 2\n"
-              // Destined for NODEB's monitor sink: the record says which
-              // of the far end's sinks asked for it, and NODEB has only
-              // that one.
+              // Destined for NODEB's monitor sink.
               "logging monitor --sink-node NODEB --events 4.10,4.15\n")),
           bcfg (Config::from_string (
               "routing 1.2 --type endnode\nnode 1.2 NODEB\nnode 1.1 NODEA\n"
@@ -320,9 +315,7 @@ struct Pair {
     {
         a->start ();
         b->start ();
-        // The result mattered and was being dropped: on a loaded machine
-        // this could time out, start () would return anyway, and the test
-        // that followed raced something that had not happened yet.
+        // Check the start result so a timeout fails here.
         bool up = wait_until ([&] {
             return a->routing ()->adjacency_count () == 1
                 && b->routing ()->adjacency_count () == 1;
@@ -369,18 +362,9 @@ DN_TEST (eventlog, an_event_travels_to_a_remote_sink)
 
     p.start ();
 
-    // Wait for the link to the remote sink, not just for the adjacency.
-    //
-    // This is what made the test fail about one run in three on a busy
-    // machine.  An event raised before the sink's logical link is up is
-    // queued, and the sink retries its connect every thirty seconds --
-    // twice the fifteen this test was prepared to wait.  So a slow start
-    // did not delay the record, it delayed it past the deadline, and the
-    // failure looked like a lost event rather than a late link.
-    //
-    // Waiting for the precondition is the fix.  Lengthening the deadline
-    // past thirty seconds would also have gone green, and would have hidden
-    // the same race behind a slower test.  BUGS.md item 10.
+    // Wait for the remote sink's link, not just the adjacency.  Events raised
+    // before the link is up are queued, and the sink retries its connect every
+    // thirty seconds.
     events::RemoteSink *sink = p.a->event_logger ()->remote_sink ("NODEB");
     DN_ASSERT (sink != nullptr);
     DN_ASSERT (wait_until ([&] { return sink->connected (); }));
@@ -416,9 +400,7 @@ DN_TEST (eventlog, an_event_travels_to_a_remote_sink)
     std::vector<std::string> shown = e.params.format (find_event (e.id)->params);
     DN_ASSERT_EQ (shown.size (), 1u);
     DN_ASSERT_EQ (shown[0], std::string ("Adjacent node = 1.2 (NODEB)"));
-    // A's monitor filter picked it, so the record asks for the monitor at
-    // the far end and for nothing else.  That is what routes it to B's
-    // monitor sink rather than to a console B does not have.
+    // Selected by A's monitor filter, so it is routed to B's monitor sink.
     DN_ASSERT (e.monitor);
     DN_ASSERT (!e.console);
     DN_ASSERT (!e.file);

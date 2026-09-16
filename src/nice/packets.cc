@@ -201,10 +201,9 @@ void ReqEntity::encode (Encoder &e) const
             e.uint (id.value (), 2);
         return;
     }
-    // A name, whatever the entity kind.  This has to come before the two
-    // numeric cases: a node or an area may be named rather than numbered
-    // ("SHOW NODE FOO"), and the count byte a name carries is the same
-    // byte that would otherwise be the zero meaning "given by number".
+    // Check for a name first: a node or area may be given by name, and the
+    // name's count byte occupies the position of the zero that means "by
+    // number".
     if (code > 0) {
         put_string (e, name, 127);
         return;
@@ -256,9 +255,8 @@ ReqEntity ReqEntity::decode (Decoder &d, std::uint8_t etype)
 
 namespace {
 
-// The parameters a loop request may carry, and the NICE type code each one
-// would have had if this were a reply.  A request omits the code byte, so
-// decoding needs this table; see the comment at the top of the header.
+// Loop request parameters with their type codes.  Requests omit the code
+// byte, so decoding needs this table.
 struct ReqParam { std::uint16_t number; std::uint8_t code; };
 
 constexpr ReqParam loop_params[] = {
@@ -300,10 +298,8 @@ Bytes NiceRequest::encode () const
                                            | (entity_type & 7)));
         entity.encode (e);
         if (function == fn_read) {
-            // The qualifiers.  Both are entities in a parameter slot, so
-            // they carry no type code -- see StringQualEntity in
-            // nicepackets.py, which supplies a dummy one the common code
-            // then strips.
+            // Qualifiers are entities in a parameter slot and have no type code (see
+            // StringQualEntity in nicepackets.py).
             if (has_qual_circuit) {
                 e.uint (501, 2);
                 put_string (e, qual_circuit, 127);
@@ -358,9 +354,7 @@ NiceRequest NiceRequest::parse (ByteView buf)
         r.info = (flags >> 4) & 7;
         r.entity_type = flags & 7;
         r.entity = ReqEntity::decode (d, r.entity_type);
-        // Qualifiers, if any.  Anything we do not recognise ends the
-        // parse: without the type code there is no way to know how long
-        // the value is, so there is nothing to skip over.
+        // Stop at an unknown qualifier; without a type code its length is unknown.
         while (!d.empty ()) {
             std::uint16_t num = static_cast<std::uint16_t> (d.uint (2));
             if (num == 501 || num == 822) {

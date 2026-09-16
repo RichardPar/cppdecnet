@@ -122,9 +122,7 @@ EventSet parse_events (const std::string &s)
 
 const EventSet &filterable_events ()
 {
-    // Built once from the catalogue.  Classes 31 to 479 belong to other
-    // vendors' implementations: we can decode records from them, but we
-    // never raise one, so there is nothing to filter.
+    // Built from the catalogue.  Classes 31 to 479 are never raised locally.
     static const EventSet set = [] {
         EventSet s;
         for (const EventDef &d : known_events ())
@@ -140,7 +138,7 @@ void EventFilter::set_filter (const EventSet &events,
                               const std::string &entity_key, bool enable)
 {
     for (EventId id : events) {
-        // Only events this build can raise are worth filtering on.
+        // Only events this build can raise can be filtered.
         if (!filterable_events ().count (id)) continue;
         if (entity_key.empty ()) {
             if (enable) plain_.insert (id);
@@ -234,9 +232,8 @@ void LocalFile::writeevent (const Event &e, unsigned)
 {
     if (!f_) return;
     Bytes b = e.encode ();
-    // A two byte little endian length in front of each record: the RMS
-    // variable length record format, so the file reads on the systems this
-    // protocol came from.
+    // Two byte little endian length before each record (RMS variable length
+    // format).
     std::uint8_t len[2] = { static_cast<std::uint8_t> (b.size () & 0xff),
                             static_cast<std::uint8_t> (b.size () >> 8) };
     std::fwrite (len, 1, 2, f_);
@@ -260,9 +257,8 @@ void LocalMonitor::writeevent (const Event &e, unsigned)
 
 namespace {
 
-// The application side of a remote sink's connection.  It does nothing but
-// tell the sink when the link comes up and when it goes away; the sink
-// owns the queue and decides what to send.
+// Application for a remote sink's connection.  Reports link up and down to
+// the sink.
 class RemoteSinkApp : public session::Application {
 public:
     explicit RemoteSinkApp (RemoteSink *sink) noexcept : sink_ (sink) {}
@@ -331,11 +327,8 @@ void RemoteSink::writeevent (const Event &e, unsigned mask)
 
 void RemoteSink::start ()
 {
-    // Deliberately no connection attempt here.  Sinks start before the
-    // routing and session layers do, so a connection opened now would be
-    // to an unreachable node, fail, and put us into the thirty second
-    // retry cycle with nothing yet to send.  The link is opened when
-    // there is a first record for it.
+    // No connection attempt here: routing and session are not running yet.
+    // The link is opened when the first record arrives.
     stopped_ = false;
 }
 
@@ -378,16 +371,9 @@ void RemoteSink::send_events ()
     if (stopped_) return;
 
     if (conn_) {
-        // send_data goes straight down through session control, NSP and
-        // routing, and anything down there may raise an event -- which
-        // arrives back here, is queued, and used to re-enter this very
-        // loop.  The inner call then sent and popped the record the outer
-        // one was still holding, and the outer pop_front destroyed an
-        // element that was no longer there.  That is a crash in the
-        // Event destructor with nothing in the log to explain it.
-        //
-        // So: one loop at a time, and each record leaves the queue before
-        // it is sent rather than after.
+        // send_data runs synchronously down the stack and may raise events that
+        // come back to this sink.  So only one loop runs at a time, and each record
+        // is removed from the queue before it is sent.
         if (sending_) return;
         sending_ = true;
         while (!queue_.empty () && conn_ && conn_->running ()) {
@@ -542,19 +528,10 @@ void EventLogger::register_monitor (LocalMonitor::Callback cb,
 
 void EventLogger::nice_read (const nice::NiceRequest &, nice::ReplyDict &)
 {
-    // Deliberately empty, matching EventLogger.nice_read upstream.
-    //
-    // SHOW LOGGING asks which events each sink is set to record, and the
-    // architected answer is a logging entity carrying an event list per
-    // sink.  The parameter encoding for that -- the event list format in a
-    // NICE reply, which is not the same as the one in an event record --
-    // is not implemented in the Python either, so there is nothing here to
-    // port and no wire format to check a guess against.  Answering nothing
-    // makes the listener report "unrecognized component", which is honest:
-    // we do not have this information in the form NCP asked for it.
-    //
-    // The data itself is not missing.  local_filter() has every sink's
-    // event set, and the monitoring page prints it.
+    // Empty, as EventLogger.nice_read is upstream.  The NICE encoding of
+    // logging event lists is not implemented in PyDECnet either, so the
+    // listener answers "unrecognized component".  The filters are shown on the
+    // monitoring page.
 }
 
 EventFilter *EventLogger::local_filter (const std::string &type)

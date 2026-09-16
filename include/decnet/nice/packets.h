@@ -1,29 +1,19 @@
-// decnet/nice/packets.h -- the NICE protocol messages.
+// decnet/nice/packets.h -- NICE protocol messages.
 //
-// Port of nicepackets.py.  NICE is the wire protocol behind NCP: a
-// management station connects to object 19 on the node it wants to ask
-// about and exchanges request and reply messages over that logical link.
+// Port of nicepackets.py.  NCP connects to object 19 and exchanges request
+// and reply messages.  Value, entity and parameter coding are in value.h,
+// entity.h and params.h.
 //
-// The data coding underneath is already done -- value.h, entity.h and
-// params.h had to exist for event records, which end in a NICE parameter
-// list -- so what is here is the message framing on top of it.
+// Reply parameters carry their own type code, so replies decode without a
+// table and unknown parameters survive a round trip.  Request parameters
+// omit the type code, so requests decode against a table and the request
+// class has named fields.
 //
-// Two asymmetries are worth stating up front, because they shape the code.
+// Entities in replies have no kind byte; entities in event records do.
+// See Entity::encode_body and decode_body.
 //
-// A reply is self describing: every parameter carries its own type code, so
-// a reader needs no table and an unrecognised parameter survives a decode
-// and re-encode unchanged.  A *request* omits that code byte, on the theory
-// that both ends know what each parameter of each request means.  So a
-// request can only be decoded against a table, which is why the request
-// class below has named fields rather than a general parameter list.
-//
-// And an entity in a reply carries no kind byte -- the request said which
-// kind it was asking about -- while an entity in an event record does.
-// That is what Entity::encode_body and decode_body are for.
-//
-// PORT: Phase II NICE (the P2* classes in nicepackets.py) is a different
-// protocol that happens to share the object number, distinguished by its
-// function codes.  It is not here; see NOTDONE.md.
+// PORT: Phase II NICE (the P2* classes in nicepackets.py) is not
+// implemented.  See NOTDONE.md.
 
 #ifndef DECNET_NICE_PACKETS_H
 #define DECNET_NICE_PACKETS_H
@@ -90,15 +80,14 @@ inline constexpr unsigned nice_endnode4 = 5;
 
 // ------------------------------------------------------------- ReqEntity
 
-// The entity a request is about.  One signed byte says which form follows:
+// The entity a request is about.  A signed byte selects the form:
 //
-//     > 0    a name, that many characters
-//     = 0    a specific entity given by number: a node address or an area
-//     < 0    a wildcard -- "known circuits", "active nodes" and so on
+//     > 0    a name of that many characters
+//     = 0    a node address or area number
+//     < 0    a wildcard ("known circuits", "active nodes", ...)
 //
-// The two node-only wildcards, -6 and -7, carry a node number as well: they
-// mean "every node in this area" and "every node with this number in any
-// area".  That is why the value union has to hold a number for a wildcard.
+// Node wildcards -6 and -7 ("all nodes in area", "node number in any
+// area") also carry a number.
 struct ReqEntity {
     // Wildcard codes.
     static constexpr std::int8_t known       = -1;
@@ -136,10 +125,9 @@ struct ReqEntity {
     bool sigact () const noexcept { return code == active || code == significant; }
     bool wild () const noexcept { return code < significant; }
 
-    // Does this request cover that node?  A plural request other than the
-    // two node wildcards covers everything the caller offers it: which
-    // nodes are "active" or "adjacent" is the layer's decision, not the
-    // entity's.  Port of NodeReqEntity.match.
+    // Does this request cover the node?  Plural requests other than -6 and -7
+    // match everything; the layer decides which nodes are active or adjacent.
+    // Port of NodeReqEntity.match.
     bool match (Nodeid n) const noexcept;
 
     // The same for a named entity: a specific name matches only itself.
@@ -157,9 +145,8 @@ struct ReqEntity {
 
 // ----------------------------------------------------------- NiceRequest
 
-// A decoded request.  One class rather than the class-per-function tree
-// the Python builds, because the functions share nearly all of their fields
-// and the ones they do not are cheap to carry.
+// A decoded request.  One class for all functions, since they share most
+// fields.
 class NiceRequest {
 public:
     std::uint8_t function = 0;
@@ -172,9 +159,8 @@ public:
     std::uint8_t entity_type = Entity::node;
     ReqEntity    entity;
 
-    // Read qualifiers.  A node read may be qualified by circuit (parameter
-    // 501, or 822 which is what VMS sends), a circuit read by adjacent node
-    // (parameter 800).
+    // Read qualifiers: node reads by circuit (parameter 501, or 822 from VMS),
+    // circuit reads by adjacent node (parameter 800).
     bool         has_qual_circuit = false;
     std::string  qual_circuit;
     bool         has_qual_node = false;
@@ -209,9 +195,8 @@ public:
 
 // ------------------------------------------------------------- NiceReply
 
-// A reply message.  The header -- return code, detail and message -- is
-// common to every reply; a read reply adds the entity it is about and the
-// parameters that answer the question.
+// A reply message: return code, detail and message, plus entity and
+// parameters for a read reply.
 class NiceReply {
 public:
     int           retcode = rc_success;
@@ -235,19 +220,15 @@ public:
 
     Bytes encode () const;
 
-    // Decode just the header.  The detail and message fields are optional
-    // in an error reply -- not every implementation sends them -- so this
-    // fills in the defaults for whatever is missing.  Port of
-    // NiceReplyHeader.decode.
+    // Decode just the header.  Detail and message are optional in error
+    // replies and default when missing.  Port of NiceReplyHeader.decode.
     static NiceReply parse_header (ByteView buf);
 
     // Decode a full read reply, whose entity is of the given kind.
     static NiceReply parse (ByteView buf, std::uint8_t entity_kind);
 
-    // Decode a reply to a loop request.  The header is the same, but what
-    // follows it is the count of messages not looped rather than an
-    // entity, so it needs its own decoder: nothing in the header says
-    // which of the two bodies is there, only the request it answers.
+    // Decode a reply to a loop request: header, then the count of messages not
+    // looped instead of an entity.
     static NiceReply parse_loop (ByteView buf);
 
     // How NCP prints it: the entity line, then one line per parameter.
@@ -256,9 +237,8 @@ public:
 
 // -------------------------------------------------------- the definitions
 
-// The parameter tables, one per entity kind.  These are what turns
-// parameter 810 into "Type" and value 4 into "Routing IV", and they are the
-// same tables the reply builders use to know what to fill in.
+// Parameter tables per entity kind, used for display names and values and
+// by the reply builders.
 ParamDefs node_params ();
 ParamDefs circuit_params ();
 ParamDefs line_params ();

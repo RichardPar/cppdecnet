@@ -1,4 +1,4 @@
-# Any tap the simulator creates joins the bridge.
+# Add tap devices to the bridge.
 [Match]
 Name=tap*
 
