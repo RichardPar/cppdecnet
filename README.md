@@ -4,7 +4,7 @@ A DECnet Phase IV node in C++, ported from Paul Koning's
 [PyDECnet](https://github.com/pkoning2/pydecnet). It reads PyDECnet
 configuration files and runs PyDECnet external applications unchanged.
 
-Built with [HECnet](http://mim.stupi.net/hecnet) in mind: the hobbyist
+Built with [HECnet](http://mim.softjar.se/) in mind: the hobbyist
 DECnet network that links real and emulated DEC machines around the
 world, with its main router a PDP-11 running RSX-11M-PLUS in Stockholm.
 cppdecnet can run as an endnode or router on HECnet, and can act as a
@@ -148,7 +148,7 @@ node as one. See `samples/pcap.conf` and `samples/pcap-router.conf`.
 ## Joining HECnet
 
 HECnet connections, node names and node numbers are handled by Johnny
-Billquist; see the [HECnet page](http://mim.stupi.net/hecnet) for how to
+Billquist; see the [HECnet page](http://mim.softjar.se/) for how to
 join. Nodes connect through Johnny's bridge program or over Multinet to
 an existing node. cppdecnet does not implement the bridge protocol yet, so
 use a Multinet link.
