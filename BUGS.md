@@ -29,16 +29,25 @@ work.
 
 `src/session/session.cc`, `tools/dnping.cc`
 
-## NSP two-node tests are timing flaky
+## Two-node tests are timing flaky under load
 
-`test_nsp` fails about one run in ten, a different test each time
+Every suite that stands two nodes up over a real socket fails
+occasionally, a different test each time. Seen so far: `test_nsp`
 (`out_of_order_segments_are_held_not_dropped`,
 `closed_connections_are_reclaimed`,
-`xoff_stops_transmission_and_xon_resumes_it` have all been seen). Measured
-at 1/10 on an unmodified tree at 06e79dc and 1/14 with the counter work
-applied, so it is the harness, not any one change: the two nodes talk over
-a real UDP socket with a 2 second hello timer, and a loaded machine slips
-past the waits.
+`xoff_stops_transmission_and_xon_resumes_it`), `test_counters`
+(`nsp_node_counters_follow_a_conversation`) and `test_ddcmp`
+(`two_nodes_come_up_over_a_tcp_ddcmp_circuit`).
+
+It is load, not any one change. `test_nsp` measured 1/10 on an unmodified
+tree at 06e79dc. `two_nodes_come_up_over_a_tcp_ddcmp_circuit` looked like
+a regression at 2 failures in 4 runs, but 06e79dc and the current tree
+run interleaved, six rounds each under the same load, failed zero times
+on both -- the 2/4 was a machine at load average 2.3, not the code. Judge
+this suite by an interleaved comparison, never by consecutive runs.
+
+The cause is the harness: the nodes talk over a real socket with a 2
+second hello timer, and a loaded machine slips past the waits.
 
 The lesson: when a test waits on one observable and then asserts a second,
 the two must each be waited for. `counters.losing_the_neighbour_counts_a_circuit_down`

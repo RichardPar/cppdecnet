@@ -78,6 +78,16 @@ traffic counters and the DDCMP error counters. What is still missing:
   before routing sees them. PyDECnet defines them and never counts them
   either.
 
+### HTTP client
+
+`node @<url>` fetches over plain HTTP only. There is no TLS, so `https://`
+URLs are refused rather than fetched in the clear; the HECnet list is
+served over HTTP, and linking a TLS library for one small file would be a
+large dependency for a small job.
+
+Conditional refresh uses `If-Modified-Since` only. `ETag` is parsed by
+nothing here because MIM does not send one.
+
 ### Monitoring
 
 The HTTP pages cover the NICE entities only. There is no per-connection

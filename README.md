@@ -170,6 +170,45 @@ Replace the node address, interface, peer address and port with the ones
 you were given. The far end listens on its side of the Multinet link.
 Use `--type l2router` only if your node is to be an area router.
 
+### Node names
+
+`node @<file>` reads a node name database: lines of `<address> <NAME>`,
+the format of the HECnet `nodenames.dat`.
+
+`node @hecnet --cache <file>` keeps that list up to date from the one
+Johnny Billquist maintains at `http://mim.softjar.se/hecnet.dat`:
+
+```
+node @hecnet --cache /var/lib/decnet/hecnet.dat
+```
+
+The configuration only ever reads the cache, so the node starts with the
+names it had last time whether or not the network is up. The fetch runs
+in the background afterwards and rewrites the cache; a failure is a
+logged warning and nothing else, since node names change what a page says
+and never how anything routes.
+
+Refresh is weekly by default, `--refresh <seconds>` to change it, zero to
+fetch once at startup. Each refresh sends `If-Modified-Since` with the
+`Last-Modified` from the previous fetch, which MIM answers with `304 Not
+Modified` when nothing has changed, so the usual weekly cost is one small
+exchange and no rewrite.
+
+A name the configuration gives is never overwritten by a fetched one, so
+local overrides stay put wherever they appear in the file. `node @<url>`
+also works if you want a list from somewhere else; only `http://` is
+supported, as there is no TLS.
+
+`decnetd --fetch-nodes <config>` refreshes the caches and exits, for cron
+or for a first run:
+
+```
+$ decnetd --fetch-nodes /etc/decnet/myhecnet.conf
+1257 node names from http://mim.softjar.se/hecnet.dat to /var/lib/decnet/hecnet.dat
+$ decnetd --fetch-nodes /etc/decnet/myhecnet.conf
+http://mim.softjar.se/hecnet.dat unchanged since Thu, 17 Sep 2026 22:52:00 GMT
+```
+
 If a simulator on the same host shares the Ethernet segment, the host
 needs a bridge and a tap device; see `samples/gateway/README.txt`.
 

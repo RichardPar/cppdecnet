@@ -49,6 +49,15 @@ known defects in [BUGS.md](BUGS.md).
 - [x] Routing circuit counters, executor counters, DDCMP error counters,
       broadcast line counters
 
+## Node names
+
+- [x] Fix `node @file`, which silently loaded nothing
+- [x] `node @hecnet --cache FILE`, fetched over HTTP, refreshed weekly
+      with `If-Modified-Since`
+- [x] `decnetd --fetch-nodes` for cron
+- [ ] Fetch over DECnet instead: `MIM::HECNET:` needs DAP/FAL, or NICE
+      `COPY KNOWN NODES FROM MIM` needs a NICE client
+
 ## Monitoring and API
 
 - [ ] Delete or wire up `src/http/monitor.cc`, which nothing instantiates
