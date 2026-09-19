@@ -174,6 +174,12 @@ public:
     std::uint64_t unreach_loss () const noexcept { return unreach_loss_; }
     std::uint64_t oor_loss () const noexcept { return oor_loss_; }
     std::uint64_t transit_sent () const noexcept { return transit_sent_; }
+    std::uint64_t partial_update_loss () const noexcept
+    { return partial_update_loss_; }
+
+    // The four executor counters that only a node with a routing table
+    // keeps.  Added to the executor's node reply by node.cc.
+    void nice_counters (nice::NiceReply &r) override;
 
     // Mark destinations for advertisement on every circuit.
     void set_srm (unsigned first, unsigned last);
@@ -224,6 +230,7 @@ protected:
 
     std::uint64_t aged_loss_ = 0, unreach_loss_ = 0, oor_loss_ = 0;
     std::uint64_t transit_sent_ = 0;
+    std::uint64_t partial_update_loss_ = 0;
 };
 
 // Level 2 (area) router.  Port of routing.L2Router.

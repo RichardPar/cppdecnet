@@ -163,6 +163,12 @@ void LanCircuit::adjacency_up (std::uint16_t key, const AdjacencyInfo &info)
     // This is what puts the neighbour into the routing table: a router
     // gets a column, an endnode an entry in the shared endnode column.
     a.adj->up ();
+    // PyDECnet restamps "time since circuit up" at every adjacency up on a
+    // broadcast circuit: the circuit itself is always on, so the useful
+    // question is how long it has had a neighbour.
+    counters_.up_now ();
+    if (std::size_t n = adjacency_count (); n > counters_.peak_adj)
+        counters_.peak_adj = n;
     DN_INFO ("{} adjacency up: {} ({})", name_, info.id.str (),
              ntype_string (info.ntype));
     lanevent ({ 4, 15 }, info.id);          // adjacency up
@@ -290,6 +296,7 @@ void EndnodeLanCircuit::handle (RoutingPacketBase &pkt, Macaddr src)
     cache_[sd.srcnode.value ()] = CacheEntry {
         src, std::chrono::steady_clock::now ()
              + std::chrono::seconds (static_cast<int> (CACHE_TIME)) };
+    sd.src = this;                  // so forwarding can count it
     parent_->forward (sd);
 }
 
@@ -537,6 +544,7 @@ void RoutingLanCircuit::handle (RoutingPacketBase &pkt, Macaddr src)
         return;
     }
     (void) src;
+    sd.src = this;                  // so forwarding can count it
     parent_->forward (sd);
 }
 

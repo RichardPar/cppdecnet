@@ -158,6 +158,17 @@ public:
 
     virtual const PtpCounters *counters () const noexcept { return nullptr; }
 
+    // Add this circuit's datalink counters to a NICE reply.  The base adds
+    // the four traffic counters every kind of link keeps; a broadcast link
+    // adds its multicast and unrecognized destination counters, and DDCMP
+    // its error counters.  Port of the counter sets in datalink.py and
+    // ddcmp.py.
+    //
+    // This is what a line read and a circuit read share: PyDECnet reaches
+    // the same counter object from both, and reporting only from the port
+    // is what used to leave an Ethernet line read empty.
+    virtual void add_counters (nice::NiceReply &r) const;
+
     // NICE circuit type code: 6 for Ethernet, 0 for DDCMP point to point.
     virtual unsigned nice_type () const noexcept { return 0; }
 

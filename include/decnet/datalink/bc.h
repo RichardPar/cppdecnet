@@ -40,6 +40,14 @@ struct BcPortCounters {
     std::uint64_t bytes_sent = 0, pkts_sent = 0;
     std::uint64_t bytes_recv = 0, pkts_recv = 0;
     std::uint64_t mcbytes_recv = 0, mcpkts_recv = 0;
+
+    BcPortCounters &operator+= (const BcPortCounters &o) noexcept
+    {
+        bytes_sent += o.bytes_sent;   pkts_sent += o.pkts_sent;
+        bytes_recv += o.bytes_recv;   pkts_recv += o.pkts_recv;
+        mcbytes_recv += o.mcbytes_recv; mcpkts_recv += o.mcpkts_recv;
+        return *this;
+    }
 };
 
 // One upper layer's use of a broadcast circuit: a protocol type, an
@@ -96,6 +104,16 @@ public:
     void nice_read_line (const nice::NiceRequest &req,
                          nice::ReplyDict &resp) override;
 
+    // A broadcast line's traffic counters are the sum of its ports': the
+    // line has no traffic of its own.  Port of BcCounters.combine.
+    BcPortCounters combined_counters () const noexcept;
+
+    void add_counters (nice::NiceReply &r) const override;
+
+    // Frames that reached us but that no port wanted.  Reported as the line
+    // counter "Unrecognized frame destination".  Port of BcCounters.unk_dest.
+    std::uint64_t unk_dest () const noexcept { return unk_dest_; }
+
     Macaddr hwaddr () const noexcept { return hwaddr_; }
     void set_hwaddr (Macaddr a) noexcept { hwaddr_ = a; }
 
@@ -129,7 +147,8 @@ protected:
     void receive_frame (ByteView frame);
 
     std::vector<std::unique_ptr<BcPort>> ports_;
-    Macaddr hwaddr_;
+    Macaddr       hwaddr_;
+    std::uint64_t unk_dest_ = 0;
 };
 
 // Build a DEC Ethernet frame: destination, source, protocol type and, for

@@ -3,6 +3,7 @@
 #include "decnet/common/logging.h"
 #include "decnet/config.h"
 #include "decnet/node.h"
+#include "decnet/nodefetch.h"
 #include "decnet/version.h"
 
 #include <csignal>
@@ -22,6 +23,7 @@ void usage (const char *argv0)
         "  -L, --log-level LEVEL   trace, debug, info, warning, error\n"
         "  -e, --log-file FILE     log to FILE instead of stderr\n"
         "  -V, --version           print the version and exit\n"
+        "      --fetch-nodes       refresh the node name caches and exit\n"
         "  -h, --help              print this message\n",
         argv0);
 }
@@ -31,6 +33,7 @@ void usage (const char *argv0)
 int main (int argc, char **argv)
 {
     std::vector<std::string> config_files;
+    bool fetch_nodes = false;
     std::string log_file;
 
     for (int i = 1; i < argc; ++i) {
@@ -56,6 +59,7 @@ int main (int argc, char **argv)
             }
         }
         else if (a == "-e" || a == "--log-file") log_file = next ("--log-file");
+        else if (a == "--fetch-nodes") fetch_nodes = true;
         else if (!a.empty () && a[0] == '-') {
             std::fprintf (stderr, "%s: unknown option %s\n", argv[0], a.c_str ());
             usage (argv[0]);
@@ -84,6 +88,43 @@ int main (int argc, char **argv)
         decnet::Config cfg = decnet::Config::from_file (config_files.front ());
         if (config_files.size () > 1)
             DN_WARN ("only the first configuration file is used so far");
+
+        if (fetch_nodes) {
+            // Refresh the caches and stop, so this can be run from cron or
+            // by hand without a node running.
+            if (cfg.node_sources ().empty ()) {
+                std::fprintf (stderr, "%s: no \"node @<url>\" line in %s\n",
+                              argv[0], config_files.front ().c_str ());
+                return 2;
+            }
+            int bad = 0;
+            for (const auto &src : cfg.node_sources ()) {
+                decnet::FetchedList got;
+                std::string error;
+                std::string since = decnet::read_cached_validator (src.cache);
+                if (!decnet::fetch_node_list (src.url, got, error, 30, since)) {
+                    std::fprintf (stderr, "%s: %s: %s\n", argv[0],
+                                  src.url.c_str (), error.c_str ());
+                    ++bad;
+                    continue;
+                }
+                if (got.unchanged) {
+                    std::printf ("%s unchanged since %s\n", src.url.c_str (),
+                                 since.c_str ());
+                    continue;
+                }
+                if (!decnet::write_node_list (src.cache, got.names,
+                                              got.last_modified, error)) {
+                    std::fprintf (stderr, "%s: %s\n", argv[0], error.c_str ());
+                    ++bad;
+                    continue;
+                }
+                std::printf ("%zu node names from %s to %s\n",
+                             got.names.size (), src.url.c_str (),
+                             src.cache.c_str ());
+            }
+            return bad ? 1 : 0;
+        }
 
         // Handle shutdown signals with sigwait on this thread; the work queue is
         // not async-signal-safe.

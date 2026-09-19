@@ -73,6 +73,11 @@ public:
     // BaseRouter.nice_read.
     virtual void nice_read (const nice::NiceRequest &req, nice::ReplyDict &resp);
 
+    // Add the executor counters this router keeps to its node reply.  A
+    // node with no routing table has none, which is why this is virtual and
+    // empty here.  Port of the router-only half of ExecCounters.
+    virtual void nice_counters (nice::NiceReply &) {}
+
     // A routing message arrived.  An endnode never sees one.
     virtual void routing_message (const RoutingMessage &, Adjacency *,
                                   unsigned) {}

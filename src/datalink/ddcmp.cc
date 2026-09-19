@@ -8,16 +8,20 @@
 
 namespace decnet::datalink::ddcmp {
 
-namespace {
-
 // Which counter a NAK reason belongs to.  PyDECnet's nak_map; R_OVER and
-// R_FMT are deliberately unmapped there and here.
-bool is_data_error (std::uint8_t reason)
+// R_FMT are deliberately unmapped there and here.  The bit numbers index
+// the qualifier name tables in nicedefs.cc.
+bool nak_counter (std::uint8_t reason, NakCounter &out) noexcept
 {
-    return reason == R_HCRC || reason == R_CRC || reason == R_REP;
+    switch (reason) {
+    case R_HCRC: out = { true,  0 }; return true;
+    case R_CRC:  out = { true,  1 }; return true;
+    case R_REP:  out = { true,  2 }; return true;
+    case R_BUF:  out = { false, 0 }; return true;
+    case R_SHRT: out = { false, 1 }; return true;
+    default:     return false;
+    }
 }
-
-}   // namespace
 
 Protocol::Protocol (Hooks h, unsigned qmax)
     : hooks_ (std::move (h)), qmax_ (qmax ? qmax : 7)
@@ -187,16 +191,33 @@ void Protocol::receive (const Message &m)
 
     case MsgKind::nak:
         // A NAK acknowledges everything before the error, then asks for
-        // the rest again.
-        (void) is_data_error (m.subtype);
+        // the rest again.  What the far end complained about is one of our
+        // outbound error counters.
+        if (NakCounter nc; nak_counter (m.subtype, nc)) {
+            if (nc.data) {
+                ++counters_.data_errors_outbound;
+                counters_.data_errors_outbound_map |= 1u << nc.bit;
+            } else {
+                ++counters_.remote_buffer_errors;
+                counters_.remote_buffer_errors_map |= 1u << nc.bit;
+            }
+        }
         if (process_ack (m)) retransmit ();
         break;
 
     case MsgKind::rep:
         // "Have you got everything up to num?"  If so our ack answers it;
-        // if not, a NAK tells the far end where we actually are.
-        if (m.num == r_) ackflag_ = true;
-        else send_msg (make_nak (r_, R_REP), 0);
+        // if not, a NAK tells the far end where we actually are.  A REP
+        // means the far end's reply timer went off, which is its own
+        // counter.
+        ++counters_.remote_reply_timeouts;
+        if (m.num == r_) {
+            ackflag_ = true;
+        } else {
+            ++counters_.data_errors_inbound;
+            counters_.data_errors_inbound_map |= 1u << 2;   // REP response
+            send_msg (make_nak (r_, R_REP), 0);
+        }
         break;
 
     case MsgKind::maintenance:
@@ -221,6 +242,12 @@ void Protocol::receive (const Message &m)
 void Protocol::receive_error (std::uint8_t reason, const Message *partial)
 {
     if (state_ != State::running) return;
+    // We are about to NAK, so this is an inbound error: what we tell the
+    // far end is what our own counter records.
+    if (NakCounter nc; nak_counter (reason, nc) && nc.data) {
+        ++counters_.data_errors_inbound;
+        counters_.data_errors_inbound_map |= 1u << nc.bit;
+    }
     // A header that decoded but whose payload did not still carries a
     // resp field, and that much is good information.
     if (partial && partial->sets_resp ()) process_ack (*partial);
@@ -238,7 +265,9 @@ void Protocol::timeout ()
         return;
     case State::running:
         // On timeout, send REP rather than retransmitting.  The far end's reply
-        // says what needs resending.
+        // says what needs resending.  Our own reply timer going off is the
+        // counter here; the far end's REP is the remote one.
+        ++counters_.local_reply_timeouts;
         send_msg (make_rep (n_), acktmr_.next ());
         return;
     default:

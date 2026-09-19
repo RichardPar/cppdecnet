@@ -13,6 +13,14 @@
 
 namespace decnet::routing {
 
+unsigned CircuitCounters::seconds_since_up () const noexcept
+{
+    if (!ever_up ()) return 0;
+    std::chrono::duration<double> dt =
+        std::chrono::steady_clock::now () - last_up;
+    return static_cast<unsigned> (dt.count ());
+}
+
 // ------------------------------------------------------------ BaseRouter
 
 BaseRouter::BaseRouter (Element *parent, const Config &config)
@@ -219,9 +227,11 @@ void EndnodeRouting::send (Bytes data, Nodeid dest, bool rqr)
     if (!lan_order_.empty ()) {
         // A LAN circuit converts to the long header itself and never
         // reports failure, so there is nothing to return to sender.
+        ++lan_order_.front ()->counters ().orig_sent;
         static_cast<EndnodeLanCircuit *> (lan_order_.front ())->send (pkt);
         return;
     }
+    ++circuit_order_.front ()->counters ().orig_sent;
     if (!circuit_order_.front ()->send (pkt) && rqr) {
         // Undeliverable, and the sender asked for it back.
         std::swap (pkt.dstnode, pkt.srcnode);
@@ -246,6 +256,10 @@ void EndnodeRouting::forward (ShortData &pkt)
 void BaseRouter::deliver (ShortData &pkt)
 {
     ++for_us_;
+    // Terminating traffic is counted on the circuit it arrived on.  A packet
+    // that originated here as well crossed no circuit, so it is counted
+    // nowhere -- the same reasoning as PyDECnet's SelfAdj.send.
+    if (pkt.src) ++pkt.src->counters ().term_recv;
     DN_TRACE ("packet for us from {}, {} bytes of payload",
               pkt.srcnode.str (), pkt.payload.size ());
     if (nsp_)

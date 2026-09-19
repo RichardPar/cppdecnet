@@ -71,6 +71,27 @@ struct NodeConfig {
     std::string name;
     std::string inbound_verification;
     std::string outbound_verification;
+
+    // True when this entry came from a fetched list rather than from the
+    // configuration itself.  A later refresh may replace such a name; a
+    // name the operator wrote is left alone.
+    bool        from_source = false;
+};
+
+// node @<url> [--cache FILE] [--refresh SECONDS]
+//
+// A node name list fetched over HTTP rather than read from a file.  The
+// cache is what the configuration actually loads, so the node starts with
+// whatever names it had last time even when the fetch fails or the network
+// is down; the fetch happens in the background and rewrites the cache.
+struct NodeSourceConfig {
+    std::string url;
+    std::string cache;
+    // How often to re-fetch.  The list changes by a couple of dozen entries
+    // a year, so the default is weekly; a refresh whose validator still
+    // matches costs one small exchange and no rewrite.  Zero fetches once
+    // at startup only.
+    unsigned    refresh = 604800;
 };
 
 // object --number N --name X --file PROG [--argument A]...
@@ -128,6 +149,8 @@ public:
 
     const std::vector<CircuitConfig> &circuits () const noexcept { return circuits_; }
     const std::vector<NodeConfig>    &nodes    () const noexcept { return nodes_; }
+    const std::vector<NodeSourceConfig> &node_sources () const noexcept
+    { return node_sources_; }
     const std::vector<ObjectConfig>  &objects  () const noexcept { return objects_; }
     const std::vector<LoggingConfig> &logging  () const noexcept { return logging_; }
     const NspConfig &nsp () const noexcept { return nsp_; }
@@ -143,15 +166,30 @@ public:
     // configuration files load.
     const std::vector<ConfigLine> &unhandled () const noexcept { return unhandled_; }
 
+    // The URL "@hecnet" stands for, which is the list Johnny Billquist
+    // maintains for PyDECnet in exactly this format.
+    static const char *hecnet_url () noexcept;
+
 private:
     void apply (ConfigLine line);
+
+    // Read a file and apply each of its lines with a component name in
+    // front, which is what "node @file" means: the file holds the arguments
+    // of a node line, not whole configuration lines.  Port of the prefix
+    // argument to config.py's scanconfig.
+    void include_prefixed (const std::string &path, const std::string &prefix);
 
     // Directory of the file being read.  "@file" includes are relative to it,
     // as in config.py.
     std::string base_dir_;
 
+    // Set while reading a fetched list's cache, so the entries it creates
+    // are marked as coming from a source rather than from the operator.
+    bool        in_source_include_ = false;
+
     std::vector<CircuitConfig>   circuits_;
     std::vector<NodeConfig>      nodes_;
+    std::vector<NodeSourceConfig> node_sources_;
     std::vector<ObjectConfig>    objects_;
     std::vector<LoggingConfig>   logging_;
     NspConfig                    nsp_;

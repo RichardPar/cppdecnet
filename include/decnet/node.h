@@ -15,6 +15,7 @@
 
 #include <chrono>
 #include <map>
+#include <set>
 #include <memory>
 #include <string>
 #include <thread>
@@ -32,6 +33,31 @@ namespace session  { class Session; }
 namespace mop      { class Mop; }
 namespace events   { class Event; class EventLogger; }
 namespace http     { class Server; }
+class NodeFetcher;
+
+// The NSP counters kept for every node we have talked to.  Port of
+// nsp.NspCounters.  "User" counts what session control handed over; "total"
+// counts every NSP message on the wire, acknowledgements included.
+struct NodeCounters {
+    std::uint64_t byt_rcv = 0, byt_xmt = 0;
+    std::uint64_t msg_rcv = 0, msg_xmt = 0;
+    std::uint64_t t_byt_rcv = 0, t_byt_xmt = 0;
+    std::uint64_t t_msg_rcv = 0, t_msg_xmt = 0;
+    std::uint64_t con_rcv = 0, con_xmt = 0;
+    std::uint64_t timeout = 0, no_res_rcv = 0;
+
+    // When this set was created, which is what "time since counters zeroed"
+    // reports: nothing zeroes them, as NOTDONE.md records.
+    std::chrono::steady_clock::time_point zeroed
+        = std::chrono::steady_clock::now ();
+
+    unsigned seconds_since_zeroed () const noexcept;
+
+    // Has this node been talked to at all?  What makes a node "significant"
+    // to a counters read.  Port of NSPNode.used.
+    bool used () const noexcept
+    { return t_byt_rcv || t_byt_xmt || con_rcv || con_xmt; }
+};
 
 // Node database entry for a remote node.  Port of node.Nodeinfo.
 struct Nodeinfo {
@@ -43,6 +69,21 @@ struct Nodeinfo {
     // Smoothed round trip time to this node in seconds, zero until measured.
     // Shared by all connections to the node.
     double      delay = 0.0;
+
+    // Per node NSP counters, kept for the executor as well as for remote
+    // nodes.  Port of the counters NSPNode carries.
+    NodeCounters counters;
+};
+
+// The counters the executor keeps that no other node has.  Port of
+// routing.ExecCounters, less the four a router keeps in its routing table
+// (aged, unreachable and out of range loss, and partial update loss), which
+// live on the router itself and are reported only when there is one.
+struct ExecCounters {
+    std::uint64_t peak_conns = 0;
+    std::uint64_t oversized_loss = 0;
+    std::uint64_t fmt_errors = 0;
+    std::uint64_t ver_rejects = 0;
 };
 
 // Timing histogram for work item dispatch, as node.WorkStats does.
@@ -108,6 +149,11 @@ public:
     // the node started: nothing zeroes them yet.
     unsigned seconds_since_zeroed () const noexcept;
 
+    // The executor's own counters, which NSP and routing both add to.
+    ExecCounters &exec_counters () noexcept { return exec_counters_; }
+    const ExecCounters &exec_counters () const noexcept
+    { return exec_counters_; }
+
     // Queue work to this node from any thread.  Port of Node.addwork.
     void add_work (WorkPtr w);
     void add_work (WorkPtr w, Element *handler);
@@ -127,6 +173,19 @@ public:
     Nodeinfo *find_node (const std::string &name);
     void add_node (Nodeinfo info);
 
+    // Set a node's name, creating the entry if it is new and keeping
+    // everything else about an existing one -- its counters and its round
+    // trip estimate in particular, which add_node would discard.
+    //
+    // A name the configuration gave is never overwritten: a downloaded list
+    // does not get to rename what the operator named.  Returns true if
+    // anything changed.  Node thread only.
+    bool set_node_name (Nodeid id, const std::string &name);
+
+    // How many names came from a fetched list at the last refresh, for the
+    // log line and for the tests.
+    std::size_t fetched_names () const noexcept { return fetched_names_; }
+
     // All known nodes, in address order.
     std::vector<const Nodeinfo *> known_nodes () const;
 
@@ -145,6 +204,7 @@ private:
 
     std::string    ident_, swident_;
     std::chrono::steady_clock::time_point zeroed_;
+    ExecCounters   exec_counters_;
 
     WorkQueue      queue_;
     TimerWheel     timers_;
@@ -153,6 +213,9 @@ private:
 
     std::unordered_map<std::uint16_t, std::unique_ptr<Nodeinfo>> by_id_;
     std::unordered_map<std::string, Nodeinfo *>                  by_name_;
+    // Addresses the configuration named itself, which a refresh leaves be.
+    std::set<std::uint16_t>                                      config_named_;
+    std::size_t                                                  fetched_names_ = 0;
 
     // Layers, in node.Node.startlist order.  They are started in this
     // order and stopped in the reverse.
@@ -162,6 +225,7 @@ private:
     std::unique_ptr<session::Session>        session_;
     std::unique_ptr<mop::Mop>                mop_;
     std::unique_ptr<http::Server>            http_;
+    std::unique_ptr<NodeFetcher>             node_fetcher_;
     std::unique_ptr<events::EventLogger>     event_logger_;
     // PORT: the bridge follows.
 };

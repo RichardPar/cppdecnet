@@ -127,6 +127,14 @@ PtpCircuit::State PtpCircuit::restart (const char *why, events::EventId ev,
 PtpCircuit::State PtpCircuit::restart (const char *why)
 {
     DN_TRACE ("{} restart due to {}", name_, why);
+    // Which counter this restart belongs to depends on how far the circuit
+    // had got: a running circuit went down, one that was still initializing
+    // failed to initialize.  ha and ds are neither -- there is nothing to
+    // lose before the datalink is up.  Port of the split between
+    // PtpCircuit.restart and the init_fail sites in route_ptp.py.
+    if (running ()) ++counters_.cir_down;
+    else if (nice_substate () == 0) ++counters_.init_fail;
+
     if (running ()) down ();
     clear_neighbour ();
     if (node ()) node ()->timers ().stop (this);
@@ -329,6 +337,9 @@ PtpCircuit::State PtpCircuit::rv (Work &w)
             return restart ("verify from wrong node");
         if (v->fcnval != expect_verify_) {
             DN_DEBUG ("{} verification value mismatch", name_);
+            // A rejected verification is an executor counter, not a circuit
+            // one: it says this node refused a neighbour, wherever it was.
+            if (Node *n = node ()) ++n->exec_counters ().ver_rejects;
             return restart ("verification reject", { 4, 6 },
                             events::reason::invalid_verification);
         }
@@ -370,6 +381,7 @@ PtpCircuit::State PtpCircuit::ru (Work &w)
         return nullptr;
     }
     if (auto *sd = dynamic_cast<ShortData *> (packet_)) {
+        sd->src = this;             // so forwarding can count it
         parent_->forward (*sd);
         return nullptr;
     }
@@ -389,6 +401,7 @@ PtpCircuit::State PtpCircuit::ru (Work &w)
         sd.srcnode = ld->srcnode;
         sd.visit   = ld->visit;
         sd.payload = ld->payload;
+        sd.src     = this;
         parent_->forward (sd);
         return nullptr;
     }
@@ -412,6 +425,8 @@ void PtpCircuit::set_src (Nodeid &f) const noexcept
 
 void PtpCircuit::up ()
 {
+    counters_.up_now ();
+    counters_.peak_adj = 1;         // a point to point circuit has just one
     if (adj_) adj_->up ();
     DN_INFO ("circuit {} up, neighbour {} ({}), block size {}", name_,
              info_.id.str (), ntype_string (info_.ntype), info_.blksize);

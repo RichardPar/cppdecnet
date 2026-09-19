@@ -145,6 +145,39 @@ Config Config::from_string (const std::string &text, const std::string &source)
     return cfg;
 }
 
+const char *Config::hecnet_url () noexcept
+{
+    return "http://mim.softjar.se/hecnet.dat";
+}
+
+void Config::include_prefixed (const std::string &path,
+                               const std::string &prefix)
+{
+    std::ifstream f (path);
+    if (!f) throw std::runtime_error ("cannot open included file: " + path);
+    std::string raw;
+    unsigned lineno = 0;
+    while (std::getline (f, raw)) {
+        ++lineno;
+        std::string where = path + ":" + std::to_string (lineno);
+        std::vector<std::string> words;
+        try {
+            words = split_config_line (raw);
+        } catch (const std::exception &e) {
+            throw std::runtime_error (where + ": " + e.what ());
+        }
+        if (words.empty ()) continue;
+        // The file holds the arguments of a component line, so the
+        // component name goes in front of each of them.
+        words.insert (words.begin (), prefix);
+        try {
+            apply (parse_config_line (words, where));
+        } catch (const std::exception &e) {
+            throw std::runtime_error (where + ": " + e.what ());
+        }
+    }
+}
+
 Config Config::from_file (const std::string &path)
 {
     std::ifstream f (path);
@@ -221,12 +254,45 @@ void Config::apply (ConfigLine line)
     if (line.command == "node") {
         if (line.positional.empty ())
             throw std::runtime_error ("node needs an address");
-        // "node @file" pulls in a node name database.
+        // "node @..." pulls in a node name database: a local file, or a
+        // URL to fetch it from.  "@hecnet" is the HECnet list.
         if (line.positional[0].size () > 1 && line.positional[0][0] == '@') {
             std::string inc = line.positional[0].substr (1);
+            bool is_url = inc.rfind ("http://", 0) == 0
+                       || inc.rfind ("https://", 0) == 0;
+            if (inc == "hecnet" || is_url) {
+                NodeSourceConfig src;
+                src.url = (inc == "hecnet") ? hecnet_url () : inc;
+                src.cache = opt (line, "cache", empty);
+                if (src.cache.empty ())
+                    throw std::runtime_error (
+                        "node @" + inc + " needs --cache <file>: the fetched "
+                        "list is kept there so the node still has names when "
+                        "the fetch fails");
+                if (src.cache[0] != '/') src.cache = base_dir_ + src.cache;
+                if (has (line, "refresh"))
+                    src.refresh = to_uint (opt (line, "refresh", empty),
+                                           "refresh");
+                node_sources_.push_back (src);
+                // Load whatever the last successful fetch left behind, so
+                // startup never depends on the network.  A cache that is
+                // not there yet is not an error.
+                std::ifstream probe (src.cache);
+                if (probe) {
+                    probe.close ();
+                    in_source_include_ = true;
+                    try {
+                        include_prefixed (src.cache, "node");
+                    } catch (...) {
+                        in_source_include_ = false;
+                        throw;
+                    }
+                    in_source_include_ = false;
+                }
+                return;
+            }
             if (!inc.empty () && inc[0] != '/') inc = base_dir_ + inc;
-            Config sub = from_file (inc);
-            for (auto &n : sub.nodes_) nodes_.push_back (std::move (n));
+            include_prefixed (inc, "node");
             return;
         }
         NodeConfig n;
@@ -235,6 +301,7 @@ void Config::apply (ConfigLine line)
             n.name = nodename (line.positional[1]);
         n.inbound_verification  = opt (line, "inbound-verification", empty);
         n.outbound_verification = opt (line, "outbound-verification", empty);
+        n.from_source = in_source_include_;
         // The node line naming our own address also names this system.
         nodes_.push_back (std::move (n));
         return;

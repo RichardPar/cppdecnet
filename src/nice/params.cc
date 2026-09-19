@@ -91,6 +91,22 @@ std::string format_version (const Value &v)
     return s;
 }
 
+// An elapsed time: hours, minutes, seconds, as "107:43:04".  PyDECnet's
+// CMEtime, whose fields are DU2 then two DU1_2d -- the "2d" being the zero
+// padding that makes the result readable.
+std::string format_etime (const Value &v)
+{
+    if (v.kind () != Value::Kind::cm) return v.format ();
+    const std::vector<Value> &parts = v.as_list ();
+    if (parts.size () != 3) return format_version (v);
+    char buf[64];
+    std::snprintf (buf, sizeof buf, "%llu:%02llu:%02llu",
+                   static_cast<unsigned long long> (parts[0].as_uint ()),
+                   static_cast<unsigned long long> (parts[1].as_uint ()),
+                   static_cast<unsigned long long> (parts[2].as_uint ()));
+    return buf;
+}
+
 }   // namespace
 
 // ------------------------------------------------------------- ParamDef
@@ -205,6 +221,7 @@ std::vector<std::string> ParamList::format (ParamDefs defs) const
             switch (def ? def->style : Style::plain) {
             case Style::node:    text = format_node (p.value); break;
             case Style::version: text = format_version (p.value); break;
+            case Style::etime:   text = format_etime (p.value); break;
             default: text = p.value.format (def ? def->labels : Labels { });
             }
             out.push_back (name + " = " + text);

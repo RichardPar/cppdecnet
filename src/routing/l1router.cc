@@ -136,9 +136,24 @@ void L1Router::routing_message (const RoutingMessage &msg, Adjacency *from,
             compute_routes (u.id, u.id);
         }
     }
-    if (maxreach)
+    if (maxreach) {
+        // Part of the neighbour's update named nodes our table cannot hold,
+        // so that part of it is lost.  That is what the architecture calls
+        // partial routing update loss, counter 920 and event 4.3.
+        ++partial_update_loss_;
         DN_DEBUG ("routing update from {} mentions node {}, beyond maxnodes {}",
                   from->nodeid ().str (), maxreach, maxnodes_);
+        if (Node *n = node ()) {
+            events::Event e { { 4, 3 },
+                              from->circuit ()
+                                  ? nice::Entity::make_circuit (
+                                        from->circuit ()->name ())
+                                  : nice::Entity::make_none () };
+            e.param (events::param::highest_address,
+                     nice::Value::du (maxreach, 2));
+            n->logevent (e);
+        }
+    }
 }
 
 namespace {
@@ -288,6 +303,9 @@ void L1Router::forward (ShortData &pkt)
     bool oor = false;
     Adjacency *a = find_oadj (pkt.dstnode, oor);
     bool aged = false;
+    // No arrival circuit means we originated this packet.  Port of the
+    // "orig" test in routing.py's forward.
+    const bool orig = pkt.src == nullptr;
 
     if (a && !oor) {
         unsigned limit = maxvisits_;
@@ -303,6 +321,17 @@ void L1Router::forward (ShortData &pkt)
             }
         }
         if (!aged) {
+            // Count the crossing before handing the packet over: sending
+            // to ourselves crosses no circuit and is counted in deliver().
+            if (!a->is_self ()) {
+                Circuit *out = a->circuit ();
+                if (orig) {
+                    if (out) ++out->counters ().orig_sent;
+                } else {
+                    ++pkt.src->counters ().trans_recv;
+                    if (out) ++out->counters ().trans_sent;
+                }
+            }
             a->send (pkt);
             return;
         }
@@ -334,9 +363,11 @@ void L1Router::forward (ShortData &pkt)
         ev = { 4, 1 };                      // node unreachable packet loss
     }
     if (Node *n = node ()) {
-        // PORT: the event should name the arrival circuit, which forward() does
-        // not have.  See NOTDONE.md.
-        events::Event e { ev, nice::Entity::make_none () };
+        // The packet carries the circuit it arrived on, so the event can
+        // name it; a packet we originated has none to name.
+        events::Event e { ev, pkt.src
+                                  ? nice::Entity::make_circuit (pkt.src->name ())
+                                  : nice::Entity::make_none () };
         e.param (events::param::packet_header, packet_header (pkt));
         n->logevent (e);
     }
@@ -427,14 +458,35 @@ void L2Router::routing_message (const RoutingMessage &msg, Adjacency *from,
     if (it == l2_.columns.end () || !it->second) return;
     RouteInfo &col = *it->second;
 
+    unsigned maxreach = 0;
     for (const RouteUpdate &u : l2msg->updates (circuit_cost)) {
-        if (u.id < 1 || u.id > maxarea_) continue;
+        if (u.id < 1 || u.id > maxarea_) {
+            // An area beyond our table, as for nodes above.
+            if (u.id > maxarea_ && u.hops <= INFHOPS && u.cost < INFCOST)
+                maxreach = std::max (maxreach, u.id);
+            continue;
+        }
         auto h = static_cast<std::uint8_t> (std::min (u.hops, INFHOPS));
         auto c = static_cast<std::uint16_t> (std::min (u.cost, INFCOST));
         if (col.hops[u.id] != h || col.cost[u.id] != c) {
             col.hops[u.id] = h;
             col.cost[u.id] = c;
             compute_areas (u.id, u.id);
+        }
+    }
+    if (maxreach) {
+        ++partial_update_loss_;
+        DN_DEBUG ("area update from {} mentions area {}, beyond maxarea {}",
+                  from->nodeid ().str (), maxreach, maxarea_);
+        if (Node *n = node ()) {
+            events::Event e { { 4, 3 },
+                              from->circuit ()
+                                  ? nice::Entity::make_circuit (
+                                        from->circuit ()->name ())
+                                  : nice::Entity::make_none () };
+            e.param (events::param::highest_address,
+                     nice::Value::du (maxreach, 2));
+            n->logevent (e);
         }
     }
 }

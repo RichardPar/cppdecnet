@@ -36,6 +36,7 @@
 
 namespace decnet {
 class Config;
+struct NodeCounters;
 namespace routing { class BaseRouter; }
 }
 
@@ -176,6 +177,10 @@ private:
 
     SessionControl *session () const;
 
+    // The per node counters for the far end of this link.  Every NSP
+    // counter except the executor's peak link count lives there.
+    NodeCounters *counters () const;
+
     // A packet on the transmit queue.  segnum and msgnum are absolute counts,
     // not 12 bit wire values, so window arithmetic has no wraparound.
     struct TxEntry {
@@ -307,8 +312,13 @@ public:
     // it as "Active links", and the monitoring page shows the same number.
     unsigned links_to (Nodeid dest) const;
 
-    // Send an NSP packet to a node, through routing.
+    // Send an NSP packet to a node, through routing.  Every outbound packet
+    // goes through here, which is where the total sent counters are kept.
     void send_to (Nodeid dest, const Bytes &frame);
+
+    // The counters kept for one node, creating the database entry if it is
+    // not there yet.  Null only when there is no node to ask.
+    NodeCounters *counters_for (Nodeid id) const;
 
     unsigned nsp_version () const noexcept { return nspver_; }
     unsigned max_connections () const noexcept { return maxconns_; }
@@ -335,6 +345,9 @@ private:
     void return_id (std::uint16_t id);
 
     void close_connection (Connection *c);
+
+    // Update the executor's high water mark of links open at once.
+    void note_peak_links ();
 
     routing::BaseRouter *routing_ = nullptr;
     SessionControl      *session_ = nullptr;

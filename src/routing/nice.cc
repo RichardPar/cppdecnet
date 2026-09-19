@@ -44,6 +44,29 @@ Value node_value (const nice::NiceNode &n)
     return Value::cm ({ Value::du (n.id.value (), 2), Value::ai (n.name) });
 }
 
+// The routing layer's counters for a circuit, in the numbering and widths
+// of the circuit counter table in nice_coding.py.  The datalink adds its
+// own on top of these.
+//
+// 3900 and 3901 are PyDECnet's own numbers rather than architected ones:
+// 3900 is how long the circuit has been up, which PyDECnet reports the same
+// way, and 3901 is adjacency down, which PyDECnet keeps but shows only on
+// its own web page.  See PORTING.md.
+void circuit_counters (NiceReply &r, const CircuitCounters &c)
+{
+    r.params.set_counter (800, Counter { c.term_recv,  4, false, 0 });
+    r.params.set_counter (801, Counter { c.orig_sent,  4, false, 0 });
+    r.params.set_counter (810, Counter { c.trans_recv, 4, false, 0 });
+    r.params.set_counter (811, Counter { c.trans_sent, 4, false, 0 });
+    r.params.set_counter (820, Counter { c.cir_down,   1, false, 0 });
+    r.params.set_counter (821, Counter { c.init_fail,  1, false, 0 });
+    r.params.set_counter (900, Counter { c.peak_adj,   1, false, 0 });
+    if (c.ever_up ())
+        r.params.set_counter (3900, Counter { c.seconds_since_up (), 2,
+                                              false, 0 });
+    r.params.set_counter (3901, Counter { c.adj_down,  1, false, 0 });
+}
+
 }   // namespace
 
 // ------------------------------------------------------------ BaseRouter
@@ -142,6 +165,14 @@ void BaseRouter::nice_read (const NiceRequest &req, ReplyDict &resp)
 }
 
 // -------------------------------------------------------------- L1Router
+
+void L1Router::nice_counters (NiceReply &r)
+{
+    r.params.set_counter (900, Counter { aged_loss_, 1, false, 0 });
+    r.params.set_counter (901, Counter { unreach_loss_, 2, false, 0 });
+    r.params.set_counter (902, Counter { oor_loss_, 1, false, 0 });
+    r.params.set_counter (920, Counter { partial_update_loss_, 1, false, 0 });
+}
 
 void L1Router::node_char (NiceReply &r)
 {
@@ -343,6 +374,10 @@ void PtpCircuit::nice_read (const NiceRequest &req, ReplyDict &resp,
         if (adj_) r.params.set (907,
                                 Value::du (static_cast<std::uint64_t>
                                            (adj_->listen_time ()), 2));
+    } else if (req.counters ()) {
+        r.params.set_counter (0, Counter { node ()->seconds_since_zeroed (),
+                                           2, false, 0 });
+        circuit_counters (r, counters_);
     }
     if (port_) port_->nice_read_port (req, r);
 }
@@ -382,10 +417,14 @@ void LanCircuit::nice_read (const NiceRequest &req, ReplyDict &resp,
 
     // One reply per adjacency, or one reply if none.  For summary, include the
     // adjacency only if there is exactly one and no name was given.
+    //
+    // Counters belong to the circuit rather than to any one neighbour, so a
+    // counters read makes the single unadorned reply and skips this.
     bool all = req.stat () || req.chars ()
         || (!adj_qual && adjacencies_.size () == 1);
     std::vector<NiceReply *> made;
     for (const auto &[key, a] : adjacencies_) {
+        if (req.counters ()) break;
         if (a.state != AdjState::up || !a.adj) continue;
         if (!all && a.ntype == ENDNODE) continue;
         Nodeid neighbour = a.adj->nodeid ();
@@ -409,6 +448,10 @@ void LanCircuit::nice_read (const NiceRequest &req, ReplyDict &resp,
         first->params.set (906, Value::du (static_cast<std::uint64_t> (t3_), 2));
         first->params.set (900, Value::du (cost_, 1));
         nice_char (*first);
+    } else if (req.counters ()) {
+        first->params.set_counter (0,
+            Counter { node ()->seconds_since_zeroed (), 2, false, 0 });
+        circuit_counters (*first, counters_);
     }
     if (port_) port_->nice_read_port (req, *first);
 }

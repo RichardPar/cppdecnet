@@ -184,6 +184,30 @@ std::optional<std::size_t> find_header (ByteView buf);
 //
 // States follow PyDECnet: Istart, Astart, Running, Maintenance.  See DDCMP
 // V4.1 table 3.
+// The DDCMP error counters, which are what a NICE circuit read reports on
+// top of the traffic counters every point to point link keeps.  Port of
+// ddcmp.DdcmpCounters.
+//
+// The three mapped counters carry a bitmap of which reasons were seen, not
+// one count per reason: that is how the architecture defines CTM counters,
+// and the qualifier names in nicedefs.cc index it.
+struct Counters {
+    std::uint64_t data_errors_inbound = 0;
+    std::uint16_t data_errors_inbound_map = 0;
+    std::uint64_t data_errors_outbound = 0;
+    std::uint16_t data_errors_outbound_map = 0;
+    std::uint64_t remote_buffer_errors = 0;
+    std::uint16_t remote_buffer_errors_map = 0;
+    std::uint64_t remote_reply_timeouts = 0;
+    std::uint64_t local_reply_timeouts = 0;
+};
+
+// Which counter and which qualifier bit a NAK reason belongs to.  PyDECnet's
+// nak_map; R_OVER and R_FMT are deliberately unmapped there and here, so
+// this returns false for them.
+struct NakCounter { bool data; unsigned bit; };
+bool nak_counter (std::uint8_t reason, NakCounter &out) noexcept;
+
 class Protocol {
 public:
     enum class State { halted, istart, astart, running, maintenance };
@@ -224,6 +248,9 @@ public:
     // Maintenance mode, used by MOP to talk to a node that has no routing.
     void send_maintenance (Bytes payload);
 
+    // The error counters, maintained as NAKs and REPs go by.
+    const Counters &counters () const noexcept { return counters_; }
+
     // Numbers, for the tests and for the counters.
     Seq last_received () const noexcept { return r_; }
     Seq last_acked () const noexcept { return a_; }
@@ -253,6 +280,7 @@ private:
 
     Backoff     acktmr_ { 1.0, 60.0 };
     Backoff     stacktmr_ { 3.0, 120.0 };
+    Counters    counters_;
 };
 
 }   // namespace decnet::datalink::ddcmp
@@ -294,6 +322,10 @@ public:
     const ddcmp::Protocol &protocol () const noexcept { return *proto_; }
 
     void send (Bytes msg) override;
+
+    // The traffic counters every point to point link keeps, plus DDCMP's
+    // own error counters from the protocol engine.
+    void add_counters (nice::NiceReply &r) const override;
 
     // Timer, for the protocol engine.  PtpDatalink's own states do not
     // use it, so there is no contention for the one timer.

@@ -13,6 +13,8 @@
 
 namespace decnet::routing {
 
+class Circuit;
+
 using namespace decnet::packet;
 
 // Exceptions the routing layer raises on top of the generic decode ones.
@@ -91,6 +93,13 @@ struct ShortData : IndexedBody<ShortData, RoutingPacketBase, Extra::allow> {
     // "Intra Ethernet" flag from the long header.  Never encoded.  Port of the
     // ROAnyField of the same name.
     bool ie = false;
+
+    // The circuit this packet arrived on, or null when we originated it.
+    // Never encoded, like ie; PyDECnet carries the source adjacency in the
+    // same way, as the "src" attribute.  It is what lets the forwarding path
+    // tell terminating from transit traffic and name the circuit in a packet
+    // loss event.
+    Circuit *src = nullptr;
 
     static constexpr auto layout = fields (
         bm<ShortData> (bmf (&ShortData::sfpd, "sfpd", 0, 3),

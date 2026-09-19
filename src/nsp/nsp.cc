@@ -46,6 +46,11 @@ bool Connection::closed () const noexcept
         State (&Connection::cl, "cl"));
 }
 
+NodeCounters *Connection::counters () const
+{
+    return parent_ ? parent_->counters_for (dest_) : nullptr;
+}
+
 SessionControl *Connection::session () const
 {
     return parent_->session_control ();
@@ -108,6 +113,7 @@ void Connection::send_ack ()
 
 void Connection::start_outbound (Bytes payload)
 {
+    if (NodeCounters *c = counters ()) ++c->con_xmt;
     ConnInit ci_pkt;
     ci_pkt.dstaddr = 0;                  // not known until they answer
     ci_pkt.srcaddr = srcaddr_;
@@ -133,6 +139,7 @@ void Connection::start_outbound (Bytes payload)
 
 void Connection::start_inbound (const ConnInit &pkt)
 {
+    if (NodeCounters *c = counters ()) ++c->con_rcv;
     dstaddr_ = pkt.srcaddr;
     set_phase (pkt.info);
     segsize_ = std::min (pkt.segsize, MSS);
@@ -207,6 +214,12 @@ void Connection::send_data (Bytes data)
         DN_DEBUG ("send on link {} which is in state {}", srcaddr_,
                   state_name ());
         return;
+    }
+    // "User" traffic is what session control handed us, counted once per
+    // message however many segments it becomes.
+    if (NodeCounters *c = counters ()) {
+        c->byt_xmt += data.size ();
+        ++c->msg_xmt;
     }
     send_segments (data);
 }
@@ -469,6 +482,10 @@ void Connection::handle_interrupt (const IntMsg &msg)
     a.acknum = AckNum { got, AckNum::ACKQ };
     send (a);
 
+    if (NodeCounters *c = counters ()) {
+        c->byt_rcv += msg.payload.size ();
+        ++c->msg_rcv;
+    }
     if (session ())
         session ()->interrupt_received (
             *this, ByteView (msg.payload.data (), msg.payload.size ()));
@@ -570,6 +587,12 @@ void Connection::accept_segment (const DataSeg &seg)
                       seg.payload.end ());
     if (seg.eom ()) {
         assembling_ = false;
+        // The whole message counts once, as PyDECnet counts the rebuilt
+        // payload in to_sc rather than each segment.
+        if (NodeCounters *c = counters ()) {
+            c->byt_rcv += assembly_.size ();
+            ++c->msg_rcv;
+        }
         if (session ())
             session ()->data_received (
                 *this, ByteView (assembly_.data (), assembly_.size ()));
@@ -629,6 +652,11 @@ void Connection::retransmit ()
         // flow control, not on the wire, so there is nothing to resend.
         return;
     }
+    // Something was outstanding and the far end did not answer in time,
+    // which is what "response timeout" counts.  PyDECnet counts it in the
+    // pending packet's own timeout, so a link with nothing in flight never
+    // counts one.
+    if (NodeCounters *c = counters ()) ++c->timeout;
     unsigned limit = parent_ ? parent_->retransmit_limit () : MAX_RETRIES;
     if (++retries_ > limit) {
         DN_DEBUG ("link {} giving up after {} retransmissions", srcaddr_,
@@ -772,7 +800,10 @@ Connection::State Connection::cd (Work &w)
         return close (d->reason, {}, false);
     }
     if (auto *dc = dynamic_cast<const DiscConf *> (received_)) {
-        // No resources, or a Phase II style reject.
+        // No resources, or a Phase II style reject.  The first has its own
+        // counter: it says the far end is full, not that it said no.
+        if (dc->reason == DiscConf::NO_RESOURCES)
+            if (NodeCounters *c = counters ()) ++c->no_res_rcv;
         if (session ())
             session ()->connect_rejected (*this, dc->reason, {});
         return close (dc->reason, {}, false);
@@ -965,11 +996,26 @@ Connection *NSP::find (std::uint16_t srcaddr) const
     return it == by_addr_.end () ? nullptr : it->second.get ();
 }
 
+NodeCounters *NSP::counters_for (Nodeid id) const
+{
+    Node *n = node ();
+    if (!n) return nullptr;
+    Nodeinfo *info = n->find_node (id);     // creates the entry if new
+    return info ? &info->counters : nullptr;
+}
+
 void NSP::send_to (Nodeid dest, const Bytes &frame)
 {
     if (!routing_) {
         DN_DEBUG ("no routing layer; NSP packet to {} dropped", dest.str ());
         return;
+    }
+    // Every packet this layer sends passes through here, retransmissions
+    // included, so this is where the total counters belong.  Port of
+    // Connection.sendmsg.
+    if (NodeCounters *c = counters_for (dest)) {
+        c->t_byt_xmt += frame.size ();
+        ++c->t_msg_xmt;
     }
     routing_->send_nsp (frame, dest);
 }
@@ -984,8 +1030,19 @@ Connection *NSP::connect (Nodeid dest, Bytes payload)
     auto conn = std::make_unique<Connection> (this, addr, dest);
     Connection *raw = conn.get ();
     by_addr_[addr] = std::move (conn);
+    note_peak_links ();
     raw->start_outbound (std::move (payload));
     return raw;
+}
+
+void NSP::note_peak_links ()
+{
+    // The high water mark of links open at once, which is an executor
+    // counter: it is about this node, not about any one neighbour.
+    if (Node *n = node ()) {
+        ExecCounters &e = n->exec_counters ();
+        if (by_addr_.size () > e.peak_conns) e.peak_conns = by_addr_.size ();
+    }
 }
 
 void NSP::close_connection (Connection *c)
@@ -1035,6 +1092,15 @@ void NSP::deliver (Nodeid src, ByteView payload)
         return;
     }
 
+    // Everything from here on belongs to a link of ours, or is about to.
+    // That is what PyDECnet counts: packets that never map to a connection
+    // are not this node's traffic.  Port of the "total counters" block in
+    // NSP.dispatch.
+    if (NodeCounters *c = counters_for (src)) {
+        c->t_byt_rcv += payload.size ();
+        ++c->t_msg_rcv;
+    }
+
     if (auto *ci_pkt = dynamic_cast<ConnInit *> (pkt.get ())) {
         // A connect initiate: a retransmission of one we have, or a new
         // inbound connection.
@@ -1059,6 +1125,7 @@ void NSP::deliver (Nodeid src, ByteView payload)
         Connection *raw = conn.get ();
         by_addr_[addr] = std::move (conn);
         by_remote_[key] = raw;
+        note_peak_links ();
         raw->start_inbound (*ci_pkt);
         return;
     }

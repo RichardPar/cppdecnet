@@ -241,6 +241,17 @@ void BcDatalink::receive_frame (ByteView frame)
                 p.src));
         return;
     }
+    // Nothing wanted it.  On a shared segment that is ordinary -- a pcap
+    // circuit sees every frame on the wire -- but it is what the line
+    // counter "Unrecognized frame destination" reports.
+    ++unk_dest_;
+}
+
+BcPortCounters BcDatalink::combined_counters () const noexcept
+{
+    BcPortCounters total;
+    for (const auto &port : ports_) total += port->counters ();
+    return total;
 }
 
 }   // namespace decnet::datalink

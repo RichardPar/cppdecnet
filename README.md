@@ -205,6 +205,14 @@ http --http-port 8102
 
 Each page accepts `?info=summary|status|char|counters`.
 
+Counters are kept across the layers and reported on every page that has
+them: the twelve NSP per-node counters plus the executor's eight, the
+routing layer's per-circuit terminating, originating and transit counts
+with circuit down, initialization failure, adjacency down and peak
+adjacencies, the datalink traffic counters, and DDCMP's NAK and reply
+timeout counters. `NOTDONE.md` lists the architected counters that are
+still not kept and why.
+
 The server listens on all interfaces with no authentication. HTTPS is not
 supported; `--https-port` is ignored.
 

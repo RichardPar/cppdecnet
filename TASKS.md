@@ -41,14 +41,18 @@ known defects in [BUGS.md](BUGS.md).
 
 - [ ] MOP console carrier
 - [ ] Raise data link and physical line events (classes 5 and 6)
-- [ ] Include the source circuit in packet loss events (4.0 to 4.3)
+- [x] Include the source circuit in packet loss events (4.0 to 4.3)
 - [ ] ZERO COUNTERS
 - [ ] LOOP CIRCUIT and LOOP LINE
 - [ ] Phase II NICE
-- [ ] NSP node counters in NICE
+- [x] NSP node counters in NICE
+- [x] Routing circuit counters, executor counters, DDCMP error counters,
+      broadcast line counters
 
 ## Monitoring and API
 
+- [ ] Delete or wire up `src/http/monitor.cc`, which nothing instantiates
+- [ ] `logging` pages are empty: `EventLogger::nice_read` is a stub
 - [ ] Per-connection NSP page, event display, bridge page
 - [ ] HTTPS
 - [ ] `apiserver`: JSON API over a Unix socket

@@ -39,6 +39,9 @@ void Adjacency::down ()
 {
     if (!up_) return;
     up_ = false;
+    // Count it against the circuit this neighbour was on.  The self
+    // adjacency has no circuit and never comes down.
+    if (circuit_) ++circuit_->counters ().adj_down;
     if (node ()) node ()->timers ().stop (this);
     if (auto *r = dynamic_cast<BaseRouter *> (parent ()->parent ()))
         r->adj_down (shared_from_this ());

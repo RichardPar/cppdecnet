@@ -49,9 +49,9 @@ struct Param {
 };
 
 // Display style when the type code is not enough: node addresses as "1.2",
-// versions joined by dots.  PyDECnet uses subclasses (DUNode, CMNode,
-// CMVersion) for this.
-enum class Style : std::uint8_t { plain, node, version };
+// versions joined by dots, elapsed times as "107:43:04".  PyDECnet uses
+// subclasses (DUNode, CMNode, CMVersion, CMEtime) for this.
+enum class Style : std::uint8_t { plain, node, version, etime };
 
 // Parameter definition.  labels are display strings for a coded (C) value
 // indexed by value, or qualifier names for a mapped counter indexed by bit.

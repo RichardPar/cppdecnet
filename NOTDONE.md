@@ -33,7 +33,6 @@ control reject) is never raised. For the same reason NICE is read only.
 - LOOP CIRCUIT and LOOP LINE return "unrecognized function". MOP loopback
   exists but is not connected to NICE.
 - Phase II NICE is not implemented.
-- NSP node counters are not reported.
 
 ### NSP
 
@@ -44,8 +43,6 @@ control reject) is never raised. For the same reason NICE is read only.
 ### Routing
 
 - Phase II and Phase III neighbours.
-- Packet loss events (4.0 to 4.3) do not name the circuit, because
-  `forward()` does not receive it.
 - Packet types are checked after parsing rather than filtered per state.
 
 ### MOP
@@ -61,11 +58,33 @@ they in PyDECnet).
 - Data link and physical line events (classes 5 and 6) are defined but
   never raised.
 
+### Counters
+
+Implemented across the layers: the twelve NSP per-node counters, the eight
+executor counters, the routing layer's circuit counters, the datalink
+traffic counters and the DDCMP error counters. What is still missing:
+
+- **Congestion loss** (circuit counters 802 and 812). Nothing queues, so
+  there is no congestion to lose packets to. PyDECnet omits them too.
+- **Corruption loss** (805), **selection intervals** (1050) and **user
+  buffer unavailable** (1065). Not detected.
+- **Local buffer errors** (1041). We never NAK for want of a buffer, so
+  the count would always be zero. PyDECnet does not keep it either.
+- **Ethernet hardware error counters** (1060 to 1062, 1064): send failure,
+  collision detect check failure, receive failure, data overrun. These are
+  controller statistics, and neither pcap nor a UDP tunnel reports them.
+- **Oversized packet loss** (903) and **packet format error** (910) are
+  reported but never incremented: the decode path rejects such packets
+  before routing sees them. PyDECnet defines them and never counts them
+  either.
+
 ### Monitoring
 
 The HTTP pages cover the NICE entities only. There is no per-connection
 NSP page, event display, bridge page, REST API or HTTPS. Pages are built
-from `nice_read`, so they only show what NICE can report.
+from `nice_read`, so they only show what NICE can report -- which is why
+the `logging` page is empty: `EventLogger::nice_read` is a stub, as the
+NICE encoding of logging event lists is not implemented upstream either.
 
 ### Process
 

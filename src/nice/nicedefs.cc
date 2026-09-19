@@ -305,8 +305,11 @@ constexpr ParamDef circuit_defs[] = {
     C (1050, "Selection intervals elapsed"),
     C (1065, "User buffer unavailable"),
     // PyDECnet's own: how long the circuit has been up, which is not
-    // architected but is the first thing anyone wants to know.
+    // architected but is the first thing anyone wants to know.  3901 is
+    // ours in the same spirit: PyDECnet keeps the count but has no NICE
+    // number for it.  See PORTING.md.
     C (3900, "Seconds since last circuit up"),
+    C (3901, "Adjacency down"),
 };
 
 // Line parameters.  A line is the hardware under a circuit; on an Ethernet
@@ -373,7 +376,7 @@ constexpr ParamDef area_defs[] = {
 constexpr ParamDef module_defs[] = {
     P ( 100, "Circuit"),
     P ( 110, "Surveillance", surveillance),
-    P ( 111, "Elapsed time"),
+    P ( 111, "Elapsed time", {}, Style::etime),
     P ( 120, "Physical address"),
     P ( 130, "Last report"),
     P (1001, "Maintenance version", {}, Style::version),

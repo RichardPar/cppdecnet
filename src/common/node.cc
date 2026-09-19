@@ -1,4 +1,5 @@
 #include "decnet/http/server.h"
+#include "decnet/nodefetch.h"
 #include "decnet/node.h"
 
 #include "decnet/common/logging.h"
@@ -52,9 +53,18 @@ Node::Node (const Config &config)
         id_ = (phase_ == Phase::ph4) ? r->id : Nodeid (0u, r->id.tid ());
     }
 
-    for (const auto &n : config.nodes ())
-        add_node (Nodeinfo { n.id, n.name,
-                             n.inbound_verification, n.outbound_verification });
+    for (const auto &n : config.nodes ()) {
+        Nodeinfo info;
+        info.id                    = n.id;
+        info.name                  = n.name;
+        info.inbound_verification  = n.inbound_verification;
+        info.outbound_verification = n.outbound_verification;
+        add_node (std::move (info));
+        // Remember which names the operator wrote, so a refresh of a
+        // fetched list cannot rename them.
+        if (!n.from_source && !n.name.empty ())
+            config_named_.insert (n.id.value ());
+    }
 
     if (Nodeinfo *self = find_node (id_, false); self && !self->name.empty ())
         name_ = self->name;
@@ -82,6 +92,12 @@ Node::Node (const Config &config)
     // Monitoring server, if configured.
     if (config.http_port ())
         http_ = std::make_unique<http::Server> (this, config.http_port ());
+
+    // Node name lists to keep up to date.  The configuration has already
+    // loaded each one's cache; this refreshes them in the background.
+    if (!config.node_sources ().empty ())
+        node_fetcher_ = std::make_unique<NodeFetcher> (this,
+                                                       config.node_sources ());
     if (config.routing ()) {
         try {
             routing_ = routing::make_router (this, config);
@@ -126,6 +142,23 @@ void Node::add_node (Nodeinfo info)
     if (!name.empty ()) by_name_[name] = p;
 }
 
+bool Node::set_node_name (Nodeid id, const std::string &name)
+{
+    if (name.empty ()) return false;
+    // What the operator wrote wins over anything downloaded.
+    if (config_named_.count (id.value ())) return false;
+
+    Nodeinfo *info = find_node (id);     // creates a nameless entry if new
+    if (!info) return false;
+    if (info->name == name) return false;
+    // Keep the entry itself: it carries this node's counters and the round
+    // trip estimate NSP has built up, neither of which a rename should lose.
+    if (!info->name.empty ()) by_name_.erase (info->name);
+    info->name = name;
+    by_name_[name] = info;
+    return true;
+}
+
 Nodeinfo *Node::find_node (Nodeid id, bool add)
 {
     auto it = by_id_.find (id.value ());
@@ -133,7 +166,9 @@ Nodeinfo *Node::find_node (Nodeid id, bool add)
     if (!add) return nullptr;
     // No entry: add a nameless one, which is what NSP's node database
     // needs.  Port of Node.nodeinfo's add behaviour.
-    add_node (Nodeinfo { id, "", "", "" });
+    Nodeinfo info;
+    info.id = id;
+    add_node (std::move (info));
     return by_id_[id.value ()].get ();
 }
 
@@ -175,6 +210,13 @@ unsigned Node::seconds_since_zeroed () const noexcept
 {
     std::chrono::duration<double> dt =
         std::chrono::steady_clock::now () - zeroed_;
+    return static_cast<unsigned> (dt.count ());
+}
+
+unsigned NodeCounters::seconds_since_zeroed () const noexcept
+{
+    std::chrono::duration<double> dt =
+        std::chrono::steady_clock::now () - zeroed;
     return static_cast<unsigned> (dt.count ());
 }
 
@@ -229,9 +271,20 @@ int Node::nice_read (nice::NiceRequest &req, nice::ReplyDict &replies)
         }
         if (req.sumstat ())
             exe.params.set (0, Value::c (0));   // On
-        if (req.counters ())
-            exe.params.set_counter (0, Counter { seconds_since_zeroed (), 2,
-                                                 false, 0 });
+        if (req.counters ()) {
+            // The counters only the executor has.  The per node set has
+            // already been added by NSP; these come from this node's own
+            // accounting and, for the four a routing table keeps, from the
+            // router -- an endnode has none, exactly as PyDECnet excludes
+            // them through ExecCounters.rtr_only_nc.
+            const ExecCounters &e = exec_counters_;
+            exe.params.set_counter (700, Counter { e.peak_conns, 2, false, 0 });
+            exe.params.set_counter (903, Counter { e.oversized_loss, 1, false,
+                                                   0 });
+            exe.params.set_counter (910, Counter { e.fmt_errors, 1, false, 0 });
+            exe.params.set_counter (930, Counter { e.ver_rejects, 1, false, 0 });
+            if (routing_) routing_->nice_counters (exe);
+        }
     }
     return 0;
 }
@@ -255,6 +308,9 @@ void Node::start ()
     if (nsp_)      nsp_->start ();
     if (session_)  session_->start ();
     if (http_)     http_->start ();
+    // Last, and only once the loop below is about to run: it hands its
+    // results to the node thread.
+    if (node_fetcher_) node_fetcher_->start ();
     thread_ = std::thread ([this] { mainloop (); });
 }
 
@@ -273,9 +329,11 @@ void Node::stop_layers ()
 
 void Node::stop ()
 {
-    // Stop the monitoring server first, from this thread.  It posts work to
-    // the node loop, so it must be joined while the loop is still running.
+    // Stop the monitoring server and the name fetcher first, from this
+    // thread.  Both post work to the node loop, so both must be joined
+    // while the loop is still running.
     if (http_) http_->stop ();
+    if (node_fetcher_) node_fetcher_->stop ();
 
     if (thread_.joinable ()) {
         // Stop the layers on the node thread, since only that thread may touch

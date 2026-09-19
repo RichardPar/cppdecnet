@@ -253,6 +253,21 @@ These are intentional and are also commented at the relevant code.
   adjacency is up. PyDECnet sends them unconditionally.
 - **Endnode data** is built as `ShortData` internally and converted to
   `LongData` on LAN circuits.
+- **Counter ownership.** PyDECnet keeps the routing layer's circuit
+  counters on the datalink object, reaching across the layer boundary to
+  reach them. Here they live in `routing::CircuitCounters` on the routing
+  circuit, and the datalink keeps only its own traffic counters. Both
+  appear on the same NICE reply, so the wire result is the same.
+- **Counter 3901, "Adjacency down".** PyDECnet keeps this count but has no
+  NICE number for it: it appears only on PyDECnet's own hand-built web
+  page. Our pages are built from `nice_read`, so a counter with no number
+  is invisible. It is reported as 3901, alongside PyDECnet's own
+  unarchitected 3900 ("seconds since last circuit up"). A real NCP shows
+  an unknown counter number rather than rejecting the reply.
+- **`ShortData::src`** carries the circuit a packet arrived on, and is
+  never encoded. PyDECnet carries the source adjacency the same way. It is
+  what lets the forwarding path tell terminating from transit traffic, and
+  what lets the class 4 packet loss events name their circuit.
 
 ## Porting order
 
