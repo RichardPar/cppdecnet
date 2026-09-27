@@ -5,23 +5,26 @@ Built and tested on BAJI (RSX-11M-PLUS V4.6 BL87, DECnet-11M-PLUS).
 
 ## TSTIME
 
-Asks the TIMESTAMP object on one or more nodes what time it is. Sends
-"UA" and prints what comes back, then "UB" and prints the 8 byte VMS
-binary time as octal words, low word first.
+Asks the TIMESTAMP object on a node what time it is and prints it the
+way TIM does, but with the full year. Under the hood it sends "UB",
+gets back a VMS quadword (100ns ticks since 17-NOV-1858), and turns
+that into an RSX date and time.
 
 ```
->TSTIME CPPNOD A29RT1
-CPPNOD:: 27-SEP-2026:14:57:50.86
-CPPNOD:: 152066 003733 031031 000274
-A29RT1:: 27-SEP-2026:14:57:51.74
-A29RT1:: 165470 004147 031031 000274
+>TSTIME CPPNOD
+15:34:20 27-SEP-2026
+>TSTIME CPPNOD,A29RT1
+15:34:30 27-SEP-2026
+15:34:31 27-SEP-2026
 ```
 
-Handy for checking two clocks against each other. A round trip over
-HECnet is most of a second, so the second node always looks late - run
-it both ways round and split the difference. Spaces or commas between
-names, and "NODE::" works too. `RUN TSTIME` with no arguments asks for
-the node list.
+More than one node gives one line each, in the order given. Spaces or
+commas between names, and "NODE::" works too. `RUN TSTIME` with no
+arguments asks for the node list.
+
+The answer is the remote node's clock, which for CPPNOD and A29RT1 is
+UTC - so don't expect it to agree with TIM on a box set to local time.
+The date sums only cope with 2000-2099, which should do.
 
 It connects by name, so RSX needs to know the node. If it doesn't:
 
@@ -32,7 +35,7 @@ It connects by name, so RSX needs to know the node. If it doesn't:
 (SET is gone after a reboot, use DEFINE if you want it to stick.)
 
 If something fails you get the node, a step number (1 open, 2 connect,
-3-6 send/receive) and the status, and it moves on to the next node.
+3 send, 4 receive) and the status, and it moves on to the next node.
 
 TSTIME.TSK in here is the image I built, so you can skip the rest if
 you just want to run it. FTP it over in binary mode.
@@ -82,7 +85,7 @@ either, so put the INS in your startup file if you want it permanent.
 
 ## Getting the .TSK back off the box
 
-FTP in binary mode. Failing that, `DMP TI:=TSTIME.TSK/BL:1:9.` and
-turn the octal back into bytes (low byte first). Note the dot - DMP
-assumes octal otherwise and 9 isn't an octal digit. I dumped it twice
+FTP in binary mode. Failing that, `DMP TI:=TSTIME.TSK/BL:1:10.` (however
+many blocks DIR says it is) and turn the octal back into bytes, low
+byte first. Note the dot - DMP assumes octal otherwise. I dumped it twice
 and compared, a flipped digit on the serial line would be easy to miss.
