@@ -6,25 +6,29 @@ Built and tested on BAJI (RSX-11M-PLUS V4.6 BL87, DECnet-11M-PLUS).
 ## TSTIME
 
 Asks the TIMESTAMP object on a node what time it is and prints it the
-way TIM does, but with the full year. Under the hood it sends "UB",
-gets back a VMS quadword (100ns ticks since 17-NOV-1858), and turns
-that into an RSX date and time.
+way TIM does, but with the full year. It can also set the clock from
+it.
 
 ```
 >TSTIME CPPNOD
-15:34:20 27-SEP-2026
+17:23:20 27-SEP-2026
 >TSTIME CPPNOD,A29RT1
-15:34:30 27-SEP-2026
-15:34:31 27-SEP-2026
+17:11:13 27-SEP-2026
+17:11:14 27-SEP-2026
+>TSTIME CPPNOD/SET
+17:11:20 27-SEP-2026
 ```
 
-More than one node gives one line each, in the order given. Spaces or
-commas between names, and "NODE::" works too. `RUN TSTIME` with no
-arguments asks for the node list.
+Under the hood it sends "UB" and gets back UTC as a VMS quadword (100ns
+ticks since 17-NOV-1858). It adds SYS$UTC_OFFSET, the local offset in
+minutes that LB:[1,2]TZ.CMD looks after, so what you see is local time
+and matches TIM. The part of a second is worked out in real clock
+ticks, using the rate GTIM$ reports.
 
-The answer is the remote node's clock, which for CPPNOD and A29RT1 is
-UTC - so don't expect it to agree with TIM on a box set to local time.
-The date sums only cope with 2000-2099, which should do.
+More than one node gives one line each. Spaces or commas between
+names, and "NODE::" works too. With /SET it sets the clock from the
+first node that answers and stops there. The date sums only cope with
+2000-2099, which should do.
 
 It connects by name, so RSX needs to know the node. If it doesn't:
 
@@ -35,7 +39,26 @@ It connects by name, so RSX needs to know the node. If it doesn't:
 (SET is gone after a reboot, use DEFINE if you want it to stick.)
 
 If something fails you get the node, a step number (1 open, 2 connect,
-3 send, 4 receive) and the status, and it moves on to the next node.
+3 send, 4 receive, 5 setting the clock) and the status, and it moves
+on to the next node.
+
+## Keeping the clock right
+
+Run with no command line at all it takes the nodes from the logical
+TSTIME$NODE and sets the clock without printing anything unless it
+fails. That's what you schedule. RUN won't touch a ...XXX task, so it
+gets installed a second time as TSTSYN:
+
+```
+>INS TSTIME/TASK=TSTSYN
+>DFL CPPNOD=TSTIME$NODE/GBL
+>RUN TSTSYN 1M/RSI=10M
+```
+
+USERPROG.CMD in here does all of that at boot - STARTUP.CMD calls
+LB:[1,2]USERPROG.CMD at the end if it exists. CLQ shows it queued.
+
+
 
 TSTIME.TSK in here is the image I built, so you can skip the rest if
 you just want to run it. FTP it over in binary mode.
@@ -64,14 +87,16 @@ Task build:
 
 ```
 >TKB
-TKB>TSTIME/-FP=TSTIME
+TKB>TSTIME/-FP/PR:0=TSTIME
 TKB>/
 Enter Options:
 TKB>ASG=NS0:1:2,TI0:5
 TKB>//
 ```
 
-LUN 1 is the network, LUN 2 the link, 5 the terminal.
+LUN 1 is the network, LUN 2 the link, 5 the terminal. /PR:0 makes it
+privileged, which STIM$ needs - without it /SET fails with status
+177760 (IE.PRI).
 
 Install it as ...TST so MCR hands it the command line:
 
@@ -80,12 +105,12 @@ Install it as ...TST so MCR hands it the command line:
 >TSTIME CPPNOD
 ```
 
-REM ...TST before installing a new build. It won't survive a reboot
+REM ...TST (and TSTSYN) before installing a new build. It won't survive a reboot
 either, so put the INS in your startup file if you want it permanent.
 
 ## Getting the .TSK back off the box
 
-FTP in binary mode. Failing that, `DMP TI:=TSTIME.TSK/BL:1:10.` (however
+FTP in binary mode. Failing that, `DMP TI:=TSTIME.TSK/BL:1:9.` (however
 many blocks DIR says it is) and turn the octal back into bytes, low
 byte first. Note the dot - DMP assumes octal otherwise. I dumped it twice
 and compared, a flipped digit on the serial line would be easy to miss.
