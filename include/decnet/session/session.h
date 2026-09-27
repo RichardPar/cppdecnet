@@ -170,6 +170,14 @@ private:
 // Loopback application, object 25.  Port of decnet/modules/mirror.py.
 std::unique_ptr<Application> make_mirror ();
 
+// Time of day application, object TIMESTAMP.  Port of a PyDECnet
+// contributed module.
+std::unique_ptr<Application> make_timestamp ();
+
+// TIMESTAMP's answer to one request, "UA", "LB" and so on, at time now.
+Bytes timestamp_reply (ByteView request,
+                       std::chrono::system_clock::time_point now);
+
 // Register the objects that are enabled by default.
 void add_default_objects (Session &s);
 

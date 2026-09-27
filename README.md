@@ -30,7 +30,8 @@ Implemented:
 - Routing: endnode, level 1 router, level 2 router
 - NSP: logical links, segmentation, retransmission, flow control,
   interrupt messages
-- Session control: object database, built-in MIRROR, external programs
+- Session control: object database, built-in MIRROR and TIMESTAMP,
+  external programs
 - MOP: system id, counters, loopback
 - Event logging: filters, console/file/monitor sinks, remote sinks
 - Network management: NICE listener (object 19), read only
@@ -244,6 +245,20 @@ http --http-port 8102
 
 Each page accepts `?info=summary|status|char|counters`.
 
+The node pages hide entries with nothing to report and say how many, with
+a **Show all** button at the foot that adds `?all=1`; the button on the
+full page hides them again. "Nothing to report" means no parameters at
+all -- which is every node but the executor on a characteristics read --
+or, on a counters read, a counter set that is entirely zero apart from
+"seconds since last zeroed", which is this node's uptime rather than
+anything about the node listed. The executor is always shown. Circuits
+and lines are never filtered: there are few of them and an idle one is
+still worth seeing.
+
+On a node carrying the HECnet list this is the difference between a
+readable page and an unreadable one -- 121 rows of 2159 on the summary
+page, 1 of 1257 on characteristics.
+
 Counters are kept across the layers and reported on every page that has
 them: the twelve NSP per-node counters plus the executor's eight, the
 routing layer's per-circuit terminating, originating and transit counts
@@ -291,6 +306,7 @@ tools/              command line tools and scripts
 tests/              tests, one binary per test_*.cc
 mk/                 build fragments
 samples/            example configurations
+RSX/                RSX-11M-PLUS test programs, built on the PDP-11
 ```
 
 Each source file names the PyDECnet module it was ported from, and
@@ -301,6 +317,13 @@ unfinished code is marked `PORT:`. Design notes are in
 checks against PyDECnet output, and end to end tests that run two nodes
 in one process over real sockets. `BUILD` defaults to release; use
 `make check BUILD=debug` for the sanitizer build.
+
+### RSX programs
+
+`RSX/` has a few MACRO-11 programs for testing from an RSX box, like
+TSTIME for querying the TIMESTAMP object. They get built on the PDP-11,
+not by make. Source and a built .TSK are both in there; see
+[RSX/README.md](RSX/README.md).
 
 ## Licence
 

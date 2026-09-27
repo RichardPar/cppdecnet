@@ -85,6 +85,10 @@ td, th { border: 1px solid #ccc; padding: 2px 10px; text-align: left;
 th { background: #eee; }
 .entity { font-weight: bold; }
 .none { color: #777; font-style: italic; }
+a.button { display: inline-block; margin: 0.5em 0 1em 0; padding: 6px 14px;
+           border: 1px solid #999; border-radius: 4px; background: #eee;
+           color: #222; text-decoration: none; font-family: inherit; }
+a.button:hover { background: #ddd; }
 )";
 
 // Split formatter output into name and value.  Parameters are
@@ -400,29 +404,62 @@ std::string Server::entity_page (std::uint8_t kind, unsigned info,
         return page (pd->title, nav, b);
     }
 
-    // Hide unreachable unnamed nodes unless all=1.
+    // An entity with nothing to report is noise: a read of characteristics
+    // names every node in the database but only the executor has any, and
+    // a node in another area has no routing entry to report either.  Those
+    // are hidden unless all=1, which is what the button at the foot sets.
+    //
+    // Hiding them matters more since node names are fetched: the older
+    // test here was "unreachable and nameless", and a list from HECnet
+    // leaves nothing nameless.
     std::size_t hidden = 0;
-    auto worth_showing = [&] (const nice::NiceReply *rep) {
-        if (all || kind != nice::Entity::node) return true;
+    // "Would be hidden", independent of whether we are hiding: with all=1
+    // this is what decides whether offering to hide again makes sense.
+    auto is_empty = [&] (const nice::NiceReply *rep,
+                         const std::vector<std::string> &lines) {
+        if (lines.empty ()) return true;
+        // Only the node table has thousands of rows; a circuit or a line is
+        // worth showing even when it is idle.
+        if (kind != nice::Entity::node) return false;
         const nice::NiceNode &n = rep->entity.as_node ();
-        if (n.executor || !n.name.empty ()) return true;
+        // The executor is always worth showing, whatever it has to say.
+        if (n.executor) return false;
+
+        // A counters read gives every node the full set, nearly all of them
+        // zero.  "Seconds since last zeroed" is this node's uptime rather
+        // than anything about that node, so a set that is otherwise all
+        // zero is a node we have never talked to.  Same test as the
+        // "significant" one NSP applies, but at the page rather than in the
+        // reply, so it covers whatever a layer chose to send.
+        bool anything = false;
+        for (const auto &[number, p] : rep->params) {
+            if (!p.counter) { anything = true; break; }
+            if (p.number == 0) continue;            // seconds since zeroed
+            if (p.count.value || p.count.map) { anything = true; break; }
+        }
+        if (!anything) return true;
+
+        if (!n.name.empty ()) return false;
         const nice::Param *state = rep->params.find (0);
         // Unreachable and nameless: nothing a reader is looking for.  Any
         // node carrying more than its state has something to say.
         if (state && state->value.is_number () && state->value.as_uint () == 5
             && rep->params.size () <= 1)
-            return false;
-        return true;
+            return true;
+        return false;
     };
 
     for (const auto &group : groups) {
         for (const nice::NiceReply *rep : group) {
             if (!rep) continue;
-            if (!worth_showing (rep)) { ++hidden; continue; }
+            std::vector<std::string> lines = rep->params.format (defs);
+            if (is_empty (rep, lines)) {
+                ++hidden;
+                if (!all) continue;
+            }
             b += "<h2 class=\"entity\">";
             b += escape (rep->entity.str ());
             b += "</h2>\n";
-            std::vector<std::string> lines = rep->params.format (defs);
             if (lines.empty ()) {
                 b += "<p class=\"none\">no parameters</p>\n";
                 continue;
@@ -439,19 +476,37 @@ std::string Server::entity_page (std::uint8_t kind, unsigned info,
             b += "</table>\n";
         }
     }
-    if (hidden) {
+
+    // The link back to this same page with the other setting of "all".
+    auto same_page = [&] (bool want_all) {
+        std::string href = "/";
+        href += pd->slug;
+        const char *sep = "?";
+        if (want_all) { href += "?all=1"; sep = "&amp;"; }
+        if (info != nice::info_summary)
+            for (const InfoDef &i : infos)
+                if (i.code == info) {
+                    href += sep;
+                    href += "info=";
+                    href += i.slug;
+                }
+        return href;
+    };
+
+    if (hidden && !all) {
         b += "<p class=\"none\">";
         b += std::to_string (hidden);
-        b += " unreachable node";
-        b += hidden == 1 ? "" : "s";
-        b += " not shown &mdash; <a href=\"/";
-        b += pd->slug;
-        b += "?all=1";
-        if (info != nice::info_summary) {
-            for (const InfoDef &i : infos)
-                if (i.code == info) { b += "&amp;info="; b += i.slug; }
-        }
-        b += "\">show every node</a></p>\n";
+        b += hidden == 1 ? " entry with nothing to report is not shown"
+                         : " entries with nothing to report are not shown";
+        b += "</p>\n<p><a class=\"button\" href=\"";
+        b += same_page (true);
+        b += "\">Show all</a></p>\n";
+    } else if (hidden && all) {
+        // Showing them all, so offer the way back -- but only when there
+        // is something to hide, or the button would do nothing.
+        b += "<p><a class=\"button\" href=\"";
+        b += same_page (false);
+        b += "\">Hide empty entries</a></p>\n";
     }
     return page (pd->title, nav, b);
 }

@@ -10,6 +10,7 @@
 #include "decnet/session/session.h"
 
 #include <chrono>
+#include <cstdlib>
 #include <mutex>
 #include <thread>
 
@@ -343,6 +344,103 @@ DN_TEST (session, mirror_rejects_an_unknown_function)
     c->send_data (mirror_msg (0x07, "nope"));
     DN_ASSERT (wait_until ([&] { return cl->replies () == 1; }));
     DN_ASSERT_EQ (cl->reply (0), (Bytes { 0xff }));
+
+    p.stop ();
+}
+
+// ---------------------------------------------------------- the timestamp
+
+namespace {
+
+// 2026-09-27 12:58:08.334567 UTC.
+const auto ts_time = std::chrono::system_clock::time_point (
+    std::chrono::seconds (1790513888) + std::chrono::microseconds (334567));
+
+// The same, in 100 ns units from 17-NOV-1858.
+constexpr std::uint64_t ts_vms = 52972306883345670ULL;
+
+Bytes le64 (std::uint64_t v)
+{
+    Bytes b (8);
+    for (int i = 0; i < 8; ++i) b[i] = static_cast<std::uint8_t> (v >> (8 * i));
+    return b;
+}
+
+// Run with the local time zone set to a fixed two hours east of UTC.
+struct LocalZone {
+    std::string saved;
+    bool        had;
+    LocalZone ()
+    {
+        const char *tz = std::getenv ("TZ");
+        had = tz != nullptr;
+        if (had) saved = tz;
+        ::setenv ("TZ", "XXX-2", 1);
+        ::tzset ();
+    }
+    ~LocalZone ()
+    {
+        if (had) ::setenv ("TZ", saved.c_str (), 1);
+        else     ::unsetenv ("TZ");
+        ::tzset ();
+    }
+};
+
+}   // namespace
+
+DN_TEST (session, timestamp_ascii)
+{
+    // Day-month-year and hundredths, as VMS writes a time.
+    DN_ASSERT_EQ (timestamp_reply (bytes_of ("UA"), ts_time),
+                  bytes_of ("27-SEP-2026:12:58:08.33"));
+    // Small fields are zero filled, and hundredths are truncated.
+    auto early = std::chrono::system_clock::time_point (
+        std::chrono::seconds (1767582245) + std::chrono::microseconds (9999));
+    DN_ASSERT_EQ (timestamp_reply (bytes_of ("UA"), early),
+                  bytes_of ("05-JAN-2026:03:04:05.00"));
+}
+
+DN_TEST (session, timestamp_binary)
+{
+    DN_ASSERT_EQ (timestamp_reply (bytes_of ("UB"), ts_time), le64 (ts_vms));
+}
+
+DN_TEST (session, timestamp_local_time)
+{
+    LocalZone z;
+    DN_ASSERT_EQ (timestamp_reply (bytes_of ("LA"), ts_time),
+                  bytes_of ("27-SEP-2026:14:58:08.33"));
+    DN_ASSERT_EQ (timestamp_reply (bytes_of ("LB"), ts_time),
+                  le64 (ts_vms + 2ULL * 3600 * 10000000));
+    // Anything but U and B means local and text, as in the original; a
+    // short request takes the same defaults.
+    DN_ASSERT_EQ (timestamp_reply (bytes_of ("xx"), ts_time),
+                  bytes_of ("27-SEP-2026:14:58:08.33"));
+    DN_ASSERT_EQ (timestamp_reply (ByteView (), ts_time),
+                  bytes_of ("27-SEP-2026:14:58:08.33"));
+}
+
+DN_TEST (session, timestamp_by_object_name)
+{
+    Pair p;
+    p.start ();
+
+    // The way VMS asks for it: node::"0=TIMESTAMP".
+    auto client = std::make_unique<Client> ();
+    Client *cl = client.get ();
+    SessionConnection *c = p.b->session ()->connect (
+        Nodeid::parse ("1.1"), EndUser::named ("TIMESTAMP"),
+        EndUser::named ("TEST"), {}, std::move (client));
+    DN_ASSERT (c != nullptr);
+    DN_ASSERT (wait_until ([&] { return cl->accepts () == 1; }));
+
+    c->send_data (bytes_of ("UA"));
+    DN_ASSERT (wait_until ([&] { return cl->replies () == 1; }));
+    DN_ASSERT_EQ (cl->reply (0).size (), std::size_t (23));
+
+    c->send_data (bytes_of ("UB"));
+    DN_ASSERT (wait_until ([&] { return cl->replies () == 2; }));
+    DN_ASSERT_EQ (cl->reply (1).size (), std::size_t (8));
 
     p.stop ();
 }

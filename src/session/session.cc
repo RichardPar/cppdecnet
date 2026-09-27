@@ -332,6 +332,10 @@ void add_default_objects (Session &s)
     // Built-in MIRROR (object 25), unless configured otherwise.
     if (!s.find_object (25) && !s.find_object ("MIRROR"))
         s.add_object (25, "MIRROR", [] { return make_mirror (); });
+    // TIMESTAMP has a name but no number, so it is asked for as
+    // node::"0=TIMESTAMP".
+    if (!s.find_object ("TIMESTAMP"))
+        s.add_object (0, "TIMESTAMP", [] { return make_timestamp (); });
     // Object 26 is the event logger's receiving end: another node connects
     // to it to send us its event records.
     if (!s.find_object (26) && !s.find_object ("EVENTLOGGER")) {

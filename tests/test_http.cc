@@ -162,6 +162,111 @@ DN_TEST (http, the_node_page_hides_the_unreachable_thousand)
     DN_ASSERT (contains (few.body, "all=1"));
 }
 
+DN_TEST (http, entries_with_nothing_to_report_are_hidden)
+{
+    // A characteristics read names every node in the database but only the
+    // executor has any characteristics, so without this the page is one
+    // useful entry followed by a thousand saying "no parameters".
+    Config c = Config::from_string (
+        "routing 1.1 --type l1router\n"
+        "node 1.1 NODEA\nnode 1.9 FRIEND\nnode 1.20 OTHER\n"
+        "circuit mul-0 Multinet 127.0.0.1:1:connect\n");
+    Node n (c);
+    Server s (&n, 0);
+
+    Response few = s.serve (get ("/nodes", "info=char"));
+    DN_ASSERT_EQ (few.status, 200);
+    // The executor keeps its characteristics...
+    DN_ASSERT (contains (few.body, "NODEA"));
+    // ...and the named but empty ones are gone, with the count offered.
+    DN_ASSERT (!contains (few.body, "no parameters"));
+    DN_ASSERT (contains (few.body, "nothing to report"));
+    DN_ASSERT (contains (few.body, "Show all"));
+
+    // The button leads to the same page with all=1, and that one has them.
+    Response all = s.serve (get ("/nodes", "all=1&info=char"));
+    DN_ASSERT (contains (all.body, "no parameters"));
+    DN_ASSERT (contains (all.body, "FRIEND"));
+    DN_ASSERT (all.body.size () > few.body.size ());
+    // And from there, the way back.
+    DN_ASSERT (contains (all.body, "Hide empty entries"));
+    DN_ASSERT (!contains (all.body, "Show all"));
+}
+
+DN_TEST (http, the_show_all_button_keeps_the_information_level)
+{
+    // Pressing it on the characteristics page must not drop you back on
+    // summary, which is what a naive "?all=1" link would do.
+    Config c = Config::from_string (
+        "routing 1.1 --type l1router\n"
+        "node 1.1 NODEA\nnode 1.9 FRIEND\n"
+        "circuit mul-0 Multinet 127.0.0.1:1:connect\n");
+    Node n (c);
+    Server s (&n, 0);
+
+    Response r = s.serve (get ("/nodes", "info=char"));
+    DN_ASSERT (contains (r.body, "/nodes?all=1&amp;info=char"));
+
+    // On the default level there is no info to carry, so the link is bare.
+    Response sum = s.serve (get ("/nodes"));
+    DN_ASSERT (contains (sum.body, "\"/nodes?all=1\""));
+}
+
+DN_TEST (http, counters_hide_nodes_never_talked_to_but_keep_the_rest)
+{
+    // Every node in the database gets the full counter set, nearly all of
+    // it zero.  A node we have actually exchanged traffic with is the only
+    // interesting row, so the rest go behind the button.
+    Config c = Config::from_string (
+        "routing 1.1 --type l1router\n"
+        "node 1.1 NODEA\nnode 1.9 FRIEND\nnode 1.20 QUIET\n"
+        "circuit mul-0 Multinet 127.0.0.1:1:connect\n");
+    Node n (c);
+
+    // Give one of them some history.
+    Nodeinfo *busy = n.find_node (Nodeid::parse ("1.9"));
+    DN_ASSERT (busy != nullptr);
+    busy->counters.con_rcv = 1;
+    busy->counters.t_byt_rcv = 900;
+
+    Server s (&n, 0);
+    Response few = s.serve (get ("/nodes", "info=counters"));
+    DN_ASSERT_EQ (few.status, 200);
+
+    // The executor is always shown, and so is the node with traffic.
+    DN_ASSERT (contains (few.body, "NODEA"));
+    DN_ASSERT (contains (few.body, "FRIEND"));
+    // The silent one is not, and the page says so.
+    DN_ASSERT (!contains (few.body, "QUIET"));
+    DN_ASSERT (contains (few.body, "nothing to report"));
+    DN_ASSERT (contains (few.body, "Show all"));
+
+    // It is there when asked for.
+    Response all = s.serve (get ("/nodes", "all=1&info=counters"));
+    DN_ASSERT (contains (all.body, "QUIET"));
+}
+
+DN_TEST (http, a_counter_set_that_is_all_zero_is_nothing_to_report)
+{
+    // "Seconds since last zeroed" is the executor's uptime, not anything
+    // about the node it is listed under, so it must not by itself make a
+    // node look busy -- otherwise the filter would never hide anything.
+    Config c = Config::from_string (
+        "routing 1.1 --type l1router\n"
+        "node 1.1 NODEA\nnode 1.9 FRIEND\n"
+        "circuit mul-0 Multinet 127.0.0.1:1:connect\n");
+    Node n (c);
+    Server s (&n, 0);
+
+    Response few = s.serve (get ("/nodes", "info=counters"));
+    DN_ASSERT (!contains (few.body, "FRIEND"));
+
+    // One byte in either direction is enough to make it worth a row.
+    n.find_node (Nodeid::parse ("1.9"))->counters.t_byt_xmt = 1;
+    Response now = s.serve (get ("/nodes", "info=counters"));
+    DN_ASSERT (contains (now.body, "FRIEND"));
+}
+
 DN_TEST (http, other_entities_are_not_filtered)
 {
     // The filter is about the node table's thousand empty rows.  Nothing
