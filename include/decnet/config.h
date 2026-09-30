@@ -8,6 +8,7 @@
 //     routing 9.54 --type l2router
 //     node 9.54 SAMPLE
 //     http --http-port 8102 --https-port 0
+//     api /tmp/decnetapi.sock --mode 660
 
 #ifndef DECNET_CONFIG_H
 #define DECNET_CONFIG_H
@@ -162,6 +163,10 @@ public:
     // HTTP port.  Zero means not configured.
     unsigned http_port () const noexcept { return http_port_; }
 
+    // API socket path and file mode.  An empty path means not configured.
+    const std::string &api_socket () const noexcept { return api_socket_; }
+    unsigned api_mode () const noexcept { return api_mode_; }
+
     // Lines no layer has claimed.  Kept rather than rejected so PyDECnet
     // configuration files load.
     const std::vector<ConfigLine> &unhandled () const noexcept { return unhandled_; }
@@ -198,6 +203,8 @@ private:
     std::string                  identification_;
     std::string                  node_name_;
     unsigned                     http_port_ = 0;
+    std::string                  api_socket_;
+    unsigned                     api_mode_ = 0666;
 };
 
 // Split a config file line into words, honouring quotes and '#' comments.

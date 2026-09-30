@@ -17,6 +17,7 @@ gateway between a local Ethernet segment and the rest of the network.
 - [Configuration](#configuration)
 - [Joining HECnet](#joining-hecnet)
 - [Monitoring](#monitoring)
+- [API](#api)
 - [Running as a service](#running-as-a-service)
 - [Development](#development)
 - [Licence](#licence)
@@ -36,13 +37,15 @@ Implemented:
 - Event logging: filters, console/file/monitor sinks, remote sinks
 - Network management: NICE listener (object 19), read only
 - Monitoring pages over HTTP
+- PyDECnet's JSON API over a Unix socket: the session API, for programs
+  that open or accept logical links
 
 Tested against PyDECnet, and against a PDP-11 running RSX on a real
 Ethernet segment.
 
 Not implemented yet: Phase II and Phase III neighbours, NICE SET and
-ZERO, the MOP console carrier, access control checking, the JSON API,
-the bridge and DAP/FAL. See [TASKS.md](TASKS.md),
+ZERO, the MOP console carrier, access control checking, the API's
+node, nsp, routing and mop requests, the bridge and DAP/FAL. See [TASKS.md](TASKS.md),
 [NOTDONE.md](NOTDONE.md) and [BUGS.md](BUGS.md).
 
 ## Quick start
@@ -269,6 +272,47 @@ still not kept and why.
 
 The server listens on all interfaces with no authentication. HTTPS is not
 supported; `--https-port` is ignored.
+
+## API
+
+```
+api /run/decnet/api.sock --mode 660
+```
+
+Programs talk to the node over a Unix socket, one JSON object per line,
+in PyDECnet's format, so PyDECnet's `decnet/connectors.py` and
+`async_connectors.py` work unchanged. The socket defaults to `$DECNETAPI`
+or `/tmp/decnetapi.sock`, mode 666. A socket file left by a node that
+died is replaced; one that still answers stops the second node's API from
+starting.
+
+`{}` lists the system and its APIs. The `session` API opens and accepts
+logical links:
+
+| Request `type` | Fields | Reply, then events |
+|---|---|---|
+| `connect` | `dest` (name or address), `remuser` (number or name), `localuser`, `data`, `username`, `password`, `account`, `proxy` | `connecting` with a `handle`, then `accept` or `reject` with a `reason` |
+| `bind` | `num` and/or `name` | `bind` with a handle; inbound links arrive as `connect` with `listenhandle` |
+| `accept`, `reject` | `handle`, `data` | `runstate` once the link is running |
+| `data`, `interrupt` | `handle`, `data` | `data`, `interrupt` from the far end |
+| `disconnect`, `abort` | `handle`, `data` | `disconnect` with a `reason` from the far end |
+
+Byte strings are latin-1 JSON strings. A `tag` on a request comes back on
+its reply. Disconnecting a bind handle withdraws the object. When a client
+goes away its links fail with reason 38 ("object failed") and its objects
+are withdrawn.
+
+```python
+from decnet.connectors import SimpleApiConnector
+api = SimpleApiConnector ("/run/decnet/api.sock")
+conn, reply = api.connect (dest = "MIM", remuser = 25)     # MIRROR
+conn.data (b"\x00hello")
+print (bytes (conn.recv ()))                               # b"\x01hello"
+conn.disconnect ()
+```
+
+Only the session API is implemented. Anyone who can open the socket can
+make and accept connections as this node, so set the mode accordingly.
 
 ## Running as a service
 

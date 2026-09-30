@@ -16,7 +16,7 @@ known defects in [BUGS.md](BUGS.md).
 
 - [ ] Check access control (PyDECnet uses PAM)
 - [ ] Run objects as a different user
-- [ ] Outbound connections from applications, and `bind`
+- [x] Outbound connections from applications, and `bind` (through the API)
 - [ ] `pmr` (object 123)
 - [ ] Finish `tools/dnping`
 
@@ -64,7 +64,8 @@ known defects in [BUGS.md](BUGS.md).
 - [ ] `logging` pages are empty: `EventLogger::nice_read` is a stub
 - [ ] Per-connection NSP page, event display, bridge page
 - [ ] HTTPS
-- [ ] `apiserver`: JSON API over a Unix socket
+- [x] `apiserver`: JSON API over a Unix socket, session API
+- [ ] The API's node, nsp, routing, mop and ncp requests (need nested JSON)
 
 ## Other
 

@@ -77,6 +77,10 @@ public:
     // has a default rather than being pure.
     virtual void interrupt_received (Connection &, ByteView) {}
 
+    // An inbound connection we accepted is running: the far end has shown
+    // it has our confirm.  Port of the RunState work item.
+    virtual void run_state (Connection &) {}
+
     // The link is gone.
     virtual void disconnected (Connection &c, unsigned reason,
                                ByteView data) = 0;

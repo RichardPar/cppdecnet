@@ -133,8 +133,13 @@ void Connection::start_outbound (Bytes payload)
     e.txtime = std::chrono::steady_clock::now ();
     txq_.push_back (std::move (e));
     send (ci_pkt);
-    timer_is_retransmit_ = false;
-    arm_timer (conn_timeout_);
+    // Retransmitted until acknowledged, as PyDECnet does by queueing it on
+    // the data subchannel.  A router with an adjacency to us but no routing
+    // message from us yet drops its answer as unreachable; retransmission
+    // is what gets the link up once routing converges.
+    retries_ = 0;
+    timer_is_retransmit_ = true;
+    arm_timer (acktimeout ());
 }
 
 void Connection::start_inbound (const ConnInit &pkt)
@@ -176,11 +181,19 @@ void Connection::accept (Bytes data, std::uint8_t fcopt)
     cc_pkt.info     = parent_->nsp_version ();
     cc_pkt.segsize  = MSS;
     cc_pkt.data_ctl = std::move (data);
-    send (cc_pkt);
 
     set_state (DN_MY_STATE (Connection, cc));
-    arm_timer (conn_timeout_);
-    timer_is_retransmit_ = false;
+    // The confirm is sequence number 0, like the connect initiate, and is
+    // retransmitted until the far end shows it arrived (see cc).
+    TxEntry e;
+    e.seq   = Seq (0);
+    e.frame = cc_pkt.encode_packet ();
+    e.sent  = true;
+    txq_.push_back (std::move (e));
+    send (cc_pkt);
+    retries_ = 0;
+    timer_is_retransmit_ = true;
+    arm_timer (acktimeout ());
 }
 
 void Connection::reject (unsigned reason, Bytes data)
@@ -836,11 +849,18 @@ Connection::State Connection::cr (Work &w)
 Connection::State Connection::cc (Work &w)
 {
     if (received_) {
-        // Any data or acknowledgement confirms they have our accept.
+        // Anything on either subchannel confirms they have our accept, as
+        // in PyDECnet.
         if (dynamic_cast<const DataSeg *> (received_)
-            || dynamic_cast<const AckData *> (received_)) {
+            || dynamic_cast<const AckData *> (received_)
+            || dynamic_cast<const IntMsg *> (received_)
+            || dynamic_cast<const LinkSvcMsg *> (received_)
+            || dynamic_cast<const AckOther *> (received_)) {
             process_ack (Seq (0));
             set_state (DN_MY_STATE (Connection, run));
+            // Before the packet that caused it, as PyDECnet does, so the
+            // application hears it is running before it sees data.
+            if (session ()) session ()->run_state (*this);
             return run (w);
         }
         if (auto *d = dynamic_cast<const DiscInit *> (received_)) {

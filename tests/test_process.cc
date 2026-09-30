@@ -199,10 +199,11 @@ DN_TEST (process, a_configured_object_replaces_the_builtin)
     Node n (c);
     DN_ASSERT (n.session ()->find_object (25) != nullptr);
     // Object 25 appears once: the configured program replaced the built-in.
-    // The others are 19 (NML) and 26 (event logger).
-    DN_ASSERT_EQ (n.session ()->object_count (), 3u);
+    // The others are 19 (NML), 26 (event logger) and TIMESTAMP.
+    DN_ASSERT_EQ (n.session ()->object_count (), 4u);
     DN_ASSERT (n.session ()->find_object (19) != nullptr);
     DN_ASSERT (n.session ()->find_object (26) != nullptr);
+    DN_ASSERT (n.session ()->find_object ("TIMESTAMP") != nullptr);
 }
 
 DN_TEST (process, mirror_loop_through_a_subprocess)

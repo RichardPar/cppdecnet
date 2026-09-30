@@ -93,6 +93,9 @@ public:
 
     std::size_t size () const noexcept { return order_.size (); }
 
+    // The keys, in the order they were set or parsed.
+    const std::vector<std::string> &keys () const noexcept { return order_; }
+
 private:
     std::vector<std::string>      order_;
     std::map<std::string, Value>  fields_;

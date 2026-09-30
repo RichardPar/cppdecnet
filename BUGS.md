@@ -17,18 +17,6 @@ correctly.
 
 `src/http/monitor.cc`, `include/decnet/http/monitor.h`
 
-## `dnping` cannot reach the built-in MIRROR
-
-`dnping -c <config> <node>` fails with `did not accept (reason 38)`
-against a `decnetd` that has no `object` line, although object 25 is
-registered by default in `Session::start`. Reason 38 is OBJ_FAIL, which
-`Connection::cr` returns when session control does not answer in time, so
-the connect appears to reach NSP and stall above it. Reproduced on an
-unmodified tree at 06e79dc, so it is not a regression from the counter
-work.
-
-`src/session/session.cc`, `tools/dnping.cc`
-
 ## Two-node tests are timing flaky under load
 
 Every suite that stands two nodes up over a real socket fails
