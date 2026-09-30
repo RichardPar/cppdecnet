@@ -8,11 +8,15 @@
 #include "decnet/common/json.h"
 #include "decnet/common/logging.h"
 #include "decnet/common/work.h"
+#include "decnet/mop/mop.h"
+#include "decnet/mop/names.h"
 #include "decnet/node.h"
 #include "decnet/session/session.h"
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
+#include <chrono>
 #include <condition_variable>
 #include <cstring>
 #include <deque>
@@ -137,6 +141,20 @@ private:
     std::optional<json::Object> session_request (const std::string &type,
                                                  const json::Object &req);
     json::Object do_connect (const json::Object &req);
+
+    // MOP API requests.  Those that ask another station answer later,
+    // through send_mop, with tag.
+    std::optional<json::Object> mop_request (const std::string &type,
+                                             const json::Object &req,
+                                             const json::Value *tag);
+    void send_mop (json::Object o, const json::Value *tag);
+    void mop_loop (mop::MopCircuit *c, std::vector<Macaddr> dest,
+                   int packets, double timeout, bool fast,
+                   std::shared_ptr<json::Value::Array> delays,
+                   json::Value tag);
+    // A station: a MAC address, or a node name or address, which stands
+    // for its DECnet MAC address.
+    std::optional<Macaddr> station (const json::Value *v) const;
 
     // handle() less the holding of events.
     void answer (const json::Object &req);
@@ -385,8 +403,11 @@ void Client::answer (const json::Object &req)
     if (fields == 0) {
         // An empty request asks for the list of systems and their APIs.
         ret.emplace ();
-        ret->set (node_->name (), json::Value (json::Value::Array {
-            json::Value ("session") }));
+        json::Value::Array apis;
+        if (node_->session ()) apis.push_back (json::Value ("session"));
+        if (node_->mop () && !node_->mop ()->circuits ().empty ())
+            apis.push_back (json::Value ("mop"));
+        ret->set (node_->name (), json::Value (std::move (apis)));
     } else {
         std::string system = req.str ("system", node_->name ());
         std::string subsys = req.str ("api");
@@ -396,6 +417,13 @@ void Client::answer (const json::Object &req)
         } else if (upper (system) != upper (node_->name ())) {
             ret = error ("Unknown system name");
             ret->set ("system", system);
+        } else if (subsys == "mop" && node_->mop ()
+                   && !node_->mop ()->circuits ().empty ()) {
+            ret = mop_request (type, req, tag);
+            if (ret) {
+                ret->set ("system", node_->name ());
+                ret->set ("api", subsys);
+            }
         } else if (subsys != "session" || !node_->session ()) {
             ret = error ("Unsupported api");
             ret->set ("api", subsys);
@@ -582,6 +610,280 @@ std::int64_t Client::add_inbound (SessionConnection &c, std::int64_t listen,
         o.set ("nodename", n->name);
     send_session (std::move (o));
     return h;
+}
+
+// ------------------------------------------------------------ client, MOP
+//
+// Port of the api methods in mop.py.  PyDECnet's requests and answers, plus
+// "sysid" with a "dest", which asks that station who it is.
+
+namespace {
+
+std::string mac_text (const Bytes &b)
+{
+    if (b.size () != 6) return {};
+    std::array<std::uint8_t, 6> a {};
+    std::copy (b.begin (), b.end (), a.begin ());
+    return Macaddr (a).str ();
+}
+
+// One station's system ID, as PyDECnet's SysIdHandler.api gives it.
+json::Object sysid_item (const mop::SysId &s, Macaddr src)
+{
+    json::Object o;
+    o.set ("srcaddr", src.str ());
+    if (s.version) o.set ("version", s.version->str ());
+    if (s.console_user) o.set ("console_user", mac_text (*s.console_user));
+    if (s.reservation_timer)
+        o.set ("reservation_timer", static_cast<std::int64_t> (*s.reservation_timer));
+    if (s.hwaddr) o.set ("hwaddr", mac_text (*s.hwaddr));
+    if (s.device) {
+        o.set ("device", mop::device_name (*s.device));
+        o.set ("device_code", static_cast<std::int64_t> (*s.device));
+    }
+    if (s.processor) o.set ("processor", mop::processor_name (*s.processor));
+    if (s.datalink) o.set ("datalink", mop::datalink_name (*s.datalink));
+    if (s.bufsize) o.set ("bufsize", static_cast<std::int64_t> (*s.bufsize));
+    if (s.software) o.set ("software", s.software->str ());
+    json::Value::Array services;
+    for (const std::string &n : s.services ()) services.emplace_back (n);
+    o.set ("services", json::Value (std::move (services)));
+    if (s.carrier_reserved) o.set ("carrier_reserved", true);
+    return o;
+}
+
+}   // namespace
+
+void Client::send_mop (json::Object o, const json::Value *tag)
+{
+    o.set ("system", node_->name ());
+    o.set ("api", "mop");
+    if (tag) o.set ("tag", *tag);
+    if (holding_) held_.push_back (std::move (o));
+    else          send (o);
+}
+
+std::optional<Macaddr> Client::station (const json::Value *v) const
+{
+    if (!v) return std::nullopt;
+    if (v->is_int ())
+        return Macaddr::from_nodeid (Nodeid (static_cast<std::uint16_t> (v->as_int ())));
+    if (!v->is_string ()) return std::nullopt;
+    const std::string &text = v->as_string ();
+    try {
+        return Macaddr::parse (text);
+    } catch (const std::exception &) {}
+    if (Nodeinfo *info = node_->find_node (upper (text)))
+        return Macaddr::from_nodeid (info->id);
+    try {
+        Nodeid n = Nodeid::parse (text);
+        if (n) return Macaddr::from_nodeid (n);
+    } catch (const std::exception &) {}
+    return std::nullopt;
+}
+
+std::optional<json::Object>
+Client::mop_request (const std::string &type, const json::Object &req,
+                     const json::Value *tag)
+{
+    mop::Mop *m = node_->mop ();
+    if (type == "get") {
+        json::Value::Array circuits;
+        for (mop::MopCircuit *c : m->circuits ()) {
+            json::Object o;
+            o.set ("name", c->name ());
+            o.set ("hwaddr", c->datalink ()->hwaddr ().str ());
+            o.set ("macaddr", c->loop ()->macaddr ().str ());
+            o.set ("services", json::Value (json::Value::Array {
+                json::Value ("loop"), json::Value ("counters") }));
+            circuits.emplace_back (std::move (o));
+        }
+        json::Object o;
+        o.set ("circuits", json::Value (std::move (circuits)));
+        return o;
+    }
+
+    // Everything else is on one circuit: the one named, or the only one.
+    mop::MopCircuit *c = m->circuit (req.str ("circuit"));
+    if (!c) {
+        return error (req.has ("circuit") ? "invalid circuit argument"
+                                          : "circuit argument needed");
+    }
+    std::int64_t t = req.num ("timeout", 3);
+    if (t < 1 || t > 60) return error ("invalid timeout");
+    double timeout = static_cast<double> (t);
+    std::weak_ptr<Client> self = weak_from_this ();
+    json::Value keep_tag = tag ? *tag : json::Value ();
+
+    if (type == "sysid") {
+        if (!req.has ("dest")) {
+            json::Value::Array list;
+            auto now = std::chrono::steady_clock::now ();
+            for (const auto &[k, h] : c->sysid ()->heard ()) {
+                json::Object o = sysid_item (h.sysid, h.address);
+                o.set ("age", static_cast<std::int64_t> (
+                    std::chrono::duration_cast<std::chrono::seconds> (
+                        now - h.last_heard).count ()));
+                list.emplace_back (std::move (o));
+            }
+            json::Object o;
+            o.set ("sysid", json::Value (std::move (list)));
+            return o;
+        }
+        auto dest = station (req.get ("dest"));
+        if (!dest) return error ("invalid dest");
+        c->request_id (*dest, timeout,
+                       [self, keep_tag] (const mop::SysId *s, Macaddr from) {
+            auto me = self.lock ();
+            if (!me || me->gone_) return;
+            json::Object o;
+            if (!s) {
+                o.set ("status", "timeout");
+            } else {
+                o.set ("status", "ok");
+                o.set ("sysid", json::Value (json::Value::Array {
+                    json::Value (sysid_item (*s, from)) }));
+            }
+            me->send_mop (std::move (o), keep_tag.is_null () ? nullptr : &keep_tag);
+        });
+        return std::nullopt;
+    }
+
+    if (type == "counters") {
+        auto dest = station (req.get ("dest"));
+        if (!dest) return error ("invalid dest");
+        c->request_counters (*dest, timeout,
+                             [self, keep_tag] (const mop::Counters *k, Macaddr from) {
+            auto me = self.lock ();
+            if (!me || me->gone_) return;
+            json::Object o;
+            if (!k) {
+                o.set ("status", "timeout");
+            } else {
+                o.set ("status", "ok");
+                o.set ("srcaddr", from.str ());
+                auto n = [&] (const char *name, std::uint32_t v) {
+                    o.set (name, static_cast<std::int64_t> (v));
+                };
+                n ("time_since_zeroed", k->time_since_zeroed);
+                n ("bytes_recv", k->bytes_recv);
+                n ("bytes_sent", k->bytes_sent);
+                n ("pkts_recv", k->pkts_recv);
+                n ("pkts_sent", k->pkts_sent);
+                n ("mcbytes_recv", k->mcbytes_recv);
+                n ("mcpkts_recv", k->mcpkts_recv);
+                n ("pkts_deferred", k->pkts_deferred);
+                n ("pkts_1_collision", k->pkts_1_collision);
+                n ("pkts_mult_collision", k->pkts_mult_collision);
+                n ("send_fail", k->send_fail);
+                n ("send_reasons", k->send_reasons);
+                n ("recv_fail", k->recv_fail);
+                n ("recv_reasons", k->recv_reasons);
+                n ("unk_dest", k->unk_dest);
+                n ("data_overrun", k->data_overrun);
+                n ("no_sys_buf", k->no_sys_buf);
+                n ("no_user_buf", k->no_user_buf);
+            }
+            me->send_mop (std::move (o), keep_tag.is_null () ? nullptr : &keep_tag);
+        });
+        return std::nullopt;
+    }
+
+    if (type == "loop") {
+        // dest: one station or a list of up to three, the loop multicast
+        // address if none.  The message goes through each in turn and
+        // back here.
+        std::vector<Macaddr> dest;
+        const json::Value *d = req.get ("dest");
+        if (d && d->is_array ()) {
+            for (const json::Value &e : d->as_array ()) {
+                auto a = station (&e);
+                if (!a) return error ("invalid dest");
+                dest.push_back (*a);
+            }
+        } else if (d) {
+            auto a = station (d);
+            if (!a) return error ("invalid dest");
+            dest.push_back (*a);
+        }
+        if (dest.empty ()) dest.push_back (mop::loop_multicast ());
+        if (dest.size () > 3) {
+            json::Object o;
+            o.set ("status", "too many addresses");
+            return o;
+        }
+        for (std::size_t i = 0; i < dest.size (); ++i) {
+            if (dest[i].is_multicast ()
+                && !(i == 0 && dest.size () == 1 && dest[0] == mop::loop_multicast ())) {
+                json::Object o;
+                o.set ("status", "invalid address");
+                return o;
+            }
+        }
+        std::int64_t packets = req.num ("packets", 1);
+        if (packets < 1 || packets > 10000) {
+            json::Object o;
+            o.set ("status", "invalid arguments");
+            return o;
+        }
+        const json::Value *f = req.get ("fast");
+        bool fast = f && f->is_bool () && f->as_bool ();
+        mop_loop (c, std::move (dest), static_cast<int> (packets), timeout, fast,
+                  std::make_shared<json::Value::Array> (), keep_tag);
+        return std::nullopt;
+    }
+
+    json::Object o = error ("Unsupported operation");
+    o.set ("type", type);
+    return o;
+}
+
+// One loop message, then the next, until packets have gone: port of
+// LoopConnection.  The answer lists each round trip in seconds, -1 for one
+// that timed out, and the station that answered first.
+void Client::mop_loop (mop::MopCircuit *c, std::vector<Macaddr> dest,
+                       int packets, double timeout, bool fast,
+                       std::shared_ptr<json::Value::Array> delays,
+                       json::Value tag)
+{
+    static const std::string python = "Python! ";
+    Bytes payload;
+    for (int i = 0; i < 12; ++i) payload.insert (payload.end (), python.begin (), python.end ());
+
+    std::vector<Macaddr> then (dest.begin () + 1, dest.end ());
+    auto sent = std::chrono::steady_clock::now ();
+    std::weak_ptr<Client> self = weak_from_this ();
+    c->loop (dest[0], then, std::move (payload), timeout,
+             [self, c, dest, packets, timeout, fast, delays, tag, sent]
+             (bool ok, Macaddr from) mutable {
+        auto me = self.lock ();
+        if (!me || me->gone_) return;
+        if (ok) {
+            delays->emplace_back (std::chrono::duration<double> (
+                std::chrono::steady_clock::now () - sent).count ());
+            // A loop to the multicast address is answered by somebody;
+            // later messages go to them.
+            if (dest[0] == mop::loop_multicast ()) dest[0] = from;
+        } else {
+            delays->emplace_back (static_cast<std::int64_t> (-1));
+        }
+        if (static_cast<int> (delays->size ()) >= packets) {
+            json::Object o;
+            o.set ("status", "ok");
+            o.set ("dest", dest[0].str ());
+            o.set ("delays", json::Value (*delays));
+            me->send_mop (std::move (o), tag.is_null () ? nullptr : &tag);
+            return;
+        }
+        auto next = [self, c, dest, packets, timeout, fast, delays, tag] {
+            if (auto client = self.lock (); client && !client->gone_)
+                client->mop_loop (c, dest, packets, timeout, fast, delays, tag);
+        };
+        // A second between messages that were answered, as PyDECnet
+        // does, unless asked to hurry.
+        if (ok && !fast) c->after (1.0, next);
+        else             next ();
+    });
 }
 
 void Client::closed ()

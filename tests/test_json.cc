@@ -153,15 +153,61 @@ DN_TEST (json, arrays_round_trip)
                   0u);
 }
 
-DN_TEST (json, shapes_this_protocol_does_not_use_are_rejected)
+DN_TEST (json, nested_objects_round_trip)
 {
-    // Nesting and fractional numbers would mean the far end is not
-    // speaking this protocol; better to say so than to half-accept it.
-    DN_ASSERT_THROWS (ParseError, Object::parse ("{\"a\":{\"b\":1}}"));
-    DN_ASSERT_THROWS (ParseError, Object::parse ("{\"a\":1.5}"));
+    // The shape of the MOP API's sysid reply: an array of objects.
+    std::string text = "{\"sysid\":[{\"srcaddr\":\"aa-00-04-00-9f-74\","
+                       "\"services\":[\"loop\",\"counters\"]},{}],"
+                       "\"api\":\"mop\"}";
+    Object o = Object::parse (text);
+    const auto &list = o.get ("sysid")->as_array ();
+    DN_ASSERT_EQ (list.size (), 2u);
+    DN_ASSERT (list[0].is_object ());
+    DN_ASSERT_EQ (list[0].as_object ().str ("srcaddr"),
+                  std::string ("aa-00-04-00-9f-74"));
+    DN_ASSERT_EQ (list[0].as_object ().get ("services")->as_array ().size (), 2u);
+    DN_ASSERT_EQ (list[1].as_object ().size (), 0u);
+    DN_ASSERT_EQ (o.encode (), text);
+
+    Object inner;
+    inner.set ("a", 1);
+    Object outer;
+    outer.set ("in", inner);
+    DN_ASSERT_EQ (outer.encode (), std::string ("{\"in\":{\"a\":1}}"));
+}
+
+DN_TEST (json, doubles)
+{
+    // Loop round trip times, in seconds.
+    Object o = Object::parse ("{\"delays\":[0.0125,-1,2.5e-3,1E2]}");
+    const auto &d = o.get ("delays")->as_array ();
+    DN_ASSERT (d[0].is_double ());
+    DN_ASSERT (d[0].as_double () == 0.0125);
+    DN_ASSERT (d[1].is_int ());
+    DN_ASSERT (d[1].as_double () == -1.0);
+    DN_ASSERT (d[2].as_double () == 0.0025);
+    DN_ASSERT (d[3].as_double () == 100.0);
+    Object e;
+    e.set ("t", 0.0125);
+    e.set ("whole", 3.0);
+    DN_ASSERT_EQ (e.encode (), std::string ("{\"t\":0.0125,\"whole\":3.0}"));
+    DN_ASSERT (Object::parse (e.encode ()).get ("whole")->is_double ());
+}
+
+DN_TEST (json, malformed_nesting_and_numbers_are_rejected)
+{
     DN_ASSERT_THROWS (ParseError, Object::parse ("{\"a\":[1,}"));
-    // And a character that cannot have come from a latin-1 byte.
+    DN_ASSERT_THROWS (ParseError, Object::parse ("{\"a\":{\"b\":}}"));
+    DN_ASSERT_THROWS (ParseError, Object::parse ("{\"a\":-}"));
+    DN_ASSERT_THROWS (ParseError, Object::parse ("{\"a\":1.2.3}"));
+    // A character that cannot have come from a latin-1 byte.
     DN_ASSERT_THROWS (ParseError, Object::parse ("{\"a\":\"\\u0100\"}"));
+    // Nesting deep enough to be an attack on the stack.
+    std::string deep = "{\"a\":";
+    for (int k = 0; k < 100; ++k) deep += "{\"a\":";
+    deep += "1";
+    for (int k = 0; k < 101; ++k) deep += "}";
+    DN_ASSERT_THROWS (ParseError, Object::parse (deep));
 }
 
 DN_TEST (json, a_real_message_from_the_protocol)

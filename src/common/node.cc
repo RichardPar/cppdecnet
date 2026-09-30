@@ -114,12 +114,13 @@ Node::Node (const Config &config)
             session_ = std::make_unique<session::Session> (this, config);
             session::add_default_objects (*session_);
             nsp_->set_session_control (session_.get ());
-            // The API is session control's, so it needs one.
-            if (!config.api_socket ().empty ())
-                api_ = std::make_unique<api::Server> (this, config.api_socket (),
-                                                      config.api_mode ());
         }
     }
+    // The API: session control's, if there is one, and MOP's.  A node that
+    // only runs MOP still has the MOP API.
+    if (!config.api_socket ().empty ())
+        api_ = std::make_unique<api::Server> (this, config.api_socket (),
+                                              config.api_mode ());
 }
 
 Node::~Node ()

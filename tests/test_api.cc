@@ -6,6 +6,7 @@
 #include "decnet/common/json.h"
 #include "decnet/common/socket.h"
 #include "decnet/config.h"
+#include "decnet/mop/mop.h"
 #include "decnet/node.h"
 #include "decnet/routing/routing.h"
 #include "decnet/session/session.h"
@@ -555,4 +556,197 @@ DN_TEST (api, a_link_to_this_node_answers_connect_before_accept)
     auto reply = c.recv ();
     DN_ASSERT (reply.has_value ());
     DN_ASSERT_EQ (reply->bytes ("data"), (Bytes { 0x01, 'h', 'i' }));
+}
+
+// --------------------------------------------------------------------- MOP
+
+namespace {
+
+std::uint16_t free_udp_port ()
+{
+    SourceAddress any ("127.0.0.1", 0);
+    Socket s = any.bind_socket (AF_INET, SOCK_DGRAM);
+    if (!s) throw std::runtime_error ("cannot find a free port");
+    sockaddr_storage sa {};
+    socklen_t len = sizeof sa;
+    ::getsockname (s.fd (), reinterpret_cast<sockaddr *> (&sa), &len);
+    return ntohs (reinterpret_cast<sockaddr_in *> (&sa)->sin_port);
+}
+
+// Two stations on a LAN carried over UDP, both running MOP; the API is on
+// A.
+struct MopLan {
+    std::uint16_t pa = free_udp_port (), pb = free_udp_port ();
+    std::string path = socket_path ();
+    Config acfg, bcfg;
+    std::unique_ptr<Node> a, b;
+
+    MopLan ()
+        : acfg (Config::from_string (
+              "node 1.1 NODEA\nnode 1.2 NODEB\ncircuit eth-0 Ethernet udp:"
+              + std::to_string (pa) + ":127.0.0.1:" + std::to_string (pb)
+              + " --random-address --mop\napi " + path + "\n")),
+          bcfg (Config::from_string (
+              "node 1.2 NODEB\ncircuit eth-0 Ethernet udp:"
+              + std::to_string (pb) + ":127.0.0.1:" + std::to_string (pa)
+              + " --random-address --mop\n"))
+    {
+        a = std::make_unique<Node> (acfg);
+        b = std::make_unique<Node> (bcfg);
+        a->start ();
+        b->start ();
+    }
+    ~MopLan () { b->stop (); a->stop (); }
+
+    std::string addr_b ()
+    { return b->mop ()->circuit ("eth-0")->datalink ()->hwaddr ().str (); }
+};
+
+json::Object mop_req (const std::string &type, int tag)
+{
+    json::Object o;
+    o.set ("api", "mop");
+    o.set ("type", type);
+    o.set ("tag", tag);
+    return o;
+}
+
+}   // namespace
+
+DN_TEST (api, mop_is_listed_where_there_is_a_mop_circuit)
+{
+    MopLan l;
+    ApiClient c (l.path);
+    c.send (json::Object ());
+    auto r = c.recv ();
+    DN_ASSERT (r.has_value ());
+    // A node that does not route has no name, and no session control: only
+    // MOP.
+    DN_ASSERT_EQ (r->size (), 1u);
+    DN_ASSERT_EQ (r->get (r->keys ().front ())->encode (),
+                  std::string ("[\"mop\"]"));
+
+    c.send (mop_req ("get", 1));
+    r = c.recv ();
+    DN_ASSERT (r.has_value ());
+    const auto &circuits = r->get ("circuits")->as_array ();
+    DN_ASSERT_EQ (circuits.size (), 1u);
+    DN_ASSERT (!circuits[0].as_object ().str ("hwaddr").empty ());
+    DN_ASSERT_EQ (r->str ("api"), std::string ("mop"));
+    DN_ASSERT_EQ (r->num ("tag"), 1);
+}
+
+DN_TEST (api, mop_asks_a_station_who_it_is_and_remembers)
+{
+    MopLan l;
+    ApiClient c (l.path);
+    json::Object q = mop_req ("sysid", 2);
+    q.set ("dest", l.addr_b ());
+    c.send (q);
+    auto r = c.recv ();
+    DN_ASSERT (r.has_value ());
+    DN_ASSERT_EQ (r->str ("status"), std::string ("ok"));
+    DN_ASSERT_EQ (r->num ("tag"), 2);
+    const json::Object &s = r->get ("sysid")->as_array ().at (0).as_object ();
+    DN_ASSERT_EQ (s.str ("srcaddr"), l.addr_b ());
+    DN_ASSERT_EQ (s.str ("software"), std::string ("DECnet/C++"));
+    DN_ASSERT_EQ (s.str ("processor"), std::string ("Communication Server"));
+    DN_ASSERT_EQ (s.get ("services")->encode (),
+                  std::string ("[\"loop\",\"counters\"]"));
+
+    // Now in the list of stations heard.
+    c.send (mop_req ("sysid", 3));
+    r = c.recv ();
+    DN_ASSERT (r.has_value ());
+    const auto &heard = r->get ("sysid")->as_array ();
+    DN_ASSERT_EQ (heard.size (), 1u);
+    DN_ASSERT_EQ (heard[0].as_object ().str ("srcaddr"), l.addr_b ());
+    DN_ASSERT (heard[0].as_object ().has ("age"));
+}
+
+DN_TEST (api, mop_counters_and_loop)
+{
+    MopLan l;
+    ApiClient c (l.path);
+    json::Object q = mop_req ("counters", 4);
+    q.set ("dest", l.addr_b ());
+    c.send (q);
+    auto r = c.recv ();
+    DN_ASSERT (r.has_value ());
+    DN_ASSERT_EQ (r->str ("status"), std::string ("ok"));
+    DN_ASSERT (r->num ("pkts_recv") >= 1);
+
+    // Two messages, without the second's wait.
+    q = mop_req ("loop", 5);
+    q.set ("dest", l.addr_b ());
+    q.set ("packets", 2);
+    q.set ("fast", true);
+    c.send (q);
+    r = c.recv ();
+    DN_ASSERT (r.has_value ());
+    DN_ASSERT_EQ (r->str ("status"), std::string ("ok"));
+    DN_ASSERT_EQ (r->str ("dest"), l.addr_b ());
+    const auto &d = r->get ("delays")->as_array ();
+    DN_ASSERT_EQ (d.size (), 2u);
+    DN_ASSERT (d[0].as_double () >= 0 && d[1].as_double () >= 0);
+
+    // No destination: the loopback multicast, which B answers.
+    c.send (mop_req ("loop", 6));
+    r = c.recv ();
+    DN_ASSERT (r.has_value ());
+    DN_ASSERT_EQ (r->str ("dest"), l.addr_b ());
+
+    // Nobody there: the time out is a -1.
+    q = mop_req ("loop", 7);
+    q.set ("dest", "aa-00-04-00-99-99");
+    q.set ("timeout", 1);
+    c.send (q);
+    r = c.recv ();
+    DN_ASSERT (r.has_value ());
+    DN_ASSERT_EQ (r->get ("delays")->encode (), std::string ("[-1]"));
+}
+
+DN_TEST (api, mop_names_stand_for_their_decnet_address)
+{
+    MopLan l;
+    ApiClient c (l.path);
+    // NODEB is 1.2, so AA-00-04-00-02-04.  B uses a random address, so
+    // nothing answers, but the request goes to the right place.
+    json::Object q = mop_req ("loop", 8);
+    q.set ("dest", "NODEB");
+    q.set ("timeout", 1);
+    c.send (q);
+    auto r = c.recv ();
+    DN_ASSERT (r.has_value ());
+    DN_ASSERT_EQ (r->str ("dest"), std::string ("aa-00-04-00-02-04"));
+    DN_ASSERT_EQ (r->get ("delays")->encode (), std::string ("[-1]"));
+}
+
+DN_TEST (api, mop_bad_requests)
+{
+    MopLan l;
+    ApiClient c (l.path);
+    json::Object q = mop_req ("counters", 9);
+    q.set ("dest", "not-a-station");
+    c.send (q);
+    auto r = c.recv ();
+    DN_ASSERT (r.has_value ());
+    DN_ASSERT_EQ (r->str ("error"), std::string ("invalid dest"));
+    DN_ASSERT_EQ (r->num ("tag"), 9);
+
+    q = mop_req ("loop", 10);
+    q.set ("timeout", 0);
+    c.send (q);
+    r = c.recv ();
+    DN_ASSERT_EQ (r->str ("error"), std::string ("invalid timeout"));
+
+    q = mop_req ("loop", 11);
+    q.set ("circuit", "eth-9");
+    c.send (q);
+    r = c.recv ();
+    DN_ASSERT_EQ (r->str ("error"), std::string ("invalid circuit argument"));
+
+    c.send (mop_req ("dump", 12));
+    r = c.recv ();
+    DN_ASSERT_EQ (r->str ("error"), std::string ("Unsupported operation"));
 }

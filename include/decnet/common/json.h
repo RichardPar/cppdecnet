@@ -1,8 +1,9 @@
 // decnet/common/json.h -- minimal JSON for the application protocol.
 //
-// The external application protocol is one flat JSON object per line:
-// string keys, and values that are strings, integers, booleans, null, or a
-// flat array of those.  This reads and writes exactly that.
+// The external application protocol is one JSON object per line: string
+// keys, and values that are strings, integers, booleans, null, arrays, or
+// objects.  Numbers with a fraction are read as doubles; the MOP API's loop
+// times are the only ones.
 //
 // Byte strings are encoded as latin-1 (byte n is code point n), matching
 // PyDECnet's DNJsonEncoder.  Strings may contain NUL (MIRROR's function
@@ -16,6 +17,7 @@
 #include "decnet/common/types.h"
 
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <variant>
@@ -23,6 +25,8 @@
 namespace decnet::json {
 
 struct ParseError : DNAException { using DNAException::DNAException; };
+
+class Object;
 
 // One value in an object.
 class Value {
@@ -36,17 +40,24 @@ public:
     Value (int i) : v_ (static_cast<std::int64_t> (i)) {}
     Value (bool b) : v_ (b) {}
     Value (Array a) : v_ (std::move (a)) {}
+    Value (double d) : v_ (d) {}
+    Value (Object o);
 
     bool is_null () const noexcept { return v_.index () == 0; }
     bool is_string () const noexcept { return v_.index () == 1; }
     bool is_int () const noexcept { return v_.index () == 2; }
     bool is_bool () const noexcept { return v_.index () == 3; }
     bool is_array () const noexcept { return v_.index () == 4; }
+    bool is_double () const noexcept { return v_.index () == 5; }
+    bool is_object () const noexcept { return v_.index () == 6; }
 
     const std::string &as_string () const;
     std::int64_t as_int () const;
     bool as_bool () const;
     const Array &as_array () const;
+    // An integer is a double too.
+    double as_double () const;
+    const Object &as_object () const;
 
     // The string read as bytes: latin-1, so one character is one byte.
     Bytes as_bytes () const;
@@ -59,7 +70,8 @@ public:
 
 private:
     std::variant<std::monostate, std::string, std::int64_t, bool,
-                 std::vector<Value>> v_;
+                 std::vector<Value>, double,
+                 std::shared_ptr<const Object>> v_;
 };
 
 // A flat JSON object.  Key order is preserved on output so that encoded
@@ -87,7 +99,7 @@ public:
     std::string format_message (const std::string &key = "message",
                                 const std::string &argkey = "args") const;
 
-    // Parse one object.  Throws ParseError on anything that is not a flat
+    // Parse one object.  Throws ParseError on anything that is not an
     // object of the shape described above.
     static Object parse (const std::string &text);
 
