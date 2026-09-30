@@ -523,6 +523,9 @@ std::int64_t Client::add_inbound (SessionConnection &c, std::int64_t listen,
     o.set ("srcuser", c.source ().str ());
     o.set ("dstuser", c.destination ().str ());
     o.set ("listenhandle", listen);
+    if (!c.username ().empty ()) o.set ("username", c.username ());
+    if (!c.password ().empty ()) o.set ("password", c.password ());
+    if (!c.account ().empty ())  o.set ("account", c.account ());
     send_session (std::move (o));
     return h;
 }

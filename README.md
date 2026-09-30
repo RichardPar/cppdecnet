@@ -39,13 +39,15 @@ Implemented:
 - Monitoring pages over HTTP
 - PyDECnet's JSON API over a Unix socket: the session API, for programs
   that open or accept logical links
+- File access: `dnfal`, a FAL (object 17) serving a directory, with
+  directory, read and, if allowed, create, delete and rename
 
 Tested against PyDECnet, and against a PDP-11 running RSX on a real
 Ethernet segment.
 
 Not implemented yet: Phase II and Phase III neighbours, NICE SET and
 ZERO, the MOP console carrier, access control checking, the API's
-node, nsp, routing and mop requests, the bridge and DAP/FAL. See [TASKS.md](TASKS.md),
+node, nsp, routing and mop requests, and the bridge. See [TASKS.md](TASKS.md),
 [NOTDONE.md](NOTDONE.md) and [BUGS.md](BUGS.md).
 
 ## Quick start
@@ -313,6 +315,64 @@ conn.disconnect ()
 
 Only the session API is implemented. Anyone who can open the socket can
 make and accept connections as this node, so set the mode accordingly.
+
+## File access
+
+`dnfal` is a File Access Listener: it lets other nodes list, read and
+write files in one directory. decnetd runs it as object 17, one process
+per connection, in place of PyDECnet's `fal.py`:
+
+```
+object --number 17 --name FAL --file /usr/local/bin/dnfal --argument /srv/decnet
+```
+
+Add `--argument rw` to let remote nodes create, delete and rename files,
+and `--argument trace` to log each DAP message. From VMS:
+
+```
+$ DIRECTORY CPPNOD::
+$ COPY CPPNOD::"hello.txt" []
+$ COPY LOGIN.COM CPPNOD::
+```
+
+File names may be Unix (`sub/file.txt`) or VMS style
+(`[SUB]FILE.TXT;1`); names match without regard to case, and versions are
+ignored. Nothing outside the directory can be reached, through `..` or a
+symbolic link. Text sent as variable length records with carriage return
+control is stored with a newline per record; anything else is stored as
+received. A file being written is renamed into place only when the
+transfer completes.
+
+### Access control
+
+Without a user file anyone who can reach the node can read the directory,
+and, with `rw`, change it. With one, each connection must name a user and
+password from the file, which also gives that user's directory and access:
+
+```
+object --number 17 --name FAL --file /usr/local/bin/dnfal --argument /srv/decnet --argument users=/etc/decnet/fal.users
+```
+
+```
+# user    password hash      directory        access
+RICHARD   $y$j9T$...         richard          rw
+GUEST     -                  pub              ro
+*         -                  pub              ro
+```
+
+- Relative directories are under the root given to dnfal.
+- `-` means no password.
+- `*` is for connections that give no user; leave it out to refuse them.
+- `dnfal --hash` prints a hash for a password it reads; `openssl passwd -6`
+  and `mkpasswd` hashes work too.
+- Names match without regard to case. A password that fails as sent is
+  tried in lower case, since VMS upper-cases one typed without quotes.
+
+A refused connection is rejected with reason 34, which VMS shows as
+invalid login information, after a second's delay, and logged. The file is
+read for each connection, so changes apply at once. It is dnfal's own:
+decnetd does not need to run as root, and files are read and written as
+the daemon's user.
 
 ## Running as a service
 

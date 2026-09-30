@@ -75,12 +75,19 @@ public:
     const EndUser &destination () const noexcept { return dstname_; }
     const EndUser &source () const noexcept { return srcname_; }
 
+    // Access control from an inbound connect, as sent.  Nothing checks it
+    // yet; an object may.  Empty for outbound connections.
+    const std::string &username () const noexcept { return username_; }
+    const std::string &password () const noexcept { return password_; }
+    const std::string &account () const noexcept { return account_; }
+
 private:
     friend class Session;
 
     Session         *parent_;
     nsp::Connection *conn_;
     EndUser          dstname_, srcname_;
+    std::string      username_, password_, account_;
 };
 
 // The object database entry: how to make an application for a connection.

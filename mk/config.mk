@@ -61,7 +61,8 @@ CXXFLAGS ?=
 ALL_CXXFLAGS = $(STDFLAGS) $(OPTFLAGS) $(WARNFLAGS) $(DEFFLAGS) $(SANFLAGS) \
                $(INCFLAGS) $(FEATURE_FLAGS) $(CXXFLAGS)
 ALL_LDFLAGS  = $(SANFLAGS) $(LDFLAGS)
-ALL_LDLIBS   = $(LDLIBS) $(FEATURE_LIBS) -lpthread
+# libcrypt: dnfal's password hashes.
+ALL_LDLIBS   = $(LDLIBS) $(FEATURE_LIBS) -lcrypt -lpthread
 
 # --------------------------------------------------------------- features
 # Optional dependencies are probed once and cached in $(BUILDDIR)/features.mk

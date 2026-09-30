@@ -13,8 +13,7 @@
 // accept, reject, data, interrupt, disconnect, abort).
 //
 // PORT: the node, nsp, routing, mop and ncp APIs, which answer with nested
-// objects that common/json.h does not build yet.  Access control fields of
-// an inbound connect are not passed to the client.
+// objects that common/json.h does not build yet.
 //
 // Threading: an accept thread, and one reader thread per client.  Readers
 // parse requests and post them to the node thread, which does all the work

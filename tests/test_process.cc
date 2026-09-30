@@ -78,6 +78,33 @@ for work in sys.stdin:
 sys.exit (1)
 )PROG";
 
+// A mirror that insists on PyDECnet's order: after it accepts, the next
+// message must be "runstate", as connectors.Connection.accept requires.
+// Answers every data message with 0xff if it was not.
+const char *const strict_program = R"PROG(#!/usr/bin/env python3
+import sys, json
+encode = json.JSONEncoder ().encode
+decode = json.JSONDecoder ().decode
+state = "new"
+for work in sys.stdin:
+    work = decode (work)
+    conn, mtype, msg = work["handle"], work["type"], work["data"]
+    if mtype == "connect":
+        print (encode ({"handle": conn, "type": "accept", "data": ""}),
+               flush = True)
+        state = "accepted"
+    elif mtype == "runstate":
+        state = "running" if state == "accepted" else "confused"
+    elif mtype == "data":
+        ok = state == "running" and msg and msg[0] == "\x00"
+        print (encode ({"handle": conn, "type": "data",
+                        "data": "\x01" + msg[1:] if ok else "\xff"}),
+               flush = True)
+    elif mtype == "disconnect":
+        sys.exit (0)
+sys.exit (1)
+)PROG";
+
 // A program that rejects every connection, to check the other answer.
 const char *const reject_program = R"PROG(#!/usr/bin/env python3
 import sys, json
@@ -289,6 +316,29 @@ DN_TEST (process, a_program_that_will_not_start_is_reported_as_no_such_object)
 
     DN_ASSERT (wait_until ([&] { return cl->disconnects () == 1; }));
     DN_ASSERT_EQ (cl->accepts (), 0);
+
+    p.stop ();
+}
+
+DN_TEST (process, a_program_hears_runstate_after_it_accepts)
+{
+    // PyDECnet's connectors wait for "runstate" after accepting, and its FAL
+    // treats any other message as the link failing.
+    std::string prog = write_program ("strict", strict_program);
+    Pair p ("object --number 25 --name MIRROR --file " + prog + "\n");
+    p.start ();
+
+    auto client = std::make_unique<Client> ();
+    Client *cl = client.get ();
+    SessionConnection *c = p.b->session ()->connect (
+        Nodeid::parse ("1.1"), EndUser::number (25), EndUser::named ("TEST"),
+        {}, std::move (client));
+    DN_ASSERT (c != nullptr);
+    DN_ASSERT (wait_until ([&] { return cl->accepts () == 1; }));
+
+    c->send_data (mirror_msg (0x00, "in order"));
+    DN_ASSERT (wait_until ([&] { return cl->replies () == 1; }));
+    DN_ASSERT_EQ (cl->reply (0), mirror_msg (0x01, "in order"));
 
     p.stop ();
 }

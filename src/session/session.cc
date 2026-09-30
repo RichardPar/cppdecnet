@@ -211,6 +211,9 @@ void Session::connect_received (nsp::Connection &c, ByteView payload)
     live.conn = std::make_unique<SessionConnection> (this, &c);
     live.conn->dstname_ = cd.dstname;
     live.conn->srcname_ = cd.srcname;
+    live.conn->username_ = cd.rqstrid;
+    live.conn->password_ = cd.passwrd;
+    live.conn->account_ = cd.account;
     live.app = obj->factory ();
     if (!live.app) {
         // The object is going away; an API client that bound it has left.

@@ -266,6 +266,10 @@ void ProcessApplication::connect_received (SessionConnection &c, ByteView data)
     o.set ("destination", c.remote ().str ());
     o.set ("srcuser", c.source ().str ());
     o.set ("dstuser", c.destination ().str ());
+    // Access control, as PyDECnet's DictConnector passes it: only if sent.
+    if (!c.username ().empty ()) o.set ("username", c.username ());
+    if (!c.password ().empty ()) o.set ("password", c.password ());
+    if (!c.account ().empty ())  o.set ("account", c.account ());
     send (o);
 }
 
@@ -334,7 +338,11 @@ void ProcessApplication::handle (const json::Object &req)
     if (type == "accept") {
         conn_->accept (std::move (data));
     } else if (type == "reject") {
-        conn_->reject (0, std::move (data));
+        // PyDECnet's reject carries no reason and so is always 0, "rejected
+        // by object".  A program that checks access control itself needs 34,
+        // "access control rejected", which is what a user is told.
+        conn_->reject (static_cast<unsigned> (req.num ("reason", 0)),
+                       std::move (data));
     } else if (type == "data") {
         conn_->send_data (std::move (data));
     } else if (type == "disconnect" || type == "abort") {
