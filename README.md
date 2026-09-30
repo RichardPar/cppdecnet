@@ -332,7 +332,15 @@ object --number 17 --name FAL --file /usr/local/bin/dnfal --argument /srv/decnet
 ```
 
 Add `--argument rw` to let remote nodes create, delete and rename files,
-and `--argument trace` to log each DAP message. From VMS:
+and `--argument trace` to log each DAP message and its bytes (seen with
+decnetd at `--log-level debug`). dnfal tells requesters it is VMS with an
+RMS-32 file system: VMS COPY will not send a binary file to a file system
+it thinks is ULTRIX's, which is what PyDECnet's FAL says it is.
+`--argument ostype=192 --argument filesys=13` says that instead.
+
+Tested with OpenVMS VAX 6.2 as the requester: DIRECTORY, TYPE, COPY in
+both directions (text, fixed and variable binary), RENAME and DELETE.
+From VMS:
 
 ```
 $ DIRECTORY CPPNOD::
