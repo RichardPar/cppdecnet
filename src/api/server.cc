@@ -429,7 +429,7 @@ json::Object Client::do_connect (const json::Object &req)
     if (d && d->is_int ()) {
         dest = Nodeid (static_cast<std::uint16_t> (d->as_int ()));
     } else if (d && d->is_string ()) {
-        if (Nodeinfo *info = node_->find_node (d->as_string ()))
+        if (Nodeinfo *info = node_->find_node (upper (d->as_string ())))
             dest = info->id;
         else
             try { dest = Nodeid::parse (d->as_string ()); }
