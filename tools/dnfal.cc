@@ -12,6 +12,8 @@
 //     rw            allow create, delete and rename (without a user file)
 //     users=FILE    check user names and passwords; see dap/fal_users.h
 //     trace         log each DAP message
+//     ostype=N      the operating system type to claim; default 7, VMS
+//     filesys=N     the file system type to claim; default 3, RMS-32
 //
 // Without a user file anyone may connect, and ROOT and rw apply to all.
 // With one, a connect is refused with "access control rejected" unless
@@ -178,6 +180,10 @@ int main (int argc, char **argv)
         if (a == "rw" || a == "--write")           opts.writable = true;
         else if (a == "trace" || a == "--trace")   opts.trace = true;
         else if (a.rfind ("users=", 0) == 0)       users_file = a.substr (6);
+        else if (a.rfind ("ostype=", 0) == 0)
+            opts.ostype = static_cast<std::uint8_t> (std::stoi (a.substr (7)));
+        else if (a.rfind ("filesys=", 0) == 0)
+            opts.filesys = static_cast<std::uint8_t> (std::stoi (a.substr (8)));
         else if (opts.root.empty ())               opts.root = a;
         else {
             log (40, "unexpected argument " + a);

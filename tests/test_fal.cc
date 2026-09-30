@@ -414,3 +414,65 @@ DN_TEST (fal, a_wildcard_open_offers_each_file_in_turn)
                   bytes_of ("second"));
     DN_ASSERT (std::holds_alternative<AccessComplete> (s.out.back ()));
 }
+
+DN_TEST (fal, end_of_stream_before_close_is_answered)
+{
+    // VMS COPY ends a write with end of stream, then close.
+    Tree t;
+    Script s;
+    s << v7 () << access (Access::create, "f.txt") << control (Control::connect)
+      << control (Control::put) << Data { 0, bytes_of ("abc") }
+      << complete (AccessComplete::eos) << complete (AccessComplete::close);
+    FalServer (s, { t.root, true }).run ();
+    DN_ASSERT_EQ (last_status (s), std::string ("none"));
+    DN_ASSERT_EQ (s.all<AccessComplete> ().size (), 2u);
+    DN_ASSERT_EQ (t.read ("f.txt"), std::string ("abc"));
+}
+
+DN_TEST (fal, vms_binary_marked_ascii_is_kept_as_binary)
+{
+    // What VMS COPY sends for a fixed 512 byte file with no carriage
+    // control: data type ASCII, and records ending in any byte at all.
+    Tree t;
+    Attributes a;
+    a.menu.set (Attributes::m_datatype).set (Attributes::m_rfm)
+          .set (Attributes::m_rat).set (Attributes::m_mrs);
+    a.datatype = Ext ().set (Attributes::dt_ascii);
+    a.rfm = Attributes::fb_fix;
+    a.mrs = 512;
+    Bytes block (512, 'x');
+    block.back () = '\n';
+    Script s;
+    s << v7 () << a << access (Access::create, "b.bin")
+      << control (Control::connect) << control (Control::put)
+      << Data { 0, block } << Data { 1, block }
+      << complete (AccessComplete::eos) << complete (AccessComplete::close);
+    FalServer (s, { t.root, true }).run ();
+    DN_ASSERT_EQ (t.read ("b.bin").size (), 1024u);
+}
+
+DN_TEST (fal, erase_and_rename_answer_names_as_vms_fal_does)
+{
+    // VMS DELETE and RENAME ask for names back, and take any other answer
+    // as a protocol error.  These are VMS FAL's own answers.
+    Tree t;
+    t.file ("gone.txt", "1");
+    t.file ("old.txt", "2");
+    Access del = access (Access::erase, "gone.txt");
+    del.display = Ext ().set (Access::d_name);
+    Access ren = access (Access::rename, "old.txt");
+    ren.display = Ext ().set (Access::d_name);
+    Name to;
+    to.nametype.set (Name::filespec);
+    to.namespec = "new.txt";
+    Script s;
+    s << v7 () << del << ren << to;
+    FalServer (s, { t.root, true }).run ();
+    // Config; erase: name, ack, complete; rename: name, ack, name, ack,
+    // complete.
+    DN_ASSERT_EQ (s.types (), std::string ("1 15 6 7 15 6 15 6 7"));
+    auto n = s.all<Name> ();
+    DN_ASSERT_EQ (n[0].namespec, std::string ("/gone.txt"));
+    DN_ASSERT_EQ (n[1].namespec, std::string ("/old.txt"));
+    DN_ASSERT_EQ (n[2].namespec, std::string ("/new.txt"));
+}

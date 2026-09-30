@@ -18,6 +18,7 @@ gateway between a local Ethernet segment and the rest of the network.
 - [Joining HECnet](#joining-hecnet)
 - [Monitoring](#monitoring)
 - [API](#api)
+- [File access](#file-access)
 - [Running as a service](#running-as-a-service)
 - [Development](#development)
 - [Licence](#licence)
@@ -72,6 +73,7 @@ make help              # all targets
 ```
 
 Output goes to `build/<flavour>/`: `bin/decnetd` (the daemon),
+`bin/dnfal` (the file access listener, see [File access](#file-access)),
 `bin/dnping` (loop test tool) and `lib/libdecnet.a`.
 
 Daemon options:
@@ -312,6 +314,9 @@ conn.data (b"\x00hello")
 print (bytes (conn.recv ()))                               # b"\x01hello"
 conn.disconnect ()
 ```
+
+PathNoWorks (network management, file access and a FUSE mount for Linux)
+is built on this API.
 
 Only the session API is implemented. Anyone who can open the socket can
 make and accept connections as this node, so set the mode accordingly.

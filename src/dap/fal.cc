@@ -190,6 +190,14 @@ FalServer::split_spec (const std::string &spec)
     return comps;
 }
 
+Name FalServer::spec_name (const Found &f)
+{
+    Name n;
+    n.nametype.set (Name::filespec);
+    n.namespec = "/" + (f.rel.empty () ? "" : f.rel + "/") + f.name;
+    return n;
+}
+
 bool FalServer::inside_root (const std::string &path) const
 {
     char *r = ::realpath (path.c_str (), nullptr);
@@ -209,6 +217,17 @@ std::optional<Message> FalServer::next ()
     while (pending_.empty ()) {
         auto b = t_.recv ();
         if (!b) return std::nullopt;
+        if (o_.trace) {
+            // The raw bytes too: what a requester really sent is the first
+            // thing to know when one does something unexpected.
+            std::cerr << "fal< raw";
+            for (std::uint8_t c : *b) {
+                char h[4];
+                std::snprintf (h, sizeof h, " %02x", c);
+                std::cerr << h;
+            }
+            std::cerr << "\n";
+        }
         try {
             pending_ = decode (*b);
         } catch (const std::exception &e) {
@@ -252,8 +271,8 @@ void FalServer::run ()
 
     Config ours;
     ours.bufsiz = 65535;
-    ours.ostype = 192;                  // as PyDECnet
-    ours.filesys = 13;
+    ours.ostype = o_.ostype;
+    ours.filesys = o_.filesys;
     for (unsigned b : { Config::cap_fo_seq, Config::cap_seq_xfer,
                         Config::cap_blocking, Config::cap_len2, Config::cap_dir,
                         Config::cap_dattim_xa, Config::cap_fprot_xa,
@@ -645,11 +664,10 @@ void FalServer::create (const Access &a)
     auto target = new_file (a.filespec);
     if (!target) return;
 
-    // Text if the requester says its records are lines.
-    bool text = attr_
-        && ((attr_->has (Attributes::m_datatype)
-             && attr_->datatype[Attributes::dt_ascii])
-            || attr_->text ());
+    // Text if the records carry line ends in their attributes: carriage
+    // return, FORTRAN or print control.  Not by the data type: VMS calls a
+    // fixed length binary file ASCII too.
+    bool text = attr_ && attr_->text ();
 
     // Written under a temporary name and renamed at close, so a transfer
     // that fails part way leaves any older file as it was.
@@ -703,6 +721,14 @@ void FalServer::create (const Access &a)
                 return status (Status::transfer_error, rms_wer);
             }
         } else if (auto *ac = std::get_if<AccessComplete> (&*m)) {
+            if (ac->cmpfunc == AccessComplete::eos) {
+                // End of stream: VMS says it before closing.  Answer and
+                // wait for the close, as fal.py does when reading.
+                AccessComplete r;
+                r.cmpfunc = AccessComplete::response;
+                send (r);
+                continue;
+            }
             if (ac->cmpfunc == AccessComplete::purge) {
                 abandon ();
             } else {
@@ -733,9 +759,14 @@ void FalServer::erase (const Access &a)
     auto found = find (a.filespec, false);
     if (!found) return;
     if (found->empty ()) return status (Status::open_error, rms_fnf);
-    for (const Found &f : *found)
+    for (const Found &f : *found) {
         if (::unlink (f.path.c_str ()) != 0)
             return status (Status::open_error, rms_prv);
+        // VMS asks for each deleted file's name, and counts the delete a
+        // protocol error without it.  VMS FAL's answer: the name, then an
+        // acknowledge, for each file.
+        if (a.display[Access::d_name]) { send (spec_name (f)); send (Ack {}); }
+    }
     AccessComplete done;
     done.cmpfunc = AccessComplete::response;
     send (done);
@@ -766,6 +797,15 @@ void FalServer::rename (const Access &a)
         return status (Status::open_error, rms_fex);
     if (::rename ((*found)[0].path.c_str (), target->path.c_str ()) != 0)
         return status (Status::open_error, rms_prv);
+    // The old name and the new, when asked: VMS RENAME asks.
+    // The old name and the new, each acknowledged, when asked: VMS RENAME
+    // asks, and this is VMS FAL's own answer.
+    if (a.display[Access::d_name]) {
+        send (spec_name ((*found)[0]));
+        send (Ack {});
+        send (spec_name (*target));
+        send (Ack {});
+    }
     AccessComplete done;
     done.cmpfunc = AccessComplete::response;
     send (done);

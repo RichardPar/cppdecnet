@@ -44,6 +44,12 @@ struct FalOptions {
     std::string root;               // the directory served
     bool        writable = false;   // allow create, erase and rename
     bool        trace = false;      // log each message to stderr
+    // What the Configuration message says we are: VAX/VMS and RMS-32.
+    // PyDECnet says user-defined and ULTRIX-32 (192 and 13), but VMS COPY
+    // will not send a file without carriage control, a binary file, to a
+    // file system it thinks is ULTRIX's.
+    std::uint8_t ostype = 7;
+    std::uint8_t filesys = 3;
 };
 
 class FalServer {
@@ -92,6 +98,9 @@ private:
                                    bool dirop, bool wild);
 
     bool inside_root (const std::string &path) const;
+
+    // A file's full specification, as a Name message.
+    static Name spec_name (const Found &f);
 
     Transport              &t_;
     FalOptions              o_;

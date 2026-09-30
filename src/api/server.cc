@@ -13,7 +13,9 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <condition_variable>
 #include <cstring>
+#include <deque>
 #include <map>
 #include <optional>
 
@@ -32,6 +34,9 @@ namespace {
 // The longest request line accepted.  A session data message is at most a
 // few kilobytes; this is only a guard against a runaway client.
 constexpr std::size_t MAX_LINE = 1 << 20;
+
+// The most output waiting for a client before it counts as not reading.
+constexpr std::size_t MAX_QUEUED = 64u << 20;
 
 bool make_address (const std::string &path, sockaddr_un &a)
 {
@@ -63,26 +68,33 @@ public:
     void start ()
     {
         reader_ = std::thread ([self = shared_from_this ()] { self->read (); });
+        writer_ = std::thread ([self = shared_from_this ()] { self->write (); });
     }
 
-    // Wake the reader and wait for it.  From the reader's own thread, which
-    // is where the last reference can drop, there is nothing to wait for.
+    // Wake both threads and wait for them.  From one of their own threads,
+    // which is where the last reference can drop, there is nothing to wait
+    // for.
     void stop ()
     {
+        {
+            std::lock_guard l (out_m_);
+            closing_ = true;
+        }
+        out_cv_.notify_all ();
         sock_.shutdown ();
-        if (!reader_.joinable ()) return;
-        if (reader_.get_id () == std::this_thread::get_id ())
-            reader_.detach ();
-        else
-            reader_.join ();
+        for (std::thread *t : { &reader_, &writer_ }) {
+            if (!t->joinable ()) continue;
+            if (t->get_id () == std::this_thread::get_id ()) t->detach ();
+            else t->join ();
+        }
     }
 
     bool finished () const noexcept { return done_; }
     bool gone () const noexcept { return gone_; }
 
-    // Send one message.  Any thread.  Never blocks: a client whose socket
-    // buffer is full is not reading, and is dropped rather than allowed to
-    // stall the node.
+    // Send one message.  Any thread.  Never blocks: messages queue for the
+    // writer thread.  A client whose queue passes MAX_QUEUED is not reading,
+    // and is dropped rather than allowed to use up memory.
     void send (const json::Object &o);
 
     // ------------------------------------------------- node thread only
@@ -111,6 +123,7 @@ public:
 
 private:
     void read ();
+    void write ();
 
     json::Object error (const std::string &text) const
     {
@@ -131,9 +144,15 @@ private:
 
     Node             *node_;
     Socket            sock_;
-    std::thread       reader_;
+    std::thread       reader_, writer_;
     std::atomic<bool> done_ { false };
-    std::mutex        write_m_;
+
+    // Messages waiting for the writer thread.
+    std::mutex              out_m_;
+    std::condition_variable out_cv_;
+    std::deque<std::string> outq_;
+    std::size_t             outq_bytes_ = 0;
+    bool                    closing_ = false;
 
     // Node thread state.
     struct Conn {
@@ -284,22 +303,53 @@ void Client::send (const json::Object &o)
     std::string text = o.encode ();
     DN_TRACE ("message to API client: {}", text);
     text += '\n';
-    std::lock_guard l (write_m_);
-    std::size_t off = 0;
-    while (off < text.size ()) {
-        ssize_t n = ::send (sock_.fd (), text.data () + off, text.size () - off,
-                            MSG_NOSIGNAL | MSG_DONTWAIT);
-        if (n < 0 && errno == EINTR) continue;
-        if (n < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK)
-                DN_WARN ("API client is not reading; disconnecting it");
-            else
-                DN_DEBUG ("API send failure: {}", std::strerror (errno));
-            // Part of a line may have gone, so the stream is unusable.
-            sock_.shutdown ();
-            return;
+    {
+        std::lock_guard l (out_m_);
+        if (closing_) return;
+        if (outq_bytes_ + text.size () > MAX_QUEUED) {
+            // A burst of data can run well ahead of a client -- a file
+            // arrives as fast as the far node sends it, and binary data is
+            // six times its size in JSON -- so only a queue this large says
+            // the client has stopped reading.
+            DN_WARN ("API client is not reading ({} bytes waiting); "
+                     "disconnecting it", outq_bytes_);
+            closing_ = true;
+        } else {
+            outq_bytes_ += text.size ();
+            outq_.push_back (std::move (text));
         }
-        off += static_cast<std::size_t> (n);
+    }
+    out_cv_.notify_one ();
+    if (closing_) sock_.shutdown ();
+}
+
+void Client::write ()
+{
+    logging::set_thread_name (node_ ? node_->name () + ".api" : "api");
+    for (;;) {
+        std::string text;
+        {
+            std::unique_lock l (out_m_);
+            out_cv_.wait (l, [&] { return closing_ || !outq_.empty (); });
+            if (closing_) return;
+            text = std::move (outq_.front ());
+            outq_.pop_front ();
+            outq_bytes_ -= text.size ();
+        }
+        std::size_t off = 0;
+        while (off < text.size ()) {
+            ssize_t n = ::send (sock_.fd (), text.data () + off,
+                                text.size () - off, MSG_NOSIGNAL);
+            if (n < 0 && errno == EINTR) continue;
+            if (n <= 0) {
+                DN_DEBUG ("API send failure: {}", std::strerror (errno));
+                std::lock_guard l (out_m_);
+                closing_ = true;
+                sock_.shutdown ();
+                return;
+            }
+            off += static_cast<std::size_t> (n);
+        }
     }
 }
 

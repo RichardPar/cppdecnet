@@ -17,8 +17,8 @@
 //
 // Threading: an accept thread, and one reader thread per client.  Readers
 // parse requests and post them to the node thread, which does all the work
-// and writes replies.  Writes never block the node thread: a client that
-// stops reading until its socket buffer fills is disconnected.
+// and queues replies, which a writer thread per client sends.  Writes never
+// block the node thread; a client that falls 64 MB behind is disconnected.
 
 #ifndef DECNET_API_SERVER_H
 #define DECNET_API_SERVER_H
