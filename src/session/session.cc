@@ -214,6 +214,7 @@ void Session::connect_received (nsp::Connection &c, ByteView payload)
     live.conn->username_ = cd.rqstrid;
     live.conn->password_ = cd.passwrd;
     live.conn->account_ = cd.account;
+    live.conn->proxy_ = cd.proxy;
     live.app = obj->factory ();
     if (!live.app) {
         // The object is going away; an API client that bound it has left.

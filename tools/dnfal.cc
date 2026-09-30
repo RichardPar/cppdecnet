@@ -192,19 +192,30 @@ int main (int argc, char **argv)
     ObjectLink link;
     auto connect = link.wait_connect ();
     if (!connect) return 0;
-    std::string from = connect->str ("destination");
-    std::string user = connect->str ("username");
+    dap::Requester who;
+    who.user = connect->str ("username");
+    who.password = connect->str ("password");
+    const json::Value *px = connect->get ("proxy");
+    who.proxy = px && px->is_bool () && px->as_bool ();
+    who.source_user = connect->str ("srcuser");
+    who.node_name = connect->str ("nodename");
+    who.node_address = connect->str ("destination");
+    std::string from = who.node_name.empty ()
+        ? who.node_address : who.node_name + " (" + who.node_address + ")";
+    std::string user = who.user;
+    if (who.proxy && who.password.empty ())
+        user = (user.empty () ? who.source_user : user) + " by proxy";
 
     if (!users_file.empty ()) {
         // Read the file for each connection, so changes apply at once.
-        std::optional<dap::FalUser> who;
+        std::optional<dap::FalUser> auth;
         try {
             auto users = dap::FalUsers::load (users_file, opts.root);
-            who = users.authenticate (user, connect->str ("password"));
+            auth = users.authenticate (who);
         } catch (const std::exception &e) {
             log (40, e.what ());
         }
-        if (!who) {
+        if (!auth) {
             log (30, "access control rejected for "
                      + (user.empty () ? std::string ("anonymous") : "user " + user)
                      + " from " + from);
@@ -213,8 +224,10 @@ int main (int argc, char **argv)
             link.reject (BAD_AUTH);
             return 0;
         }
-        opts.root = who->root;
-        opts.writable = who->writable;
+        opts.root = auth->root;
+        opts.writable = auth->writable;
+        if (who.proxy && who.password.empty ())
+            user += " as " + auth->name;
     }
 
     link.accept ();

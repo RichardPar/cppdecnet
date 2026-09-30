@@ -97,3 +97,110 @@ DN_TEST (fal_users, mistakes_name_their_line)
     DN_ASSERT_EQ (error ("u - a ro\nU - b ro\n"),
                   std::string ("f line 2: user U twice"));
 }
+
+// ------------------------------------------------------------------ proxy
+
+namespace {
+
+FalUsers proxies (bool with_default)
+{
+    return FalUsers::parse (
+        "richard " + hash_password ("secret") + " home rw\n"
+        "guest   -   pub  ro\n"
+        + std::string (with_default ? "*  -  anon ro\n" : "")
+        + "proxy VMSNOD::RICHARD richard\n"
+        "proxy VMSNOD::* guest\n"
+        "proxy *::SYSTEM -\n"
+        "proxy 1.5::OPER richard\n",
+        "/srv");
+}
+
+Requester proxy (const std::string &node, const std::string &user,
+                 const std::string &addr = "1.2")
+{
+    Requester r;
+    r.proxy = true;
+    r.user = user;
+    r.node_name = node;
+    r.node_address = addr;
+    return r;
+}
+
+}   // namespace
+
+DN_TEST (fal_users, proxy_picks_the_most_specific_line)
+{
+    FalUsers u = proxies (false);
+    auto a = u.authenticate (proxy ("vmsnod", "richard"));
+    DN_ASSERT (a.has_value ());
+    DN_ASSERT_EQ (a->name, std::string ("RICHARD"));
+    DN_ASSERT (a->writable);
+
+    // Anyone else from that node gets the node's line.
+    auto b = u.authenticate (proxy ("VMSNOD", "FRED"));
+    DN_ASSERT (b.has_value ());
+    DN_ASSERT_EQ (b->name, std::string ("GUEST"));
+
+    // A node by address.
+    auto c = u.authenticate (proxy ("", "OPER", "1.5"));
+    DN_ASSERT (c.has_value ());
+    DN_ASSERT_EQ (c->name, std::string ("RICHARD"));
+}
+
+DN_TEST (fal_users, proxy_can_be_refused_and_falls_back_to_the_default)
+{
+    FalUsers none = proxies (false);
+    // SYSTEM is refused from any node without a line of its own ...
+    DN_ASSERT (!none.authenticate (proxy ("OTHER", "SYSTEM")));
+    // ... but a line for the node outranks one for the user, as in
+    // DECnet-VAX's order: node::user, node::*, *::user, *::*.
+    DN_ASSERT_EQ (none.authenticate (proxy ("VMSNOD", "SYSTEM"))->name,
+                  std::string ("GUEST"));
+    // Unknown node and user, and no default account: refused.
+    DN_ASSERT (!none.authenticate (proxy ("OTHER", "FRED")));
+
+    FalUsers with = proxies (true);
+    auto d = with.authenticate (proxy ("OTHER", "FRED"));
+    DN_ASSERT (d.has_value ());
+    DN_ASSERT_EQ (d->name, std::string ("*"));
+    DN_ASSERT (!with.authenticate (proxy ("OTHER", "SYSTEM")));
+}
+
+DN_TEST (fal_users, a_proxy_name_is_not_a_login)
+{
+    // RICHARD by proxy from a node with no line for him is not the local
+    // RICHARD, whose password it does not have.
+    FalUsers u = proxies (true);
+    auto a = u.authenticate (proxy ("ELSEWHERE", "RICHARD"));
+    DN_ASSERT (a.has_value ());
+    DN_ASSERT_EQ (a->name, std::string ("*"));
+
+    // With a password it is an ordinary login, proxy flag or not.
+    Requester r = proxy ("ELSEWHERE", "richard");
+    r.password = "secret";
+    DN_ASSERT_EQ (u.authenticate (r)->name, std::string ("RICHARD"));
+    r.password = "wrong";
+    DN_ASSERT (!u.authenticate (r));
+}
+
+DN_TEST (fal_users, proxy_user_may_come_from_the_source_end_user)
+{
+    FalUsers u = proxies (false);
+    Requester r = proxy ("VMSNOD", "");
+    r.source_user = "[200,201]RICHARD";
+    auto a = u.authenticate (r);
+    DN_ASSERT (a.has_value ());
+    DN_ASSERT_EQ (a->name, std::string ("RICHARD"));
+}
+
+DN_TEST (fal_users, a_proxy_must_name_a_known_user)
+{
+    bool threw = false;
+    try { FalUsers::parse ("proxy A::B nobody\n", "/r", "f"); }
+    catch (const std::runtime_error &e) {
+        threw = std::string (e.what ()).find ("NOBODY") != std::string::npos;
+    }
+    DN_ASSERT (threw);
+    DN_ASSERT_THROWS (std::runtime_error,
+                      FalUsers::parse ("proxy NOSEP guest\nguest - p ro\n", "/r"));
+}

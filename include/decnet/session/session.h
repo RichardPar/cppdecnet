@@ -81,6 +81,10 @@ public:
     const std::string &password () const noexcept { return password_; }
     const std::string &account () const noexcept { return account_; }
 
+    // The requester asked for proxy access: the user name, or the source
+    // end user, names who it is at its node, and there is no password.
+    bool proxy () const noexcept { return proxy_; }
+
 private:
     friend class Session;
 
@@ -88,6 +92,7 @@ private:
     nsp::Connection *conn_;
     EndUser          dstname_, srcname_;
     std::string      username_, password_, account_;
+    bool             proxy_ = false;
 };
 
 // The object database entry: how to make an application for a connection.

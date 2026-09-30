@@ -78,7 +78,8 @@ known defects in [BUGS.md](BUGS.md).
       directory and read/write)
 - [ ] PAM login and running as that user, for a decnetd run as root, as
       PyDECnet does
-- [ ] Proxy access (VMS sends the local user name and no password)
+- [x] Proxy access: proxy lines in dnfal's user file.  Check against VMS
+      which field carries the remote user (RQSTRID or the source end user)
 - [ ] dnfal: block mode and record access, append, submit/execute
 - [ ] More than one node per process (`src/main/main.cc`)
 - [ ] Background name resolution

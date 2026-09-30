@@ -24,8 +24,11 @@ occasionally, a different test each time. Seen so far: `test_nsp`
 (`out_of_order_segments_are_held_not_dropped`,
 `closed_connections_are_reclaimed`,
 `xoff_stops_transmission_and_xon_resumes_it`), `test_counters`
-(`nsp_node_counters_follow_a_conversation`) and `test_ddcmp`
-(`two_nodes_come_up_over_a_tcp_ddcmp_circuit`).
+(`nsp_node_counters_follow_a_conversation`), `test_ddcmp`
+(`two_nodes_come_up_over_a_tcp_ddcmp_circuit`), `test_session`
+(`finished_conversations_are_reclaimed`, once at load average 2.7, then
+0 in 5) and `test_lan` (`a_neighbour_that_stops_sending_hellos_is_dropped`,
+once in the sanitizer build while other builds ran).
 
 It is load, not any one change. `test_nsp` measured 1/10 on an unmodified
 tree at 06e79dc. `two_nodes_come_up_over_a_tcp_ddcmp_circuit` looked like

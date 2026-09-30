@@ -526,6 +526,10 @@ std::int64_t Client::add_inbound (SessionConnection &c, std::int64_t listen,
     if (!c.username ().empty ()) o.set ("username", c.username ());
     if (!c.password ().empty ()) o.set ("password", c.password ());
     if (!c.account ().empty ())  o.set ("account", c.account ());
+    if (c.proxy ()) o.set ("proxy", true);
+    if (const Nodeinfo *n = node_->find_node (c.remote (), false);
+        n && !n->name.empty ())
+        o.set ("nodename", n->name);
     send_session (std::move (o));
     return h;
 }

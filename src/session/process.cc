@@ -270,6 +270,13 @@ void ProcessApplication::connect_received (SessionConnection &c, ByteView data)
     if (!c.username ().empty ()) o.set ("username", c.username ());
     if (!c.password ().empty ()) o.set ("password", c.password ());
     if (!c.account ().empty ())  o.set ("account", c.account ());
+    // Extensions to PyDECnet's message, for programs that check access
+    // themselves: proxy requests, and the requesting node by name.
+    if (c.proxy ()) o.set ("proxy", true);
+    if (node_)
+        if (const Nodeinfo *n = node_->find_node (c.remote (), false);
+            n && !n->name.empty ())
+            o.set ("nodename", n->name);
     send (o);
 }
 

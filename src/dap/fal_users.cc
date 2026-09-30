@@ -92,6 +92,15 @@ FalUsers FalUsers::parse (const std::string &text, const std::string &base,
             return std::runtime_error (source + " line " + std::to_string (n)
                                        + ": " + why);
         };
+        if (w[0] == "proxy" && w.size () == 3) {
+            auto sep = w[1].find ("::");
+            if (sep == std::string::npos || sep == 0 || sep + 2 == w[1].size ())
+                throw bad ("expected: proxy NODE::USER localuser");
+            out.proxies_.push_back (Proxy {
+                upper (w[1].substr (0, sep)), upper (w[1].substr (sep + 2)),
+                w[2] == "-" || w[2] == "*" ? w[2] : upper (w[2]) });
+            continue;
+        }
         if (w.size () != 4)
             throw bad ("expected: user hash directory ro|rw");
         FalUser u;
@@ -106,7 +115,55 @@ FalUsers FalUsers::parse (const std::string &text, const std::string &base,
             if (o.name == u.name) throw bad ("user " + u.name + " twice");
         out.users_.push_back (std::move (u));
     }
+    for (const Proxy &p : out.proxies_)
+        if (p.local != "-" && !out.find (p.local))
+            throw std::runtime_error (source + ": proxy " + p.node + "::"
+                                      + p.user + " names " + p.local
+                                      + ", who is not in the file");
     return out;
+}
+
+const FalUser *FalUsers::find (const std::string &name) const
+{
+    for (const FalUser &u : users_)
+        if (u.name == name) return &u;
+    return nullptr;
+}
+
+std::optional<FalUser> FalUsers::authenticate (const Requester &r) const
+{
+    if (!r.proxy || !r.password.empty ())
+        return authenticate (r.user, r.password);
+
+    // Proxy: who the user is at the far end.  DNA puts it in the access
+    // control user name; some implementations leave that empty and send
+    // only the source end user, possibly with a UIC in front.
+    std::string who = r.user;
+    if (who.empty ()) {
+        who = r.source_user;
+        if (auto b = who.find (']'); b != std::string::npos) who.erase (0, b + 1);
+    }
+    who = upper (who);
+    std::string name = upper (r.node_name), addr = r.node_address;
+    auto node_is = [&] (const std::string &n) {
+        return !n.empty () && (n == name || n == addr);
+    };
+
+    const Proxy *best = nullptr;
+    int best_rank = 0;
+    for (const Proxy &p : proxies_) {
+        bool nm = node_is (p.node), nw = p.node == "*";
+        bool um = !who.empty () && p.user == who, uw = p.user == "*";
+        int rank = nm && um ? 4 : nm && uw ? 3 : nw && um ? 2 : nw && uw ? 1 : 0;
+        if (rank > best_rank) { best = &p; best_rank = rank; }
+    }
+    if (best) {
+        if (best->local == "-") return std::nullopt;
+        if (const FalUser *u = find (best->local)) return *u;
+    }
+    // No proxy: the default account, if there is one.
+    if (const FalUser *u = find ("*")) return *u;
+    return std::nullopt;
 }
 
 std::optional<FalUser> FalUsers::authenticate (const std::string &user,

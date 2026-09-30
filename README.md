@@ -368,6 +368,23 @@ GUEST     -                  pub              ro
 - Names match without regard to case. A password that fails as sent is
   tried in lower case, since VMS upper-cases one typed without quotes.
 
+Proxy lines let users on other nodes in without a password, as a VMS
+proxy database does. A proxy request names who the user is at its node;
+the most specific line wins (node and user, then node, then user, then
+`*::*`), and `-` refuses:
+
+```
+proxy   VMSNOD::RICHARD   richard
+proxy   VMSNOD::*         guest
+proxy   *::SYSTEM         -
+```
+
+With no matching line a proxy request gets the `*` entry, as VMS falls
+back to its default account, or is refused if there is none. A proxy
+request's user name is never taken as a user in the file. Proxy access
+trusts the far node to say truthfully who its user is, as DECnet always
+has.
+
 A refused connection is rejected with reason 34, which VMS shows as
 invalid login information, after a second's delay, and logged. The file is
 read for each connection, so changes apply at once. It is dnfal's own:
