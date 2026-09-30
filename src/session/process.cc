@@ -290,6 +290,18 @@ void ProcessApplication::interrupt_received (SessionConnection &c,
     send (o);
 }
 
+void ProcessApplication::run_state (SessionConnection &c)
+{
+    // PyDECnet's connectors wait for this after accepting: FAL, for one,
+    // treats any other message as the link failing.
+    conn_ = &c;
+    json::Object o;
+    o.set ("handle", handle_);
+    o.set ("data", "");
+    o.set ("type", "runstate");
+    send (o);
+}
+
 void ProcessApplication::disconnected (SessionConnection &c, unsigned reason)
 {
     conn_ = &c;

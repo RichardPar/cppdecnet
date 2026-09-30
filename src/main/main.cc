@@ -126,6 +126,10 @@ int main (int argc, char **argv)
             return bad ? 1 : 0;
         }
 
+        // An object program that exits leaves a pipe with no reader.  Writing
+        // to it must fail with EPIPE, not kill the node.
+        std::signal (SIGPIPE, SIG_IGN);
+
         // Handle shutdown signals with sigwait on this thread; the work queue is
         // not async-signal-safe.
         sigset_t stopset;
