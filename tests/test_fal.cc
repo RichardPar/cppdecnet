@@ -387,3 +387,30 @@ DN_TEST (fal, erase_and_rename)
     DN_ASSERT_EQ (last_status (r), std::string ("4:55"));   // file exists
     DN_ASSERT (t.exists ("kept.txt"));
 }
+
+DN_TEST (fal, a_wildcard_open_offers_each_file_in_turn)
+{
+    Tree t;
+    t.file ("a.txt", "first");
+    t.file ("b.txt", "second");
+    t.file ("c.dat", "other");
+    Script s;
+    // Skip the first by closing before connecting; read the second.
+    s << v7 () << access (Access::open, "*.TXT")
+      << complete (AccessComplete::close)
+      << control (Control::connect) << control (Control::get)
+      << complete (AccessComplete::close);
+    FalServer (s, { t.root }).run ();
+
+    auto names = s.all<Name> ();
+    DN_ASSERT_EQ (names.size (), 4u);           // volume, directory, a, b
+    DN_ASSERT (names[0].nametype[Name::volname]);
+    DN_ASSERT (names[1].nametype[Name::dirname]);
+    DN_ASSERT_EQ (names[2].namespec, std::string ("a.txt"));
+    DN_ASSERT_EQ (names[3].namespec, std::string ("b.txt"));
+    auto d = s.all<Data> ();
+    DN_ASSERT_EQ (d.size (), 1u);
+    DN_ASSERT_EQ (Bytes (d[0].payload.begin (), d[0].payload.begin () + 6),
+                  bytes_of ("second"));
+    DN_ASSERT (std::holds_alternative<AccessComplete> (s.out.back ()));
+}

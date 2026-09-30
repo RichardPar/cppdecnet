@@ -541,7 +541,23 @@ void FalServer::get (const Access &a)
     bool implied = attr_ && attr_->has (Attributes::m_rat)
                 && attr_->rat[Attributes::rat_cr];
 
+    // A wildcard gets volume and directory names first, as in a listing.
+    if (wild && !found->empty ()) {
+        Name vol;
+        vol.nametype.set (Name::volname);
+        send (vol);
+    }
+    std::string dir;
+    bool first = true;
     for (const Found &f : *found) {
+        if (wild && (first || f.rel != dir)) {
+            Name dn;
+            dn.nametype.set (Name::dirname);
+            dn.namespec = "/" + (f.rel.empty () ? "" : f.rel + "/");
+            send (dn);
+            dir = f.rel;
+            first = false;
+        }
         for (const Message &m : describe (f, a, false, wild)) send (m);
         send (Ack {});
 
