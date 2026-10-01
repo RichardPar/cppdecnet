@@ -11,8 +11,6 @@
 
 namespace decnet {
 
-namespace {
-
 std::string default_api_socket ()
 {
 #ifdef _WIN32
@@ -22,6 +20,8 @@ std::string default_api_socket ()
 #endif
     return "/tmp/decnetapi.sock";
 }
+
+namespace {
 
 unsigned to_uint (const std::string &s, const char *what)
 {

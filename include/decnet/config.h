@@ -138,6 +138,11 @@ struct LoggingConfig {
     std::string events;          // event list, empty for the default
 };
 
+// Where the API socket is when the "api" line names none and $DECNETAPI is
+// unset: /tmp/decnetapi.sock, as PyDECnet has it, or decnetapi.sock in the
+// temporary directory on Windows.  Clients use it to find the server.
+std::string default_api_socket ();
+
 class Config {
 public:
     // Read a PyDECnet configuration file.  Throws std::runtime_error with a
