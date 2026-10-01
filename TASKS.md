@@ -73,7 +73,7 @@ known defects in [BUGS.md](BUGS.md).
 
 ## Monitoring and API
 
-- [ ] Delete or wire up `src/http/monitor.cc`, which nothing instantiates
+- [x] Delete `src/http/monitor.cc`, an older monitoring interface nothing used
 - [ ] `logging` pages are empty: `EventLogger::nice_read` is a stub
 - [ ] Per-connection NSP page, event display, bridge page
 - [ ] HTTPS
