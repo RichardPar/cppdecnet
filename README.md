@@ -48,7 +48,7 @@ Ethernet segment.
 
 Not implemented yet: Phase II and Phase III neighbours, NICE SET and
 ZERO, the MOP console carrier, access control checking, the API's
-node, nsp, routing and mop requests, and the bridge. See [TASKS.md](TASKS.md),
+node, nsp and routing requests, and the bridge. See [TASKS.md](TASKS.md),
 [NOTDONE.md](NOTDONE.md) and [BUGS.md](BUGS.md).
 
 ## Quick start
@@ -314,6 +314,25 @@ conn.data (b"\x00hello")
 print (bytes (conn.recv ()))                               # b"\x01hello"
 conn.disconnect ()
 ```
+
+The `mop` API works on Ethernet circuits with `--mop`. A node that runs
+only MOP, with no `routing` line, still has an API, offering only `mop`.
+`circuit` names the circuit; it can be left out when there is only one.
+A station (`dest`) is an Ethernet address, or a node name or address,
+which stands for its DECnet Ethernet address.
+
+| Request `type` | Fields | Reply |
+|---|---|---|
+| `get` | | `circuits`: each one's `name`, `hwaddr`, `macaddr`, `services` |
+| `sysid` | `circuit` | `sysid`: every station heard, with its `srcaddr`, `software`, `device`, `processor`, `services`... and `age` in seconds |
+| `sysid` | `dest`, `timeout` | asks that station: `status` `ok` with `sysid`, or `timeout` |
+| `counters` | `dest`, `timeout` | `status`, and the station's Ethernet counters |
+| `loop` | `dest` (one, a list of up to three, or none for the loopback multicast), `timeout`, `packets`, `fast` | `status`, `dest` (who answered), `delays`: each round trip in seconds, -1 for none |
+
+The replies to requests that ask another station come when it answers,
+matched to the request by its `tag`. `timeout` is in seconds, 1 to 60,
+default 3. A loop of several packets pauses a second after each answer,
+as PyDECnet does, unless `fast` is true.
 
 PathNoWorks (network management, file access and a FUSE mount for Linux)
 is built on this API.

@@ -1,7 +1,7 @@
 // decnet/mop/mop.h -- the MOP layer.
 //
 // Port of the handler classes in mop.py.  One MopCircuit per Ethernet
-// circuit, with a system ID handler on 60-01 and a loopback handler on
+// circuit, with a system ID handler on 60-02 and a loopback handler on
 // 90-00.  A circuit can also ask other stations things -- who they are,
 // their counters, to loop a message -- and wait for the answer, which is
 // what the API's "mop" requests use.

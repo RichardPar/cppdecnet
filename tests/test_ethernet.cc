@@ -320,10 +320,11 @@ DN_TEST (eth, filter_expression_names_every_address_and_protocol)
     DN_ASSERT (dl != nullptr);
 
     std::string f = dl->filter_expression ();
-    // Routing and MOP both have ports, and both protocol types must be in
-    // the expression or the kernel would drop traffic we asked for.
+    // Routing and MOP (remote console, 60-02) both have ports, and both
+    // protocol types must be in the expression or the kernel would drop
+    // traffic we asked for.
     DN_ASSERT (f.find ("ether proto 0x6003") != std::string::npos);
-    DN_ASSERT (f.find ("ether proto 0x6001") != std::string::npos);
+    DN_ASSERT (f.find ("ether proto 0x6002") != std::string::npos);
     // Our own address, the routing multicast we listen on, and broadcast.
     DN_ASSERT (f.find ("ether dst aa-00-04-00-01-04") != std::string::npos);
     DN_ASSERT (f.find ("ether dst ff-ff-ff-ff-ff-ff") != std::string::npos);

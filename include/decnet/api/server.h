@@ -9,11 +9,13 @@
 //     {"api":"session","type":"connect","dest":"MIM","remuser":17,"tag":1}
 //     {"api":"session","type":"data","handle":3,"data":"..."}
 //
-// Implemented: the system list and the "session" API (connect, bind,
-// accept, reject, data, interrupt, disconnect, abort).
+// Implemented: the system list; the "session" API (connect, bind,
+// accept, reject, data, interrupt, disconnect, abort); and the "mop" API
+// (get, sysid, counters, loop), with a "dest" on sysid to ask one station,
+// and node names accepted as stations.  A node with MOP but no routing
+// still has the API, with only "mop".
 //
-// PORT: the node, nsp, routing, mop and ncp APIs, which answer with nested
-// objects that common/json.h does not build yet.
+// PORT: the node, nsp, routing and ncp APIs, and MOP's console carrier.
 //
 // Threading: an accept thread, and one reader thread per client.  Readers
 // parse requests and post them to the node thread, which does all the work

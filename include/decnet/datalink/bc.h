@@ -20,9 +20,12 @@ namespace decnet::datalink {
 
 class BcDatalink;
 
-// The DEC Ethernet protocol types.  Ports of common.MOPDLPROTO and
-// ROUTINGPROTO.
+// The DEC Ethernet protocol types.  Ports of common.MOPDLPROTO,
+// MOPCONSPROTO and ROUTINGPROTO.  MOP's system ID, counters and console
+// carrier are on the remote console protocol, 60-02; 60-01 is load and
+// dump.
 inline constexpr std::uint16_t MOPDL_PROTO   = 0x6001;
+inline constexpr std::uint16_t MOPCONS_PROTO = 0x6002;
 inline constexpr std::uint16_t ROUTING_PROTO = 0x6003;
 
 // The multicast addresses the routing layer uses.  Ports of the constants

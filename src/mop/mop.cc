@@ -10,7 +10,7 @@
 
 namespace decnet::mop {
 
-using datalink::MOPDL_PROTO;
+using datalink::MOPCONS_PROTO;
 
 namespace {
 
@@ -281,7 +281,7 @@ MopCircuit::MopCircuit (Element *parent, std::string name,
 {
     // The circuit owns the port and forwards to the handler, which is created
     // later.  The loop handler creates its own port.
-    datalink::BcPort *p = dl->create_bc_port (this, MOPDL_PROTO);
+    datalink::BcPort *p = dl->create_bc_port (this, MOPCONS_PROTO);
     sysid_ = std::make_unique<SysIdHandler> (this, p);
     loop_  = std::make_unique<LoopHandler> (this, dl);
     DN_DEBUG ("MOP initialized on circuit {}", name_);

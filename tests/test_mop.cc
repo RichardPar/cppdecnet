@@ -428,3 +428,26 @@ DN_TEST (mop, stopping_answers_what_is_still_waiting)
     DN_ASSERT (wait_until ([&] { return answers == 1; }));
     DN_ASSERT (!any);
 }
+
+DN_TEST (mop, rsx_system_id_with_trailing_junk)
+{
+    // What BAJI, RSX-11M-PLUS on a PDP-11, sent in answer to a request
+    // ID: its length counts the request's padding, so it ends in sixteen
+    // bytes of our 'B's, which read as an item longer than the message.
+    Bytes wire { 0x07, 0x00, 0x06, 0x00,
+                 0x01, 0x00, 0x03, 0x03, 0x00, 0x00,          // version 3.0.0
+                 0x02, 0x00, 0x02, 0x00, 0x00,                // functions
+                 0x07, 0x00, 0x06, 0xaa, 0x00, 0x04, 0x00, 0x9f, 0x74,
+                 0x64, 0x00, 0x01, 0x01 };                    // device UNA
+    wire.insert (wire.end (), 16, 0x42);
+    auto p = MopPacketBase::parse_frame (wire);
+    DN_ASSERT (p != nullptr);
+    auto *s = dynamic_cast<SysId *> (p.get ());
+    DN_ASSERT (s != nullptr);
+    DN_ASSERT_EQ (s->receipt, 6);
+    DN_ASSERT (s->version.has_value () && *s->version == (Version { 3, 0, 0 }));
+    DN_ASSERT (s->hwaddr.has_value ());
+    DN_ASSERT_EQ ((*s->hwaddr)[4], 0x9f);
+    DN_ASSERT (s->device.has_value () && *s->device == 1);
+    DN_ASSERT (s->services ().empty ());
+}
