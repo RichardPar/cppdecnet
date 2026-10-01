@@ -252,9 +252,18 @@ struct TlvGroup {
             }
             unsigned    tag  = static_cast<unsigned> (d.uint (TagLen));
             std::size_t vlen = static_cast<std::size_t> (d.uint (LenLen));
-            if (d.remaining () < vlen)
+            if (d.remaining () < vlen) {
+                if constexpr (T == Tolerant::yes) {
+                    // Tolerant mode: an item longer than what is left is
+                    // junk, not a message to throw away.  RSX-11M-PLUS
+                    // counts the requester's padding into its system ID,
+                    // which then ends in a few bytes of nonsense.
+                    (void) d.rest ();
+                    return;
+                }
                 throw MissingData ("TLV item " + std::to_string (tag)
                                    + " extends beyond the end of the buffer");
+            }
             ByteView value = d.raw (vlen);
 
             bool handled = false;

@@ -44,6 +44,9 @@ public:
     // default rather than being pure.
     virtual void interrupt_received (SessionConnection &, ByteView) {}
 
+    // An inbound connection this application accepted is now running.
+    virtual void run_state (SessionConnection &) {}
+
     // The link is gone.  The connection is already closed.
     virtual void disconnected (SessionConnection &c, unsigned reason) {}
 };
@@ -72,12 +75,24 @@ public:
     const EndUser &destination () const noexcept { return dstname_; }
     const EndUser &source () const noexcept { return srcname_; }
 
+    // Access control from an inbound connect, as sent.  Nothing checks it
+    // yet; an object may.  Empty for outbound connections.
+    const std::string &username () const noexcept { return username_; }
+    const std::string &password () const noexcept { return password_; }
+    const std::string &account () const noexcept { return account_; }
+
+    // The requester asked for proxy access: the user name, or the source
+    // end user, names who it is at its node, and there is no password.
+    bool proxy () const noexcept { return proxy_; }
+
 private:
     friend class Session;
 
     Session         *parent_;
     nsp::Connection *conn_;
     EndUser          dstname_, srcname_;
+    std::string      username_, password_, account_;
+    bool             proxy_ = false;
 };
 
 // The object database entry: how to make an application for a connection.
@@ -102,6 +117,11 @@ public:
     void add_object (std::uint8_t number, std::string name,
                      ApplicationFactory factory);
 
+    // Withdraw an object registered with add_object.  Conversations it
+    // already has carry on.  Used by the API when a client that bound an
+    // object goes away.
+    void remove_object (std::uint8_t number, const std::string &name);
+
     const Object *find_object (std::uint8_t number) const;
     const Object *find_object (const std::string &name) const;
     std::size_t object_count () const noexcept { return objects_.size (); }
@@ -123,6 +143,7 @@ public:
                            ByteView data) override;
     void data_received (nsp::Connection &c, ByteView data) override;
     void interrupt_received (nsp::Connection &c, ByteView data) override;
+    void run_state (nsp::Connection &c) override;
     void disconnected (nsp::Connection &c, unsigned reason,
                        ByteView data) override;
 

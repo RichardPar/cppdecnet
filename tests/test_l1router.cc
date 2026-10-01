@@ -252,14 +252,14 @@ DN_TEST (l1, return_to_sender_turns_an_undeliverable_packet_round)
     n.start ();
 
     // Unreachable destination, but the sender asked for it back -- and the
-    // sender is us, so it comes straight back up.
+    // sender is us, so it comes back up, by way of the work queue.
     ShortData pkt;
     pkt.dstnode = Nodeid::parse ("1.99");
     pkt.srcnode = Nodeid::parse ("1.1");
     pkt.rqr     = true;
     r->forward (pkt);
 
-    DN_ASSERT_EQ (r->packets_for_us (), 1u);
+    DN_ASSERT (wait_until ([&] { return r->packets_for_us () == 1u; }));
     DN_ASSERT_EQ (r->unreach_loss (), 0u);
 
     n.stop ();

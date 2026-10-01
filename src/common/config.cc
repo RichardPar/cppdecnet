@@ -3,6 +3,7 @@
 #include "decnet/common/logging.h"
 
 #include <charconv>
+#include <cstdlib>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
@@ -216,6 +217,25 @@ void Config::apply (ConfigLine line)
         return;
     }
 
+    if (line.command == "api") {
+        // api [socket] [--mode octal].  Defaults as config.py: $DECNETAPI
+        // or /tmp/decnetapi.sock, mode 666.
+        const char *env = std::getenv ("DECNETAPI");
+        api_socket_ = !line.positional.empty () ? line.positional[0]
+                    : env ? env : "/tmp/decnetapi.sock";
+        if (has (line, "mode")) {
+            std::string m = opt (line, "mode", empty);
+            unsigned v = 0;
+            auto [ptr, ec] = std::from_chars (m.data (), m.data () + m.size (),
+                                              v, 8);
+            if (ec != std::errc () || ptr != m.data () + m.size () || v > 0777)
+                throw std::runtime_error ("Invalid octal number in --mode: "
+                                          + m);
+            api_mode_ = v;
+        }
+        return;
+    }
+
     if (line.command == "http") {
         // --https-port is accepted and ignored.
         if (has (line, "http-port"))
@@ -377,7 +397,7 @@ void Config::apply (ConfigLine line)
         return;
     }
 
-    // PORT: commands for unported layers (bridge, api, ...) are kept so
+    // PORT: commands for unported layers (bridge, ...) are kept so
     // PyDECnet configuration files load.
     unhandled_.push_back (std::move (line));
 }

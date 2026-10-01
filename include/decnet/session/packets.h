@@ -18,6 +18,8 @@ using namespace decnet::packet;
 // Disconnect and reject reason codes.  Ports of the constants at the top
 // of session.py.
 enum Reason : std::uint16_t {
+    APPLICATION = 0,  // application reject or disconnect
+    UNK_NODE  = 2,    // unrecognized node name
     NO_OBJ    = 4,    // destination end user does not exist
     BAD_FMT   = 5,    // connect message format error
     BAD_NODE  = 10,   // invalid node name format

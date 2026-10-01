@@ -27,6 +27,13 @@ Connection::Connection (NSP *parent, std::uint16_t srcaddr, Nodeid dest)
 {
     segsize_ = MSS;
     qmax_ = parent->qmax ();
+    ssthresh_ = static_cast<double> (qmax_);
+}
+
+unsigned Connection::window () const noexcept
+{
+    unsigned w = static_cast<unsigned> (cwnd_);
+    return std::max (1u, std::min (w, qmax_));
 }
 
 std::string Connection::statename () const
@@ -133,8 +140,13 @@ void Connection::start_outbound (Bytes payload)
     e.txtime = std::chrono::steady_clock::now ();
     txq_.push_back (std::move (e));
     send (ci_pkt);
-    timer_is_retransmit_ = false;
-    arm_timer (conn_timeout_);
+    // Retransmitted until acknowledged, as PyDECnet does by queueing it on
+    // the data subchannel.  A router with an adjacency to us but no routing
+    // message from us yet drops its answer as unreachable; retransmission
+    // is what gets the link up once routing converges.
+    retries_ = 0;
+    timer_is_retransmit_ = true;
+    arm_timer (acktimeout ());
 }
 
 void Connection::start_inbound (const ConnInit &pkt)
@@ -176,11 +188,19 @@ void Connection::accept (Bytes data, std::uint8_t fcopt)
     cc_pkt.info     = parent_->nsp_version ();
     cc_pkt.segsize  = MSS;
     cc_pkt.data_ctl = std::move (data);
-    send (cc_pkt);
 
     set_state (DN_MY_STATE (Connection, cc));
-    arm_timer (conn_timeout_);
-    timer_is_retransmit_ = false;
+    // The confirm is sequence number 0, like the connect initiate, and is
+    // retransmitted until the far end shows it arrived (see cc).
+    TxEntry e;
+    e.seq   = Seq (0);
+    e.frame = cc_pkt.encode_packet ();
+    e.sent  = true;
+    txq_.push_back (std::move (e));
+    send (cc_pkt);
+    retries_ = 0;
+    timer_is_retransmit_ = true;
+    arm_timer (acktimeout ());
 }
 
 void Connection::reject (unsigned reason, Bytes data)
@@ -283,9 +303,11 @@ bool Connection::flow_ok (const TxEntry &e) const
     if (!xon_) return false;
 
     // The window: at most qmax segments outstanding, measured from the
-    // oldest unacknowledged one.
-    unsigned maxq = txq_.empty () ? qmax_ - 1
-                                  : txq_.front ().segnum + qmax_ - 1;
+    // oldest unacknowledged one, and fewer while the congestion window is
+    // smaller.
+    unsigned w = window ();
+    unsigned maxq = txq_.empty () ? w - 1
+                                  : txq_.front ().segnum + w - 1;
     if (e.segnum > maxq) return false;
 
     switch (flow_) {
@@ -369,14 +391,24 @@ void Connection::process_ack (Seq num)
 {
     // Acknowledge everything up to num that has been sent.
     bool progress = false;
+    unsigned acked = 0;
     while (!txq_.empty () && txq_.front ().sent && !(num < txq_.front ().seq)) {
         max_acked_seg_ = txq_.front ().segnum;
+        if (txq_.front ().is_data) ++acked;
         // If this was the packet being timed, the round trip is now known.
         update_delay (txq_.front ().txtime);
         txq_.pop_front ();
         progress = true;
     }
+    // Open the congestion window: quickly below the threshold, then by
+    // about one segment per window's worth acknowledged.
+    for (unsigned i = 0; i < acked; ++i) {
+        if (cwnd_ < ssthresh_) cwnd_ += 1.0;
+        else                   cwnd_ += 1.0 / cwnd_;
+    }
+    cwnd_ = std::min (cwnd_, static_cast<double> (qmax_));
     highest_acked_ = num;
+    if (progress) nak_from_.reset ();
     if (progress) {
         // Progress resets the retransmit count and restarts the timer.  PyDECnet
         // counts retries per packet; this implementation has one count per
@@ -403,8 +435,34 @@ void Connection::route_ack (const std::optional<AckNum> &a, bool on_data)
     // A cross acknowledgement refers to the subchannel the packet did not
     // arrive on.
     bool for_data = a->is_cross () ? !on_data : on_data;
-    if (for_data) process_ack (a->num);
-    else          process_int_ack (a->num);
+    if (for_data) {
+        process_ack (a->num);
+        if (a->is_nak ()) process_nak ();
+    } else {
+        process_int_ack (a->num);
+    }
+}
+
+// A negative acknowledgement: the far end has everything up to the number
+// it gave (process_ack has dealt with that) and lost what came next.  Send
+// it again now, rather than when the retransmit timer runs out, and take
+// it as congestion: halve the window.  VMS sends these when segments
+// arrive beyond a gap.
+void Connection::process_nak ()
+{
+    if (txq_.empty () || !txq_.front ().sent) return;
+    if (nak_from_ && *nak_from_ == txq_.front ().seq) return;
+    nak_from_ = txq_.front ().seq;
+
+    ssthresh_ = std::max (2.0, static_cast<double> (in_flight ()) / 2.0);
+    cwnd_ = ssthresh_;
+    for (TxEntry &e : txq_) {
+        if (!e.sent || !e.is_data) continue;
+        e.sent = false;
+        e.txtime = std::chrono::steady_clock::time_point {};
+    }
+    DN_TRACE ("link {} NAK: resending from the gap, window {}", srcaddr_, window ());
+    send_blocked ();
 }
 
 void Connection::process_int_ack (Seq num)
@@ -666,15 +724,25 @@ void Connection::retransmit ()
     }
     DN_TRACE ("link {} retransmitting, {} in flight, try {}", srcaddr_, n,
               retries_);
+    // A timeout means the far end, or the way to it, could not keep up:
+    // halve the threshold and start again from a window of one (DEC-TR-353).
+    // Everything unacknowledged goes again, the oldest now and the rest as
+    // the window opens; the far end acknowledges what it already had.
+    // Resending only the oldest, one per timeout, took a timeout for every
+    // segment a peer had dropped.
+    ssthresh_ = std::max (2.0, static_cast<double> (n) / 2.0);
+    cwnd_ = 1.0;
+    bool first = true;
     for (TxEntry &e : txq_) {
         if (!e.sent) continue;
         // Stop timing a packet once retransmitted.
         e.txtime = std::chrono::steady_clock::time_point {};
-        parent_->send_to (dest_, e.frame);
-        // Retransmit only the oldest unacknowledged packet.  There is one timer
-        // per connection, and resending the whole window would send a burst of up
-        // to qmax frames.
-        break;
+        if (first) {
+            parent_->send_to (dest_, e.frame);
+            first = false;
+        } else if (e.is_data) {
+            e.sent = false;             // send_blocked sends it again
+        }
     }
     timer_is_retransmit_ = true;
 
@@ -836,11 +904,18 @@ Connection::State Connection::cr (Work &w)
 Connection::State Connection::cc (Work &w)
 {
     if (received_) {
-        // Any data or acknowledgement confirms they have our accept.
+        // Anything on either subchannel confirms they have our accept, as
+        // in PyDECnet.
         if (dynamic_cast<const DataSeg *> (received_)
-            || dynamic_cast<const AckData *> (received_)) {
+            || dynamic_cast<const AckData *> (received_)
+            || dynamic_cast<const IntMsg *> (received_)
+            || dynamic_cast<const LinkSvcMsg *> (received_)
+            || dynamic_cast<const AckOther *> (received_)) {
             process_ack (Seq (0));
             set_state (DN_MY_STATE (Connection, run));
+            // Before the packet that caused it, as PyDECnet does, so the
+            // application hears it is running before it sees data.
+            if (session ()) session ()->run_state (*this);
             return run (w);
         }
         if (auto *d = dynamic_cast<const DiscInit *> (received_)) {

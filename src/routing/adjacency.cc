@@ -78,8 +78,14 @@ SelfAdjacency::SelfAdjacency (BaseRouter *router, Nodeid id,
 void SelfAdjacency::send (const RoutingPacketBase &pkt)
 {
     if (auto *sd = dynamic_cast<const ShortData *> (&pkt)) {
-        ShortData copy = *sd;
-        router_->deliver (copy);
+        // A packet that arrived from a circuit is already being handled
+        // from the work queue; only one we originated needs queueing.
+        if (sd->src) {
+            ShortData copy = *sd;
+            router_->deliver (copy);
+        } else {
+            router_->deliver_later (*sd);
+        }
     }
 }
 

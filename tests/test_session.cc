@@ -220,19 +220,20 @@ private:
     std::vector<Bytes> replies_;
 };
 
-// Two endnodes joined by a circuit; each has MIRROR by default.
+// Two nodes joined by a circuit, endnodes unless told otherwise; each has
+// MIRROR by default.
 struct Pair {
     std::uint16_t port = free_port ();
     Config acfg, bcfg;
     std::unique_ptr<Node> a, b;
 
-    Pair ()
+    explicit Pair (const std::string &type = "endnode")
         : acfg (Config::from_string (
-              "routing 1.1 --type endnode\nnode 1.1 NODEA\nnode 1.2 NODEB\n"
+              "routing 1.1 --type " + type + "\nnode 1.1 NODEA\nnode 1.2 NODEB\n"
               "circuit mul-0 Multinet 127.0.0.1:" + std::to_string (port)
               + ":listen --t3 2\n")),
           bcfg (Config::from_string (
-              "routing 1.2 --type endnode\nnode 1.2 NODEB\nnode 1.1 NODEA\n"
+              "routing 1.2 --type " + type + "\nnode 1.2 NODEB\nnode 1.1 NODEA\n"
               "circuit mul-0 Multinet 127.0.0.1:" + std::to_string (port)
               + ":connect --t3 2\n"))
     {
@@ -276,6 +277,32 @@ DN_TEST (session, mirror_loop_by_object_number)
     c->send_data (mirror_msg (0x00, "testing 1 2 3"));
     DN_ASSERT (wait_until ([&] { return cl->replies () == 1; }));
     DN_ASSERT_EQ (cl->reply (0), mirror_msg (0x01, "testing 1 2 3"));
+
+    p.stop ();
+}
+
+DN_TEST (session, mirror_loop_between_routers_right_after_adjacency_up)
+{
+    // Connect as soon as the adjacency is up.  The far router may not have
+    // had a routing message from us yet, so it drops its connect ack and
+    // confirm as unreachable; the retransmitted connect initiate and
+    // confirm must get the link up once routing converges, rather than it
+    // failing with "object failed" when the connect timer expires.
+    Pair p ("l1router");
+    p.start ();
+
+    auto client = std::make_unique<Client> ();
+    Client *cl = client.get ();
+    SessionConnection *c = p.b->session ()->connect (
+        Nodeid::parse ("1.1"), EndUser::number (25), EndUser::named ("TEST"),
+        {}, std::move (client));
+    DN_ASSERT (c != nullptr);
+
+    DN_ASSERT (wait_until ([&] { return cl->accepts () == 1; }));
+    c->send_data (mirror_msg (0x00, "routers"));
+    DN_ASSERT (wait_until ([&] { return cl->replies () == 1; }));
+    DN_ASSERT_EQ (cl->reply (0), mirror_msg (0x01, "routers"));
+    DN_ASSERT_EQ (cl->disconnects (), 0);
 
     p.stop ();
 }

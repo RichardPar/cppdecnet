@@ -16,7 +16,7 @@ known defects in [BUGS.md](BUGS.md).
 
 - [ ] Check access control (PyDECnet uses PAM)
 - [ ] Run objects as a different user
-- [ ] Outbound connections from applications, and `bind`
+- [x] Outbound connections from applications, and `bind` (through the API)
 - [ ] `pmr` (object 123)
 - [ ] Finish `tools/dnping`
 
@@ -64,12 +64,23 @@ known defects in [BUGS.md](BUGS.md).
 - [ ] `logging` pages are empty: `EventLogger::nice_read` is a stub
 - [ ] Per-connection NSP page, event display, bridge page
 - [ ] HTTPS
-- [ ] `apiserver`: JSON API over a Unix socket
+- [x] `apiserver`: JSON API over a Unix socket, session API
+- [ ] The API's node, nsp, routing, mop and ncp requests (need nested JSON)
 
 ## Other
 
 - [ ] `bridge`
-- [ ] `dap` and `dap_packets` (FAL)
+- [x] `dap_packets`: DAP message codec (`src/dap/`), checked against
+      PyDECnet's encoding
+- [x] FAL server (object 17): `dnfal`, directory, read, create, erase,
+      rename, confined to a root directory
+- [x] Access control for dnfal: its own user file (crypt hashes, per user
+      directory and read/write)
+- [ ] PAM login and running as that user, for a decnetd run as root, as
+      PyDECnet does
+- [x] Proxy access: proxy lines in dnfal's user file.  Check against VMS
+      which field carries the remote user (RQSTRID or the source end user)
+- [ ] dnfal: block mode and record access, append, submit/execute
 - [ ] More than one node per process (`src/main/main.cc`)
 - [ ] Background name resolution
 - [ ] Per-state packet type filtering, and the `ru4l1`, `ru4l2`, `ru3r`

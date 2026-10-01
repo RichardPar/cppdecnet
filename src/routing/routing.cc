@@ -220,8 +220,8 @@ void EndnodeRouting::send (Bytes data, Nodeid dest, bool rqr)
     pkt.payload = std::move (data);
 
     if (dest == nodeid_) {
-        // Addressed to ourselves: straight back up.
-        forward (pkt);
+        // Addressed to ourselves: back up, by way of the work queue.
+        deliver_later (std::move (pkt));
         return;
     }
     if (!lan_order_.empty ()) {
@@ -251,6 +251,16 @@ void EndnodeRouting::forward (ShortData &pkt)
         return;
     }
     deliver (pkt);
+}
+
+void BaseRouter::deliver_later (ShortData pkt)
+{
+    if (Node *n = node ()) {
+        n->add_work (std::make_unique<CallbackWork> (
+            [this, pkt = std::move (pkt)] () mutable { deliver (pkt); }));
+    } else {
+        deliver (pkt);
+    }
 }
 
 void BaseRouter::deliver (ShortData &pkt)

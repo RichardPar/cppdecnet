@@ -10,9 +10,18 @@
 
 namespace decnet::mop {
 
-using datalink::MOPDL_PROTO;
+using datalink::MOPCONS_PROTO;
 
 namespace {
+
+// Tell a request that no answer is coming.  A delayed call is simply not
+// made.
+struct NoAnswer {
+    void operator() (SysIdDone &d)    const { if (d) d (nullptr, Macaddr ()); }
+    void operator() (CountersDone &d) const { if (d) d (nullptr, Macaddr ()); }
+    void operator() (LoopDone &d)     const { if (d) d (false, Macaddr ()); }
+    void operator() (std::function<void ()> &) const {}
+};
 
 // Loopback runs on its own protocol type, unpadded.
 constexpr std::uint16_t LOOP_PROTO = 0x9000;
@@ -86,6 +95,13 @@ void SysIdHandler::request_id (Macaddr dest, std::uint16_t receipt)
     port_->send (r.encode_packet (), dest);
 }
 
+void SysIdHandler::request_counters (Macaddr dest, std::uint16_t receipt)
+{
+    RequestCounters r;
+    r.receipt = receipt;
+    port_->send (r.encode_packet (), dest);
+}
+
 void SysIdHandler::send_counters (Macaddr dest, std::uint16_t receipt)
 {
     Counters c;
@@ -120,15 +136,13 @@ void SysIdHandler::dispatch (Work &w)
         return;
     }
 
-    // The source address is not passed up, so use the hardware address from a
-    // system ID message.  Requests are answered to the multicast address.
+    // Answers go back to whoever asked.  A frame without a source -- not
+    // from an Ethernet -- is answered to the multicast address, as it
+    // always used to be.
+    Macaddr src = r->src ();
+    Macaddr reply_to = src == Macaddr () ? console_multicast () : src;
+
     if (auto *s = dynamic_cast<SysId *> (pkt.get ())) {
-        Macaddr src;
-        if (s->hwaddr && s->hwaddr->size () == 6) {
-            std::array<std::uint8_t, 6> a {};
-            std::copy (s->hwaddr->begin (), s->hwaddr->end (), a.begin ());
-            src = Macaddr (a);
-        }
         std::string k = key_of (src);
         bool seen = heard_.count (k) != 0;
         DN_TRACE ("system id on {} from {} node {}", parent_->name (),
@@ -136,14 +150,19 @@ void SysIdHandler::dispatch (Work &w)
         heard_[k] = HeardSystem { src, *s,
                                   std::chrono::steady_clock::now (),
                                   std::chrono::system_clock::now () };
+        if (s->receipt) parent_->answer_id (s->receipt, *s, src);
         return;
     }
     if (auto *q = dynamic_cast<RequestId *> (pkt.get ())) {
-        send_id (console_multicast (), q->receipt);
+        send_id (reply_to, q->receipt);
         return;
     }
     if (auto *q = dynamic_cast<RequestCounters *> (pkt.get ())) {
-        send_counters (console_multicast (), q->receipt);
+        send_counters (reply_to, q->receipt);
+        return;
+    }
+    if (auto *c = dynamic_cast<Counters *> (pkt.get ())) {
+        parent_->answer_counters (c->receipt, *c, src);
         return;
     }
     // PORT: console carrier messages arrive here and are ignored.
@@ -162,22 +181,37 @@ LoopHandler::LoopHandler (MopCircuit *parent, datalink::BcDatalink *dl)
 
 void LoopHandler::loop (Macaddr dest, Bytes payload)
 {
-    // Two functions: forward to us, then reply.
-    LoopReply rep;
-    rep.receipt = ++receipt_;
-    rep.payload = std::move (payload);
+    loop (dest, {}, std::move (payload), ++receipt_);
+}
 
-    LoopFwd fwd;
-    // Bind the address to a local: macaddr() returns by value, so taking a
-    // reference to its bytes() would outlive the temporary.
-    Macaddr me = port_->macaddr ();
-    fwd.dest.assign (me.bytes ().begin (), me.bytes ().end ());
-    fwd.payload = rep.encode ();
+Macaddr LoopHandler::macaddr () const { return port_->macaddr (); }
+
+void LoopHandler::loop (Macaddr first, const std::vector<Macaddr> &then,
+                        Bytes payload, std::uint16_t receipt)
+{
+    // The functions, built from the end: the reply, forward to us, and
+    // before that forward to each station in then.
+    LoopReply rep;
+    rep.receipt = receipt;
+    rep.payload = std::move (payload);
+    Bytes msg = rep.encode ();
+
+    std::vector<Macaddr> hops (then);
+    hops.push_back (port_->macaddr ());
+    for (auto h = hops.rbegin (); h != hops.rend (); ++h) {
+        LoopFwd fwd;
+        // Bind the address to a local: bytes() of a temporary would not
+        // outlive it.
+        Macaddr a = *h;
+        fwd.dest.assign (a.bytes ().begin (), a.bytes ().end ());
+        fwd.payload = std::move (msg);
+        msg = fwd.encode ();
+    }
 
     LoopSkip top;
     top.skip = 0;
-    top.payload = fwd.encode ();
-    port_->send (top.encode (), dest);
+    top.payload = std::move (msg);
+    port_->send (top.encode (), first);
 }
 
 void LoopHandler::dispatch (Work &w)
@@ -234,6 +268,7 @@ void LoopHandler::dispatch (Work &w)
         last_reply_ = f.payload;
         DN_TRACE ("loop reply on {}, {} bytes", parent_->name (),
                   f.payload.size ());
+        parent_->answer_loop (f.receipt, r->src ());
         return;
     }
 }
@@ -246,16 +281,155 @@ MopCircuit::MopCircuit (Element *parent, std::string name,
 {
     // The circuit owns the port and forwards to the handler, which is created
     // later.  The loop handler creates its own port.
-    datalink::BcPort *p = dl->create_bc_port (this, MOPDL_PROTO);
+    datalink::BcPort *p = dl->create_bc_port (this, MOPCONS_PROTO);
     sysid_ = std::make_unique<SysIdHandler> (this, p);
     loop_  = std::make_unique<LoopHandler> (this, dl);
     DN_DEBUG ("MOP initialized on circuit {}", name_);
 }
 
+MopCircuit::~MopCircuit ()
+{
+    if (node ()) node ()->timers ().stop (this);
+}
+
 void MopCircuit::dispatch (Work &w) { sysid_->dispatch (w); }
 
 void MopCircuit::start () { sysid_->start (); }
-void MopCircuit::stop ()  { sysid_->stop (); }
+
+void MopCircuit::stop ()
+{
+    sysid_->stop ();
+    if (node ()) node ()->timers ().stop (this);
+    // Nobody will answer now.
+    auto pending = std::move (pending_);
+    pending_.clear ();
+    for (auto &[receipt, p] : pending) std::visit (NoAnswer {}, p.done);
+}
+
+std::uint16_t MopCircuit::next_receipt ()
+{
+    // Loop receipts share the numbering, so an answer to one request
+    // cannot be taken for another's.
+    do {
+        ++receipt_;
+    } while (receipt_ == 0 || pending_.count (receipt_));
+    return receipt_;
+}
+
+void MopCircuit::wait_for (std::uint16_t receipt, double timeout,
+                           Callback done)
+{
+    auto deadline = std::chrono::steady_clock::now ()
+        + std::chrono::duration_cast<std::chrono::steady_clock::duration> (
+              std::chrono::duration<double> (timeout));
+    pending_[receipt] = Pending { std::move (done), deadline };
+    rearm ();
+}
+
+std::optional<MopCircuit::Callback> MopCircuit::take (std::uint16_t receipt,
+                                                      std::size_t kind)
+{
+    auto it = pending_.find (receipt);
+    if (it == pending_.end () || it->second.done.index () != kind)
+        return std::nullopt;
+    Callback c = std::move (it->second.done);
+    pending_.erase (it);
+    rearm ();
+    return c;
+}
+
+void MopCircuit::rearm ()
+{
+    if (!node ()) return;
+    if (pending_.empty ()) {
+        node ()->timers ().stop (this);
+        return;
+    }
+    auto first = pending_.begin ()->second.deadline;
+    for (const auto &[r, p] : pending_) first = std::min (first, p.deadline);
+    double secs = std::chrono::duration<double> (
+        first - std::chrono::steady_clock::now ()).count ();
+    // The wheel ticks every JIFFY; anything sooner is the next tick.
+    node ()->timers ().start (this, std::max (secs, 0.1));
+}
+
+void MopCircuit::timeout ()
+{
+    auto now = std::chrono::steady_clock::now ();
+    std::vector<Callback> expired;
+    for (auto it = pending_.begin (); it != pending_.end ();) {
+        if (it->second.deadline <= now) {
+            expired.push_back (std::move (it->second.done));
+            it = pending_.erase (it);
+        } else {
+            ++it;
+        }
+    }
+    rearm ();
+    // Called last: a callback may well start another request.
+    for (Callback &c : expired) {
+        if (auto *later = std::get_if<Later> (&c)) {
+            if (*later) (*later) ();
+        } else {
+            std::visit (NoAnswer {}, c);
+        }
+    }
+}
+
+void MopCircuit::after (double secs, std::function<void ()> fn)
+{
+    // A key from the receipt numbering, which never goes on the wire.
+    wait_for (next_receipt (), secs, Later (std::move (fn)));
+}
+
+void MopCircuit::request_id (Macaddr dest, double timeout, SysIdDone done)
+{
+    std::uint16_t r = next_receipt ();
+    wait_for (r, timeout, std::move (done));
+    sysid_->request_id (dest, r);
+}
+
+void MopCircuit::request_counters (Macaddr dest, double timeout,
+                                   CountersDone done)
+{
+    std::uint16_t r = next_receipt ();
+    wait_for (r, timeout, std::move (done));
+    sysid_->request_counters (dest, r);
+}
+
+void MopCircuit::loop (Macaddr dest, const std::vector<Macaddr> &then,
+                       Bytes payload, double timeout, LoopDone done)
+{
+    std::uint16_t r = next_receipt ();
+    wait_for (r, timeout, std::move (done));
+    loop_->loop (dest, then, std::move (payload), r);
+}
+
+void MopCircuit::answer_id (std::uint16_t receipt, const SysId &s,
+                            Macaddr from)
+{
+    auto c = take (receipt, 0);
+    if (!c) return;
+    if (auto *done = std::get_if<SysIdDone> (&*c); done && *done)
+        (*done) (&s, from);
+}
+
+void MopCircuit::answer_counters (std::uint16_t receipt, const Counters &k,
+                                  Macaddr from)
+{
+    auto c = take (receipt, 1);
+    if (!c) return;
+    if (auto *done = std::get_if<CountersDone> (&*c); done && *done)
+        (*done) (&k, from);
+}
+
+void MopCircuit::answer_loop (std::uint16_t receipt, Macaddr from)
+{
+    auto c = take (receipt, 2);
+    if (!c) return;
+    if (auto *done = std::get_if<LoopDone> (&*c); done && *done)
+        (*done) (true, from);
+}
 
 // ------------------------------------------------------------------- Mop
 
@@ -299,6 +473,7 @@ void Mop::stop ()
 
 MopCircuit *Mop::circuit (const std::string &name) const
 {
+    if (name.empty ()) return order_.size () == 1 ? order_.front () : nullptr;
     std::string key;
     try {
         key = circname (name);

@@ -31,6 +31,39 @@ const Value::Array &Value::as_array () const
     return std::get<Array> (v_);
 }
 
+double Value::as_double () const
+{
+    if (is_int ()) return static_cast<double> (std::get<std::int64_t> (v_));
+    if (!is_double ()) throw ParseError ("value is not a number");
+    return std::get<double> (v_);
+}
+
+Value::Value (Object o) : v_ (std::make_shared<const Object> (std::move (o))) {}
+
+const Object &Value::as_object () const
+{
+    if (!is_object ()) throw ParseError ("value is not an object");
+    return *std::get<std::shared_ptr<const Object>> (v_);
+}
+
+namespace {
+
+// Shortest text that reads back as the same double.
+std::string number (double d)
+{
+    char buf[32];
+    auto [p, ec] = std::to_chars (buf, buf + sizeof buf, d);
+    if (ec != std::errc ()) return "0";
+    std::string out (buf, p);
+    // Keep it a JSON number with a fraction, so it reads back as a double.
+    if (out.find_first_of (".eE") == std::string::npos
+        && out.find_first_not_of ("-0123456789") == std::string::npos)
+        out += ".0";
+    return out;
+}
+
+}   // namespace
+
 std::string Value::to_text () const
 {
     switch (v_.index ()) {
@@ -48,6 +81,8 @@ std::string Value::to_text () const
         }
         return out;
     }
+    case 5: return number (std::get<double> (v_));
+    case 6: return as_object ().encode ();
     }
     return {};
 }
@@ -76,6 +111,8 @@ std::string Value::encode () const
         out += ']';
         return out;
     }
+    case 5: return number (std::get<double> (v_));
+    case 6: return as_object ().encode ();
     }
     return "null";
 }
@@ -246,8 +283,8 @@ struct Parser {
         skip_ws ();
         char c = peek ();
         if (c == '"') return Value (parse_string ());
+        if (c == '{') return Value (parse_object ());
         if (c == '[') {
-            // A flat array; only a log record's argument list uses one.
             ++i;
             Value::Array a;
             skip_ws ();
@@ -277,20 +314,56 @@ struct Parser {
             i += 4;
             return Value ();
         }
-        // A number.  The protocol only uses integers; a fractional value
-        // would be a sign the far end is not speaking this protocol.
+        // A number: an integer, or a double if it has a fraction or an
+        // exponent.
         std::size_t start = i;
         if (c == '-') ++i;
         while (i < s.size () && s[i] >= '0' && s[i] <= '9') ++i;
-        if (i == start) throw ParseError ("expected a value");
-        if (i < s.size () && (s[i] == '.' || s[i] == 'e' || s[i] == 'E'))
-            throw ParseError ("fractional numbers are not used here");
+        if (i == start || (s[start] == '-' && i == start + 1))
+            throw ParseError ("expected a value");
+        if (i < s.size () && (s[i] == '.' || s[i] == 'e' || s[i] == 'E')) {
+            while (i < s.size () && ((s[i] >= '0' && s[i] <= '9') || s[i] == '.'
+                                     || s[i] == 'e' || s[i] == 'E'
+                                     || s[i] == '+' || s[i] == '-'))
+                ++i;
+            double d = 0;
+            auto [p, ec] = std::from_chars (s.data () + start, s.data () + i, d);
+            if (ec != std::errc () || p != s.data () + i)
+                throw ParseError ("bad number");
+            return Value (d);
+        }
         std::int64_t n = 0;
         auto [p, ec] = std::from_chars (s.data () + start, s.data () + i, n);
         (void) p;
         if (ec != std::errc ()) throw ParseError ("bad number");
         return Value (n);
     }
+
+    Object parse_object ()
+    {
+        // Deep nesting would only come from a client trying to exhaust the
+        // stack; nothing in the protocol goes past three levels.
+        if (++depth > 32) throw ParseError ("JSON nested too deeply");
+        Object o;
+        expect ('{');
+        skip_ws ();
+        if (peek () == '}') { ++i; --depth; return o; }
+        for (;;) {
+            skip_ws ();
+            std::string key = parse_string ();
+            expect (':');
+            o.set (key, parse_value ());
+            skip_ws ();
+            char c = peek ();
+            if (c == ',') { ++i; continue; }
+            if (c == '}') { ++i; break; }
+            throw ParseError ("expected ',' or '}'");
+        }
+        --depth;
+        return o;
+    }
+
+    int depth = 0;
 };
 
 }   // namespace
@@ -320,21 +393,7 @@ std::string Object::format_message (const std::string &key,
 Object Object::parse (const std::string &text)
 {
     Parser p { text };
-    Object o;
-    p.expect ('{');
-    p.skip_ws ();
-    if (p.peek () == '}') { ++p.i; return o; }
-    for (;;) {
-        p.skip_ws ();
-        std::string key = p.parse_string ();
-        p.expect (':');
-        o.set (key, p.parse_value ());
-        p.skip_ws ();
-        char c = p.peek ();
-        if (c == ',') { ++p.i; continue; }
-        if (c == '}') { ++p.i; break; }
-        throw ParseError ("expected ',' or '}'");
-    }
+    Object o = p.parse_object ();
     p.skip_ws ();
     if (p.i != text.size ())
         throw ParseError ("trailing data after JSON object");

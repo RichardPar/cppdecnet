@@ -17,18 +17,6 @@ correctly.
 
 `src/http/monitor.cc`, `include/decnet/http/monitor.h`
 
-## `dnping` cannot reach the built-in MIRROR
-
-`dnping -c <config> <node>` fails with `did not accept (reason 38)`
-against a `decnetd` that has no `object` line, although object 25 is
-registered by default in `Session::start`. Reason 38 is OBJ_FAIL, which
-`Connection::cr` returns when session control does not answer in time, so
-the connect appears to reach NSP and stall above it. Reproduced on an
-unmodified tree at 06e79dc, so it is not a regression from the counter
-work.
-
-`src/session/session.cc`, `tools/dnping.cc`
-
 ## Two-node tests are timing flaky under load
 
 Every suite that stands two nodes up over a real socket fails
@@ -36,8 +24,11 @@ occasionally, a different test each time. Seen so far: `test_nsp`
 (`out_of_order_segments_are_held_not_dropped`,
 `closed_connections_are_reclaimed`,
 `xoff_stops_transmission_and_xon_resumes_it`), `test_counters`
-(`nsp_node_counters_follow_a_conversation`) and `test_ddcmp`
-(`two_nodes_come_up_over_a_tcp_ddcmp_circuit`).
+(`nsp_node_counters_follow_a_conversation`), `test_ddcmp`
+(`two_nodes_come_up_over_a_tcp_ddcmp_circuit`), `test_session`
+(`finished_conversations_are_reclaimed`, once at load average 2.7, then
+0 in 5) and `test_lan` (`a_neighbour_that_stops_sending_hellos_is_dropped`,
+once in the sanitizer build while other builds ran).
 
 It is load, not any one change. `test_nsp` measured 1/10 on an unmodified
 tree at 06e79dc. `two_nodes_come_up_over_a_tcp_ddcmp_circuit` looked like

@@ -70,10 +70,10 @@ DN_TEST (config, option_equals_form)
 DN_TEST (config, unknown_commands_are_kept_not_rejected)
 {
     // Commands for unported layers must not make a config file fail to load.
-    Config c = Config::from_string ("api /tmp/decnet.sock\n"
-                                    "bridge br-0 --pcap eth0\n");
+    Config c = Config::from_string ("bridge br-0 --pcap eth0\n"
+                                    "frobnicate --now\n");
     DN_ASSERT_EQ (c.unhandled ().size (), 2u);
-    DN_ASSERT_EQ (c.unhandled ()[0].command, std::string ("api"));
+    DN_ASSERT_EQ (c.unhandled ()[0].command, std::string ("bridge"));
 }
 
 DN_TEST (config, names_are_validated)

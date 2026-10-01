@@ -266,6 +266,17 @@ void ProcessApplication::connect_received (SessionConnection &c, ByteView data)
     o.set ("destination", c.remote ().str ());
     o.set ("srcuser", c.source ().str ());
     o.set ("dstuser", c.destination ().str ());
+    // Access control, as PyDECnet's DictConnector passes it: only if sent.
+    if (!c.username ().empty ()) o.set ("username", c.username ());
+    if (!c.password ().empty ()) o.set ("password", c.password ());
+    if (!c.account ().empty ())  o.set ("account", c.account ());
+    // Extensions to PyDECnet's message, for programs that check access
+    // themselves: proxy requests, and the requesting node by name.
+    if (c.proxy ()) o.set ("proxy", true);
+    if (node_)
+        if (const Nodeinfo *n = node_->find_node (c.remote (), false);
+            n && !n->name.empty ())
+            o.set ("nodename", n->name);
     send (o);
 }
 
@@ -287,6 +298,18 @@ void ProcessApplication::interrupt_received (SessionConnection &c,
     o.set ("handle", handle_);
     o.set_bytes ("data", data);
     o.set ("type", "interrupt");
+    send (o);
+}
+
+void ProcessApplication::run_state (SessionConnection &c)
+{
+    // PyDECnet's connectors wait for this after accepting: FAL, for one,
+    // treats any other message as the link failing.
+    conn_ = &c;
+    json::Object o;
+    o.set ("handle", handle_);
+    o.set ("data", "");
+    o.set ("type", "runstate");
     send (o);
 }
 
@@ -322,7 +345,11 @@ void ProcessApplication::handle (const json::Object &req)
     if (type == "accept") {
         conn_->accept (std::move (data));
     } else if (type == "reject") {
-        conn_->reject (0, std::move (data));
+        // PyDECnet's reject carries no reason and so is always 0, "rejected
+        // by object".  A program that checks access control itself needs 34,
+        // "access control rejected", which is what a user is told.
+        conn_->reject (static_cast<unsigned> (req.num ("reason", 0)),
+                       std::move (data));
     } else if (type == "data") {
         conn_->send_data (std::move (data));
     } else if (type == "disconnect" || type == "abort") {

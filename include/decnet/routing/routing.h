@@ -62,6 +62,12 @@ public:
     // Deliver a packet addressed to this node.  Called via the self adjacency.
     virtual void deliver (ShortData &pkt);
 
+    // Deliver a packet this node sent to itself, from the work queue rather
+    // than from inside the send, as PyDECnet's SelfAdj.send does.  NSP's
+    // state handlers send packets part way through a transition; delivered
+    // at once, the answer to one would arrive before the transition ends.
+    void deliver_later (ShortData pkt);
+
     // Send an NSP packet.  Endnodes use their circuit, routers the routing
     // table.
     virtual void send_nsp (const Bytes &data, Nodeid dest, bool rqr = false) = 0;

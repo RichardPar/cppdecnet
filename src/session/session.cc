@@ -114,6 +114,23 @@ void Session::add_object (std::uint8_t number, std::string name,
     if (!name.empty ()) by_name_[name] = idx;
 }
 
+void Session::remove_object (std::uint8_t number, const std::string &name)
+{
+    std::string key = name;
+    std::transform (key.begin (), key.end (), key.begin (),
+                    [] (unsigned char c) { return std::toupper (c); });
+    std::erase_if (objects_, [&] (const Object &o) {
+        return o.number == number && o.name == key;
+    });
+    // The indexes point into objects_, so rebuild them.
+    by_number_.clear ();
+    by_name_.clear ();
+    for (std::size_t i = 0; i < objects_.size (); ++i) {
+        if (objects_[i].number)         by_number_[objects_[i].number] = i;
+        if (!objects_[i].name.empty ()) by_name_[objects_[i].name] = i;
+    }
+}
+
 const Object *Session::find_object (std::uint8_t number) const
 {
     auto it = by_number_.find (number);
@@ -194,7 +211,16 @@ void Session::connect_received (nsp::Connection &c, ByteView payload)
     live.conn = std::make_unique<SessionConnection> (this, &c);
     live.conn->dstname_ = cd.dstname;
     live.conn->srcname_ = cd.srcname;
+    live.conn->username_ = cd.rqstrid;
+    live.conn->password_ = cd.passwrd;
+    live.conn->account_ = cd.account;
+    live.conn->proxy_ = cd.proxy;
     live.app = obj->factory ();
+    if (!live.app) {
+        // The object is going away; an API client that bound it has left.
+        c.reject (OBJ_FAIL);
+        return;
+    }
     Live &l = live_[&c] = std::move (live);
     l.app->connect_received (
         *l.conn, ByteView (cd.connectdata.data (), cd.connectdata.size ()));
@@ -278,6 +304,13 @@ void Session::interrupt_received (nsp::Connection &c, ByteView data)
     Live *l = find_live (c);
     if (!l) return;
     l->app->interrupt_received (*l->conn, data);
+}
+
+void Session::run_state (nsp::Connection &c)
+{
+    Live *l = find_live (c);
+    if (!l) return;
+    l->app->run_state (*l->conn);
 }
 
 void Session::disconnected (nsp::Connection &c, unsigned reason, ByteView)

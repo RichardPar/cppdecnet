@@ -1,7 +1,7 @@
 // decnet/mop/packets.h -- MOP message formats.
 //
 // Port of the packet classes in mop.py.  Messages with a MopHdr use
-// protocol 60-01 in DEC padded format.  Loopback messages use 90-00
+// protocol 60-02 in DEC padded format.  Loopback messages use 90-00
 // without padding.
 
 #ifndef DECNET_MOP_PACKETS_H
@@ -23,7 +23,7 @@ using namespace decnet::packet;
 Macaddr console_multicast ();
 Macaddr loop_multicast ();
 
-// Message codes, the first byte of anything on 60-01.
+// Message codes, the first byte of anything on 60-02.
 enum Code : std::uint8_t {
     REQUEST_ID       = 5,
     SYSTEM_ID        = 7,

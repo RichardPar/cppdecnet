@@ -33,6 +33,7 @@ public:
     void connect_received (SessionConnection &c, ByteView data) override;
     void data_received (SessionConnection &c, ByteView data) override;
     void interrupt_received (SessionConnection &c, ByteView data) override;
+    void run_state (SessionConnection &c) override;
     void disconnected (SessionConnection &c, unsigned reason) override;
 
     // Whether the program is running.  A program that fails to start is

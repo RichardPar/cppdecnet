@@ -1,3 +1,4 @@
+#include "decnet/api/server.h"
 #include "decnet/http/server.h"
 #include "decnet/nodefetch.h"
 #include "decnet/node.h"
@@ -115,6 +116,11 @@ Node::Node (const Config &config)
             nsp_->set_session_control (session_.get ());
         }
     }
+    // The API: session control's, if there is one, and MOP's.  A node that
+    // only runs MOP still has the MOP API.
+    if (!config.api_socket ().empty ())
+        api_ = std::make_unique<api::Server> (this, config.api_socket (),
+                                              config.api_mode ());
 }
 
 Node::~Node ()
@@ -308,6 +314,7 @@ void Node::start ()
     if (nsp_)      nsp_->start ();
     if (session_)  session_->start ();
     if (http_)     http_->start ();
+    if (api_)      api_->start ();
     // Last, and only once the loop below is about to run: it hands its
     // results to the node thread.
     if (node_fetcher_) node_fetcher_->start ();
@@ -333,6 +340,7 @@ void Node::stop ()
     // thread.  Both post work to the node loop, so both must be joined
     // while the loop is still running.
     if (http_) http_->stop ();
+    if (api_) api_->stop ();
     if (node_fetcher_) node_fetcher_->stop ();
 
     if (thread_.joinable ()) {

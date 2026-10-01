@@ -33,6 +33,7 @@ namespace session  { class Session; }
 namespace mop      { class Mop; }
 namespace events   { class Event; class EventLogger; }
 namespace http     { class Server; }
+namespace api      { class Server; }
 class NodeFetcher;
 
 // The NSP counters kept for every node we have talked to.  Port of
@@ -225,6 +226,7 @@ private:
     std::unique_ptr<session::Session>        session_;
     std::unique_ptr<mop::Mop>                mop_;
     std::unique_ptr<http::Server>            http_;
+    std::unique_ptr<api::Server>             api_;
     std::unique_ptr<NodeFetcher>             node_fetcher_;
     std::unique_ptr<events::EventLogger>     event_logger_;
     // PORT: the bridge follows.

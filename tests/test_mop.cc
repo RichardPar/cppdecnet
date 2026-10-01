@@ -8,7 +8,9 @@
 #include "decnet/mop/mop.h"
 #include "decnet/node.h"
 
+#include <atomic>
 #include <chrono>
+#include <functional>
 #include <thread>
 
 using namespace decnet;
@@ -315,4 +317,137 @@ DN_TEST (mop, a_loop_to_nobody_produces_no_reply)
     l.ca ()->loop ()->loop (l.addr_b (), bytes_of ("still here"));
     DN_ASSERT (wait_until ([&] { return l.ca ()->loop ()->replies () == 1; }));
     l.stop ();
+}
+
+// ------------------------------------------------ requests and answers
+//
+// What the API's "mop" requests use.  Requests are made, and answered, on
+// the node thread.
+
+namespace {
+
+void on_node (Node &n, std::function<void ()> fn)
+{
+    n.add_work (std::make_unique<CallbackWork> (std::move (fn)));
+}
+
+}   // namespace
+
+DN_TEST (mop, request_id_is_answered_to_the_requester)
+{
+    Lan l;
+    l.start ();
+    std::atomic<int> answers { 0 };
+    std::atomic<bool> right { false };
+    Macaddr b = l.addr_b ();
+    on_node (*l.a, [&] {
+        l.ca ()->request_id (b, 3, [&] (const SysId *s, Macaddr from) {
+            right = s && s->loop && s->counters && from == b;
+            ++answers;
+        });
+    });
+    DN_ASSERT (wait_until ([&] { return answers == 1; }));
+    DN_ASSERT (right);
+    // And it was remembered, under the address it came from.
+    DN_ASSERT_EQ (l.ca ()->sysid ()->heard ().count (b.str ()), 1u);
+    l.stop ();
+}
+
+DN_TEST (mop, counters_are_answered)
+{
+    Lan l;
+    l.start ();
+    std::atomic<int> answers { 0 };
+    std::atomic<bool> got { false };
+    Macaddr b = l.addr_b ();
+    on_node (*l.a, [&] {
+        l.ca ()->request_counters (b, 3, [&] (const Counters *c, Macaddr from) {
+            // B has at least received our request.
+            got = c && c->pkts_recv >= 1 && from == b;
+            ++answers;
+        });
+    });
+    DN_ASSERT (wait_until ([&] { return answers == 1; }));
+    DN_ASSERT (got);
+    l.stop ();
+}
+
+DN_TEST (mop, loops_are_answered_or_time_out)
+{
+    Lan l;
+    l.start ();
+    Macaddr b = l.addr_b ();
+    std::atomic<int> done { 0 };
+    std::atomic<bool> direct { false }, multi { false }, nobody { true };
+
+    on_node (*l.a, [&] {
+        l.ca ()->loop (b, {}, bytes_of ("direct"), 3,
+                       [&] (bool ok, Macaddr from) {
+                           direct = ok && from == b;
+                           ++done;
+                       });
+        // To the loopback multicast address: whoever hears it answers.
+        l.ca ()->loop (loop_multicast (), {}, bytes_of ("anyone"), 3,
+                       [&] (bool ok, Macaddr from) {
+                           multi = ok && from == b;
+                           ++done;
+                       });
+        l.ca ()->loop (Macaddr::parse ("aa-00-04-00-99-99"), {},
+                       bytes_of ("hello?"), 1,
+                       [&] (bool ok, Macaddr) {
+                           nobody = ok;
+                           ++done;
+                       });
+    });
+    auto start = std::chrono::steady_clock::now ();
+    DN_ASSERT (wait_until ([&] { return done == 3; }));
+    DN_ASSERT (direct);
+    DN_ASSERT (multi);
+    DN_ASSERT (!nobody);
+    // The one nobody answered waited for its timeout, and not much longer.
+    DN_ASSERT (std::chrono::steady_clock::now () - start
+               < std::chrono::seconds (3));
+    l.stop ();
+}
+
+DN_TEST (mop, stopping_answers_what_is_still_waiting)
+{
+    Lan l;
+    l.start ();
+    std::atomic<int> answers { 0 };
+    std::atomic<bool> any { true };
+    on_node (*l.a, [&] {
+        l.ca ()->request_id (Macaddr::parse ("aa-00-04-00-99-99"), 60,
+                             [&] (const SysId *s, Macaddr) {
+                                 any = s != nullptr;
+                                 ++answers;
+                             });
+    });
+    std::this_thread::sleep_for (std::chrono::milliseconds (200));
+    l.stop ();
+    DN_ASSERT (wait_until ([&] { return answers == 1; }));
+    DN_ASSERT (!any);
+}
+
+DN_TEST (mop, rsx_system_id_with_trailing_junk)
+{
+    // What BAJI, RSX-11M-PLUS on a PDP-11, sent in answer to a request
+    // ID: its length counts the request's padding, so it ends in sixteen
+    // bytes of our 'B's, which read as an item longer than the message.
+    Bytes wire { 0x07, 0x00, 0x06, 0x00,
+                 0x01, 0x00, 0x03, 0x03, 0x00, 0x00,          // version 3.0.0
+                 0x02, 0x00, 0x02, 0x00, 0x00,                // functions
+                 0x07, 0x00, 0x06, 0xaa, 0x00, 0x04, 0x00, 0x9f, 0x74,
+                 0x64, 0x00, 0x01, 0x01 };                    // device UNA
+    wire.insert (wire.end (), 16, 0x42);
+    auto p = MopPacketBase::parse_frame (wire);
+    DN_ASSERT (p != nullptr);
+    auto *s = dynamic_cast<SysId *> (p.get ());
+    DN_ASSERT (s != nullptr);
+    DN_ASSERT_EQ (s->receipt, 6);
+    DN_ASSERT (s->version.has_value () && *s->version == (Version { 3, 0, 0 }));
+    DN_ASSERT (s->hwaddr.has_value ());
+    DN_ASSERT_EQ ((*s->hwaddr)[4], 0x9f);
+    DN_ASSERT (s->device.has_value () && *s->device == 1);
+    DN_ASSERT (s->services ().empty ());
 }

@@ -17,6 +17,8 @@ gateway between a local Ethernet segment and the rest of the network.
 - [Configuration](#configuration)
 - [Joining HECnet](#joining-hecnet)
 - [Monitoring](#monitoring)
+- [API](#api)
+- [File access](#file-access)
 - [Running as a service](#running-as-a-service)
 - [Development](#development)
 - [Licence](#licence)
@@ -36,13 +38,17 @@ Implemented:
 - Event logging: filters, console/file/monitor sinks, remote sinks
 - Network management: NICE listener (object 19), read only
 - Monitoring pages over HTTP
+- PyDECnet's JSON API over a Unix socket: the session API, for programs
+  that open or accept logical links
+- File access: `dnfal`, a FAL (object 17) serving a directory, with
+  directory, read and, if allowed, create, delete and rename
 
 Tested against PyDECnet, and against a PDP-11 running RSX on a real
 Ethernet segment.
 
 Not implemented yet: Phase II and Phase III neighbours, NICE SET and
-ZERO, the MOP console carrier, access control checking, the JSON API,
-the bridge and DAP/FAL. See [TASKS.md](TASKS.md),
+ZERO, the MOP console carrier, access control checking, the API's
+node, nsp and routing requests, and the bridge. See [TASKS.md](TASKS.md),
 [NOTDONE.md](NOTDONE.md) and [BUGS.md](BUGS.md).
 
 ## Quick start
@@ -67,6 +73,7 @@ make help              # all targets
 ```
 
 Output goes to `build/<flavour>/`: `bin/decnetd` (the daemon),
+`bin/dnfal` (the file access listener, see [File access](#file-access)),
 `bin/dnping` (loop test tool) and `lib/libdecnet.a`.
 
 Daemon options:
@@ -269,6 +276,152 @@ still not kept and why.
 
 The server listens on all interfaces with no authentication. HTTPS is not
 supported; `--https-port` is ignored.
+
+## API
+
+```
+api /run/decnet/api.sock --mode 660
+```
+
+Programs talk to the node over a Unix socket, one JSON object per line,
+in PyDECnet's format, so PyDECnet's `decnet/connectors.py` and
+`async_connectors.py` work unchanged. The socket defaults to `$DECNETAPI`
+or `/tmp/decnetapi.sock`, mode 666. A socket file left by a node that
+died is replaced; one that still answers stops the second node's API from
+starting.
+
+`{}` lists the system and its APIs. The `session` API opens and accepts
+logical links:
+
+| Request `type` | Fields | Reply, then events |
+|---|---|---|
+| `connect` | `dest` (name or address), `remuser` (number or name), `localuser`, `data`, `username`, `password`, `account`, `proxy` | `connecting` with a `handle`, then `accept` or `reject` with a `reason` |
+| `bind` | `num` and/or `name` | `bind` with a handle; inbound links arrive as `connect` with `listenhandle` |
+| `accept`, `reject` | `handle`, `data` | `runstate` once the link is running |
+| `data`, `interrupt` | `handle`, `data` | `data`, `interrupt` from the far end |
+| `disconnect`, `abort` | `handle`, `data` | `disconnect` with a `reason` from the far end |
+
+Byte strings are latin-1 JSON strings. A `tag` on a request comes back on
+its reply. Disconnecting a bind handle withdraws the object. When a client
+goes away its links fail with reason 38 ("object failed") and its objects
+are withdrawn.
+
+```python
+from decnet.connectors import SimpleApiConnector
+api = SimpleApiConnector ("/run/decnet/api.sock")
+conn, reply = api.connect (dest = "MIM", remuser = 25)     # MIRROR
+conn.data (b"\x00hello")
+print (bytes (conn.recv ()))                               # b"\x01hello"
+conn.disconnect ()
+```
+
+The `mop` API works on Ethernet circuits with `--mop`. A node that runs
+only MOP, with no `routing` line, still has an API, offering only `mop`.
+`circuit` names the circuit; it can be left out when there is only one.
+A station (`dest`) is an Ethernet address, or a node name or address,
+which stands for its DECnet Ethernet address.
+
+| Request `type` | Fields | Reply |
+|---|---|---|
+| `get` | | `circuits`: each one's `name`, `hwaddr`, `macaddr`, `services` |
+| `sysid` | `circuit` | `sysid`: every station heard, with its `srcaddr`, `software`, `device`, `processor`, `services`... and `age` in seconds |
+| `sysid` | `dest`, `timeout` | asks that station: `status` `ok` with `sysid`, or `timeout` |
+| `counters` | `dest`, `timeout` | `status`, and the station's Ethernet counters |
+| `loop` | `dest` (one, a list of up to three, or none for the loopback multicast), `timeout`, `packets`, `fast` | `status`, `dest` (who answered), `delays`: each round trip in seconds, -1 for none |
+
+The replies to requests that ask another station come when it answers,
+matched to the request by its `tag`. `timeout` is in seconds, 1 to 60,
+default 3. A loop of several packets pauses a second after each answer,
+as PyDECnet does, unless `fast` is true.
+
+PathNoWorks (network management, file access and a FUSE mount for Linux)
+is built on this API.
+
+Only the session API is implemented. Anyone who can open the socket can
+make and accept connections as this node, so set the mode accordingly.
+
+## File access
+
+`dnfal` is a File Access Listener: it lets other nodes list, read and
+write files in one directory. decnetd runs it as object 17, one process
+per connection, in place of PyDECnet's `fal.py`:
+
+```
+object --number 17 --name FAL --file /usr/local/bin/dnfal --argument /srv/decnet
+```
+
+Add `--argument rw` to let remote nodes create, delete and rename files,
+and `--argument trace` to log each DAP message and its bytes (seen with
+decnetd at `--log-level debug`). dnfal tells requesters it is VMS with an
+RMS-32 file system: VMS COPY will not send a binary file to a file system
+it thinks is ULTRIX's, which is what PyDECnet's FAL says it is.
+`--argument ostype=192 --argument filesys=13` says that instead.
+
+Tested with OpenVMS VAX 6.2 as the requester: DIRECTORY, TYPE, COPY in
+both directions (text, fixed and variable binary), RENAME and DELETE.
+From VMS:
+
+```
+$ DIRECTORY CPPNOD::
+$ COPY CPPNOD::"hello.txt" []
+$ COPY LOGIN.COM CPPNOD::
+```
+
+File names may be Unix (`sub/file.txt`) or VMS style
+(`[SUB]FILE.TXT;1`); names match without regard to case, and versions are
+ignored. Nothing outside the directory can be reached, through `..` or a
+symbolic link. Text sent as variable length records with carriage return
+control is stored with a newline per record; anything else is stored as
+received. A file being written is renamed into place only when the
+transfer completes.
+
+### Access control
+
+Without a user file anyone who can reach the node can read the directory,
+and, with `rw`, change it. With one, each connection must name a user and
+password from the file, which also gives that user's directory and access:
+
+```
+object --number 17 --name FAL --file /usr/local/bin/dnfal --argument /srv/decnet --argument users=/etc/decnet/fal.users
+```
+
+```
+# user    password hash      directory        access
+RICHARD   $y$j9T$...         richard          rw
+GUEST     -                  pub              ro
+*         -                  pub              ro
+```
+
+- Relative directories are under the root given to dnfal.
+- `-` means no password.
+- `*` is for connections that give no user; leave it out to refuse them.
+- `dnfal --hash` prints a hash for a password it reads; `openssl passwd -6`
+  and `mkpasswd` hashes work too.
+- Names match without regard to case. A password that fails as sent is
+  tried in lower case, since VMS upper-cases one typed without quotes.
+
+Proxy lines let users on other nodes in without a password, as a VMS
+proxy database does. A proxy request names who the user is at its node;
+the most specific line wins (node and user, then node, then user, then
+`*::*`), and `-` refuses:
+
+```
+proxy   VMSNOD::RICHARD   richard
+proxy   VMSNOD::*         guest
+proxy   *::SYSTEM         -
+```
+
+With no matching line a proxy request gets the `*` entry, as VMS falls
+back to its default account, or is refused if there is none. A proxy
+request's user name is never taken as a user in the file. Proxy access
+trusts the far node to say truthfully who its user is, as DECnet always
+has.
+
+A refused connection is rejected with reason 34, which VMS shows as
+invalid login information, after a second's delay, and logged. The file is
+read for each connection, so changes apply at once. It is dnfal's own:
+decnetd does not need to run as root, and files are read and written as
+the daemon's user.
 
 ## Running as a service
 
