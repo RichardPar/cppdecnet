@@ -38,6 +38,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 
 namespace decnet {
 class Config;
@@ -172,6 +173,7 @@ private:
     void handle_interrupt (const IntMsg &msg);
     void handle_link_service (const LinkSvcMsg &ls);
     void process_ack (Seq num);
+    void process_nak ();
     void process_int_ack (Seq num);
 
     // Apply a packet's acknowledgement fields.  on_data is the packet's own
@@ -254,6 +256,10 @@ private:
     // it; a timeout halves ssthresh and starts the window again from one.
     double       cwnd_ = 2.0;
     double       ssthresh_ = 20.0;
+    // The segment a negative acknowledgement asked for, while it is being
+    // resent: further NAKs for the same gap -- VMS sends one for each
+    // segment that arrives beyond it -- change nothing.
+    std::optional<Seq> nak_from_;
 
     // Segments received ahead of their turn, keyed by sequence number.
     std::map<std::uint16_t, DataSeg> ooo_;

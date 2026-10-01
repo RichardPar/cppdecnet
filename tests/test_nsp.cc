@@ -812,3 +812,46 @@ DN_TEST (nsp, the_congestion_window_opens_and_closes)
     DN_ASSERT (wait_until ([&] { return c->window () == 1u && c->in_flight () == 1u; }));
     l.b->stop ();
 }
+
+DN_TEST (nsp, a_negative_acknowledgement_resends_at_once)
+{
+    // VMS answers a gap with a NAK: "I have up to n, send what follows".
+    // That is a loss to act on now, not after the retransmit timer: the
+    // window halves, and what follows the gap goes again.
+    Link l ("nsp --qmax 8\n");
+    l.start ();
+    Connection *c = l.b->nsp ()->connect (Nodeid::parse ("1.1"), {});
+    DN_ASSERT (wait_until ([&] { return c->running (); }));
+    for (int i = 0; i < 40; ++i) c->send_data (bytes_of ("steady"));
+    DN_ASSERT (wait_until ([&] { return l.sa.messages () == 40; }));
+    DN_ASSERT_EQ (c->window (), 8u);
+    Connection *far = l.sa.last ();
+
+    // Eight in flight that nobody will acknowledge (segments 41 to 48).
+    l.a->stop ();
+    for (int i = 0; i < 8; ++i) c->send_data (bytes_of ("pending"));
+    DN_ASSERT (wait_until ([&] { return c->in_flight () == 8u; }));
+
+    // "I have up to 42, the next one went missing."
+    AckData nak;
+    nak.dstaddr = c->srcaddr ();
+    nak.srcaddr = far->srcaddr ();
+    nak.acknum = AckNum { Seq (42), AckNum::NAK };
+    Bytes f = nak.encode ();
+    auto sent = std::chrono::steady_clock::now ();
+    l.b->nsp ()->deliver (Nodeid::parse ("1.1"), ByteView (f.data (), f.size ()));
+
+    // Six were left unacknowledged: the window halves to three, well before
+    // the two second retransmit timer would have closed it to one.
+    DN_ASSERT (wait_until ([&] { return c->window () == 3u; },
+                           std::chrono::milliseconds (1500)));
+    DN_ASSERT (std::chrono::steady_clock::now () - sent < std::chrono::milliseconds (1500));
+    DN_ASSERT (c->in_flight () <= 3u);
+
+    // A second NAK for the same gap -- VMS sends one per segment beyond
+    // it -- changes nothing.
+    l.b->nsp ()->deliver (Nodeid::parse ("1.1"), ByteView (f.data (), f.size ()));
+    std::this_thread::sleep_for (std::chrono::milliseconds (100));
+    DN_ASSERT_EQ (c->window (), 3u);
+    l.b->stop ();
+}

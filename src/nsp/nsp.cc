@@ -408,6 +408,7 @@ void Connection::process_ack (Seq num)
     }
     cwnd_ = std::min (cwnd_, static_cast<double> (qmax_));
     highest_acked_ = num;
+    if (progress) nak_from_.reset ();
     if (progress) {
         // Progress resets the retransmit count and restarts the timer.  PyDECnet
         // counts retries per packet; this implementation has one count per
@@ -434,8 +435,34 @@ void Connection::route_ack (const std::optional<AckNum> &a, bool on_data)
     // A cross acknowledgement refers to the subchannel the packet did not
     // arrive on.
     bool for_data = a->is_cross () ? !on_data : on_data;
-    if (for_data) process_ack (a->num);
-    else          process_int_ack (a->num);
+    if (for_data) {
+        process_ack (a->num);
+        if (a->is_nak ()) process_nak ();
+    } else {
+        process_int_ack (a->num);
+    }
+}
+
+// A negative acknowledgement: the far end has everything up to the number
+// it gave (process_ack has dealt with that) and lost what came next.  Send
+// it again now, rather than when the retransmit timer runs out, and take
+// it as congestion: halve the window.  VMS sends these when segments
+// arrive beyond a gap.
+void Connection::process_nak ()
+{
+    if (txq_.empty () || !txq_.front ().sent) return;
+    if (nak_from_ && *nak_from_ == txq_.front ().seq) return;
+    nak_from_ = txq_.front ().seq;
+
+    ssthresh_ = std::max (2.0, static_cast<double> (in_flight ()) / 2.0);
+    cwnd_ = ssthresh_;
+    for (TxEntry &e : txq_) {
+        if (!e.sent || !e.is_data) continue;
+        e.sent = false;
+        e.txtime = std::chrono::steady_clock::time_point {};
+    }
+    DN_TRACE ("link {} NAK: resending from the gap, window {}", srcaddr_, window ());
+    send_blocked ();
 }
 
 void Connection::process_int_ack (Seq num)
