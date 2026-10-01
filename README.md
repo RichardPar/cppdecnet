@@ -31,15 +31,20 @@ Implemented:
   (UDP, TCP, telnet, serial)
 - Routing: endnode, level 1 router, level 2 router
 - NSP: logical links, segmentation, retransmission, flow control,
-  interrupt messages
+  interrupt messages, and congestion control after DEC-TR-353: a window
+  that opens as segments are acknowledged and shuts down on a loss,
+  go-back-N on a timeout, and an immediate resend on a NAK. VMS, which
+  asks for no flow control and drops what it can't take, needs it for
+  uploads of any size
 - Session control: object database, built-in MIRROR and TIMESTAMP,
   external programs
-- MOP: system id, counters, loopback
+- MOP: system id, counters, loopback, on 60-02 as VMS and RSX expect
 - Event logging: filters, console/file/monitor sinks, remote sinks
 - Network management: NICE listener (object 19), read only
 - Monitoring pages over HTTP
 - PyDECnet's JSON API over a Unix socket: the session API, for programs
-  that open or accept logical links
+  that open or accept logical links, and the mop API, for system ids,
+  counters and loop tests from a program
 - File access: `dnfal`, a FAL (object 17) serving a directory, with
   directory, read and, if allowed, create, delete and rename
 
@@ -53,8 +58,11 @@ node, nsp and routing requests, and the bridge. See [TASKS.md](TASKS.md),
 
 ## Quick start
 
-Requires a C++20 compiler (GCC 13+ or Clang 16+) and GNU Make. libpcap
-is optional and needed only for pcap circuits.
+Requires a C++20 compiler (GCC 13+ or Clang 16+), GNU Make and libcrypt
+(`libcrypt-dev`, for dnfal's password hashes). libpcap (`libpcap-dev`) is
+optional and needed only for pcap circuits. The build looks for it every
+time but doesn't rebuild what's already built, so after installing it run
+`make clean` and then `make`.
 
 ```sh
 make
@@ -334,11 +342,15 @@ matched to the request by its `tag`. `timeout` is in seconds, 1 to 60,
 default 3. A loop of several packets pauses a second after each answer,
 as PyDECnet does, unless `fast` is true.
 
-PathNoWorks (network management, file access and a FUSE mount for Linux)
-is built on this API.
+[PathNoWorks](https://github.com/RichardPar/PathNoWorks) is built on
+this API: network management, file access, a FUSE mount, remote login,
+mail, MOP, X11 over DECnet and a Qt desktop, all for Linux. It needs this
+branch, `PathNoWorksAPI`, until it reaches `main`; PathNoWorks' `build.sh`
+clones it for you.
 
-Only the session API is implemented. Anyone who can open the socket can
-make and accept connections as this node, so set the mode accordingly.
+The session and mop APIs are implemented; the node, nsp and routing ones
+are not. Anyone who can open the socket can make and accept connections
+as this node, so set the mode accordingly.
 
 ## File access
 
