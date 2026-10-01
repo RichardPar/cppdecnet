@@ -9,13 +9,16 @@
 #include "decnet/nice/packets.h"
 #include "decnet/node.h"
 
-#include <arpa/inet.h>
 #include <cerrno>
 #include <cstring>
 #include <future>
+
+#ifndef _WIN32
+#include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#endif
 
 namespace decnet::http {
 
@@ -212,9 +215,9 @@ void Server::run ()
 {
     logging::set_thread_name (node_ ? node_->name () : "http");
     while (!stopping_) {
-        int fd = ::accept (listener_.fd (), nullptr, nullptr);
+        int fd = sock_accept (listener_.fd ());
         if (fd < 0) {
-            if (errno == EINTR) continue;
+            if (sock_interrupted (sock_errno ())) continue;
             break;                      // listener closed, or gone
         }
         handle (Socket (fd));
@@ -228,7 +231,7 @@ void Server::handle (Socket conn)
     std::string buf;
     char tmp[2048];
     while (buf.find ("\r\n\r\n") == std::string::npos && buf.size () < 64 * 1024) {
-        ssize_t n = ::recv (conn.fd (), tmp, sizeof tmp, 0);
+        ssize_t n = sock_recv (conn.fd (), tmp, sizeof tmp);
         if (n <= 0) break;
         buf.append (tmp, static_cast<std::size_t> (n));
     }
@@ -278,8 +281,7 @@ void Server::handle (Socket conn)
     Bytes out = resp.encode ();
     std::size_t sent = 0;
     while (sent < out.size ()) {
-        ssize_t n = ::send (conn.fd (), out.data () + sent, out.size () - sent,
-                            MSG_NOSIGNAL);
+        ssize_t n = sock_send (conn.fd (), out.data () + sent, out.size () - sent);
         if (n <= 0) break;
         sent += static_cast<std::size_t> (n);
     }

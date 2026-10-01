@@ -7,11 +7,10 @@
 #include "decnet/common/work.h"
 #include "decnet/node.h"
 
-#include <unistd.h>
-
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 
@@ -108,9 +107,13 @@ bool write_node_list (const std::string &path,
         f.flush ();
         if (!f) { error = "error writing " + tmp; return false; }
     }
-    if (std::rename (tmp.c_str (), path.c_str ()) != 0) {
+    // std::filesystem::rename replaces an existing target on Windows too,
+    // where std::rename refuses.
+    std::error_code ec;
+    std::filesystem::rename (tmp, path, ec);
+    if (ec) {
         error = "cannot rename " + tmp + " to " + path;
-        ::unlink (tmp.c_str ());
+        std::filesystem::remove (tmp, ec);
         return false;
     }
     return true;

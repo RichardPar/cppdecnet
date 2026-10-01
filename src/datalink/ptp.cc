@@ -133,7 +133,7 @@ Bytes PtpDatalink::recvall (std::size_t n)
         std::size_t want = n - ret.size ();
         std::uint8_t buf[4096];
         if (want > sizeof buf) want = sizeof buf;
-        ssize_t got = ::recv (socket_.fd (), buf, want, 0);
+        ssize_t got = sock_recv (socket_.fd (), buf, want);
         if (got <= 0)
             throw std::runtime_error ("connection closed");
         ret.insert (ret.end (), buf, buf + got);

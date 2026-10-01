@@ -9,11 +9,30 @@
 
 #include <cerrno>
 #include <cstring>
-#include <fcntl.h>
 #include <sstream>
+#include <stdexcept>
+
+#ifdef _WIN32
+#include <windows.h>
+// A Windows COM port takes the baud rate as a number; these keep the
+// list of supported speeds below in one place.
+using speed_t = DWORD;
+#define B300    300
+#define B600    600
+#define B1200   1200
+#define B2400   2400
+#define B4800   4800
+#define B9600   9600
+#define B19200  19200
+#define B38400  38400
+#define B57600  57600
+#define B115200 115200
+#define B230400 230400
+#else
+#include <fcntl.h>
 #include <termios.h>
 #include <unistd.h>
-#include <stdexcept>
+#endif
 
 namespace decnet::datalink {
 
@@ -343,7 +362,7 @@ bool TcpDdcmp::check_connection ()
                 int err = connecting_.socket_error ();
                 if (err) {
                     DN_TRACE ("{} connect failed: {}", name_,
-                              std::strerror (err));
+                              sock_strerror (err));
                     connecting_.close ();
                 } else {
                     DN_DEBUG ("{} connected outbound to {}", name_,
@@ -361,7 +380,7 @@ bool TcpDdcmp::check_connection ()
             if (p.error) {
                 listener_.close ();
             } else if (p.readable) {
-                Socket conn (::accept (listener_.fd (), nullptr, nullptr));
+                Socket conn (sock_accept (listener_.fd ()));
                 if (conn) {
                     Endpoint peer = peer_of (conn.fd ());
                     if (!dest_.any () && !dest_.valid (peer)) {
@@ -447,8 +466,8 @@ void TcpDdcmp::transmit (const Message &m)
 
     std::size_t sent = 0;
     while (sent < wire.size ()) {
-        ssize_t n = ::send (socket_.fd (), wire.data () + sent,
-                            wire.size () - sent, MSG_NOSIGNAL);
+        ssize_t n = sock_send (socket_.fd (), wire.data () + sent,
+                               wire.size () - sent);
         if (n <= 0) return;
         sent += static_cast<std::size_t> (n);
     }
@@ -486,6 +505,126 @@ SerialDdcmp::SerialDdcmp (Element *owner, std::string name, DdcmpDevice dev)
         throw std::invalid_argument ("DDCMP serial: unsupported speed "
                                      + std::to_string (dev_.speed));
 }
+
+#ifdef _WIN32
+
+namespace {
+
+std::string win_error ()
+{
+    DWORD err = ::GetLastError ();
+    char buf[256] = "";
+    DWORD n = ::FormatMessageA (FORMAT_MESSAGE_FROM_SYSTEM
+                                | FORMAT_MESSAGE_IGNORE_INSERTS,
+                                nullptr, err, 0, buf, sizeof buf, nullptr);
+    while (n && (buf[n - 1] == '\r' || buf[n - 1] == '\n' || buf[n - 1] == '.'))
+        buf[--n] = '\0';
+    return n ? std::string (buf) : "error " + std::to_string (err);
+}
+
+// One overlapped transfer, waited for.  The port is opened overlapped so
+// the receive thread's read does not hold up a transmit, as it would on a
+// synchronous handle.  Returns the count, or -1.
+long com_io (HANDLE h, bool write, void *buf, DWORD len)
+{
+    OVERLAPPED ov {};
+    ov.hEvent = ::CreateEventA (nullptr, TRUE, FALSE, nullptr);
+    if (!ov.hEvent) return -1;
+    DWORD done = 0;
+    BOOL ok = write ? ::WriteFile (h, buf, len, &done, &ov)
+                    : ::ReadFile (h, buf, len, &done, &ov);
+    if (!ok && ::GetLastError () == ERROR_IO_PENDING)
+        ok = ::GetOverlappedResult (h, &ov, &done, TRUE);
+    ::CloseHandle (ov.hEvent);
+    return ok ? static_cast<long> (done) : -1;
+}
+
+}   // namespace
+
+void SerialDdcmp::connect ()
+{
+    // COM10 and up need the device namespace prefix; it is harmless below.
+    std::string path = dev_.destination;
+    if (path.rfind ("\\\\", 0) != 0) path = "\\\\.\\" + path;
+    HANDLE h = ::CreateFileA (path.c_str (), GENERIC_READ | GENERIC_WRITE, 0,
+                              nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED,
+                              nullptr);
+    if (h == INVALID_HANDLE_VALUE) {
+        DN_ERROR ("{}: cannot open {}: {}", name_, dev_.destination,
+                  win_error ());
+        return;
+    }
+
+    // Raw 8N1, no flow control.
+    DCB dcb {};
+    dcb.DCBlength = sizeof dcb;
+    if (!::GetCommState (h, &dcb)) {
+        DN_ERROR ("{}: {} is not a serial port: {}", name_, dev_.destination,
+                  win_error ());
+        ::CloseHandle (h);
+        return;
+    }
+    dcb.BaudRate     = termios_speed (dev_.speed);
+    dcb.ByteSize     = 8;
+    dcb.Parity       = NOPARITY;
+    dcb.StopBits     = ONESTOPBIT;
+    dcb.fBinary      = TRUE;
+    dcb.fParity      = FALSE;
+    dcb.fOutxCtsFlow = FALSE;
+    dcb.fOutxDsrFlow = FALSE;
+    dcb.fDsrSensitivity = FALSE;
+    dcb.fOutX        = FALSE;
+    dcb.fInX         = FALSE;
+    dcb.fNull        = FALSE;
+    dcb.fAbortOnError = FALSE;
+    dcb.fDtrControl  = DTR_CONTROL_ENABLE;
+    dcb.fRtsControl  = RTS_CONTROL_ENABLE;
+
+    // A read returns as soon as anything has arrived, or with nothing
+    // after the poll timeout, so the receive loop notices a stop request.
+    COMMTIMEOUTS to {};
+    to.ReadIntervalTimeout        = MAXDWORD;
+    to.ReadTotalTimeoutMultiplier = MAXDWORD;
+    to.ReadTotalTimeoutConstant   = poll_timeout_ms;
+
+    if (!::SetCommState (h, &dcb) || !::SetCommTimeouts (h, &to)) {
+        DN_ERROR ("{}: cannot configure {}: {}", name_, dev_.destination,
+                  win_error ());
+        ::CloseHandle (h);
+        return;
+    }
+    ::PurgeComm (h, PURGE_RXCLEAR | PURGE_TXCLEAR);
+    com_ = h;
+    DN_DEBUG ("{}: opened {} at {} baud", name_, dev_.destination, dev_.speed);
+}
+
+void SerialDdcmp::disconnect ()
+{
+    if (com_) { ::CloseHandle (com_); com_ = nullptr; }
+}
+
+bool SerialDdcmp::check_connection ()
+{
+    // Nothing to establish on a serial line.
+    return com_ != nullptr;
+}
+
+Bytes SerialDdcmp::read_line (std::size_t n)
+{
+    Bytes out;
+    out.reserve (n);
+    while (out.size () < n) {
+        if (stopping ()) throw std::runtime_error ("stop requested");
+        std::uint8_t buf[512];
+        std::size_t want = std::min (n - out.size (), sizeof buf);
+        long got = com_io (com_, false, buf, static_cast<DWORD> (want));
+        if (got < 0) throw std::runtime_error ("serial read failed");
+        out.insert (out.end (), buf, buf + got);     // got == 0: timed out
+    }
+    return out;
+}
+
+#else
 
 void SerialDdcmp::connect ()
 {
@@ -563,6 +702,8 @@ Bytes SerialDdcmp::read_line (std::size_t n)
     return out;
 }
 
+#endif
+
 void SerialDdcmp::receive_loop ()
 {
     for (;;) {
@@ -581,12 +722,20 @@ void SerialDdcmp::receive_loop ()
 
 void SerialDdcmp::transmit (const Message &m)
 {
+#ifdef _WIN32
+    if (!com_) return;
+#else
     if (fd_ < 0) return;
+#endif
     Bytes wire = m.encode ();
     // One all-ones byte after the trailer.  No leading SYN bytes on an
     // asynchronous line, per the spec.
     wire.push_back (ddcmp::DEL);
 
+#ifdef _WIN32
+    // Overlapped writes with no write timeout complete in full or fail.
+    com_io (com_, true, wire.data (), static_cast<DWORD> (wire.size ()));
+#else
     std::size_t sent = 0;
     while (sent < wire.size ()) {
         ssize_t n = ::write (fd_, wire.data () + sent, wire.size () - sent);
@@ -596,6 +745,7 @@ void SerialDdcmp::transmit (const Message &m)
         }
         sent += static_cast<std::size_t> (n);
     }
+#endif
 }
 
 }   // namespace decnet::datalink

@@ -1,6 +1,7 @@
 // Tests for the API server: the PyDECnet JSON protocol over a Unix socket.
 
 #include "harness.h"
+#include "posix_compat.h"
 
 #include "decnet/api/server.h"
 #include "decnet/common/json.h"
@@ -17,9 +18,10 @@
 #include <optional>
 #include <thread>
 
+#ifndef _WIN32
 #include <sys/socket.h>
 #include <sys/un.h>
-#include <unistd.h>
+#endif
 
 using namespace decnet;
 
@@ -52,7 +54,7 @@ bool wait_until (P pred, std::chrono::milliseconds timeout
 std::string socket_path ()
 {
     static int n = 0;
-    return "/tmp/dnapi-" + std::to_string (::getpid ()) + "-"
+    return dntest::tmp_dir () + "/dnapi-" + std::to_string (::getpid ()) + "-"
         + std::to_string (++n) + ".sock";
 }
 
@@ -63,7 +65,7 @@ class ApiClient {
 public:
     explicit ApiClient (const std::string &path)
     {
-        sock_ = Socket (::socket (AF_UNIX, SOCK_STREAM, 0));
+        sock_ = Socket (sock_open (AF_UNIX, SOCK_STREAM));
         sockaddr_un a {};
         a.sun_family = AF_UNIX;
         std::strncpy (a.sun_path, path.c_str (), sizeof a.sun_path - 1);
@@ -78,7 +80,7 @@ public:
     void send (const json::Object &o)
     {
         std::string text = o.encode () + "\n";
-        (void) ::send (sock_.fd (), text.data (), text.size (), MSG_NOSIGNAL);
+        (void) sock_send (sock_.fd (), text.data (), text.size ());
     }
 
     // The next message, or nothing if none arrives in time.
@@ -100,7 +102,7 @@ public:
                                         static_cast<int> (left));
             if (!r.readable) return std::nullopt;
             char buf[4096];
-            ssize_t n = ::recv (sock_.fd (), buf, sizeof buf, 0);
+            ssize_t n = sock_recv (sock_.fd (), buf, sizeof buf);
             if (n <= 0) return std::nullopt;
             pending_.append (buf, static_cast<std::size_t> (n));
         }
@@ -188,7 +190,11 @@ DN_TEST (api, the_api_line_is_parsed)
     // No name means the PyDECnet default.
     ::unsetenv ("DECNETAPI");
     Config d = Config::from_string ("api\n");
+#ifdef _WIN32
+    DN_ASSERT_EQ (d.api_socket (), dntest::tmp_dir () + "/decnetapi.sock");
+#else
     DN_ASSERT_EQ (d.api_socket (), std::string ("/tmp/decnetapi.sock"));
+#endif
     DN_ASSERT_EQ (d.api_mode (), 0666u);
 
     DN_ASSERT_THROWS (std::runtime_error,
@@ -252,7 +258,7 @@ DN_TEST (api, bad_requests_get_an_error_with_their_tag)
 DN_TEST (api, a_request_that_is_not_json_is_answered_and_the_link_stays_up)
 {
     Single s;
-    int fd = ::socket (AF_UNIX, SOCK_STREAM, 0);
+    int fd = sock_open (AF_UNIX, SOCK_STREAM);
     Socket sock (fd);
     sockaddr_un a {};
     a.sun_family = AF_UNIX;
@@ -260,14 +266,14 @@ DN_TEST (api, a_request_that_is_not_json_is_answered_and_the_link_stays_up)
     DN_ASSERT (::connect (fd, reinterpret_cast<sockaddr *> (&a), sizeof a) == 0);
 
     std::string text = "not json\n{}\n";
-    DN_ASSERT (::send (fd, text.data (), text.size (), 0)
+    DN_ASSERT (sock_send (fd, text.data (), text.size ())
                == static_cast<ssize_t> (text.size ()));
     std::string got;
     char buf[1024];
     DN_ASSERT (wait_until ([&] {
         PollResult r = poll_socket (fd, true, false, 100);
         if (r.readable) {
-            ssize_t n = ::recv (fd, buf, sizeof buf, 0);
+            ssize_t n = sock_recv (fd, buf, sizeof buf);
             if (n > 0) got.append (buf, static_cast<std::size_t> (n));
         }
         return std::count (got.begin (), got.end (), '\n') >= 2;
@@ -506,12 +512,12 @@ DN_TEST (api, the_socket_is_removed_at_stop_and_a_stale_one_replaced)
     std::string path = socket_path ();
     // A file left behind by a server that died.
     {
-        int fd = ::socket (AF_UNIX, SOCK_STREAM, 0);
+        int fd = sock_open (AF_UNIX, SOCK_STREAM);
         sockaddr_un a {};
         a.sun_family = AF_UNIX;
         std::strncpy (a.sun_path, path.c_str (), sizeof a.sun_path - 1);
         DN_ASSERT (::bind (fd, reinterpret_cast<sockaddr *> (&a), sizeof a) == 0);
-        ::close (fd);
+        sock_close (fd);
     }
     DN_ASSERT (::access (path.c_str (), F_OK) == 0);
 

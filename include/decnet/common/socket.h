@@ -9,15 +9,13 @@
 #ifndef DECNET_COMMON_SOCKET_H
 #define DECNET_COMMON_SOCKET_H
 
+#include "decnet/common/platform.h"
 #include "decnet/common/types.h"
 
 #include <chrono>
 #include <cstdint>
 #include <string>
 #include <vector>
-
-#include <netdb.h>
-#include <sys/socket.h>
 
 namespace decnet {
 
@@ -150,6 +148,12 @@ public:
     std::string str () const;
 
 private:
+    // bind_socket, but must_bind binds the wildcard address when there is
+    // no name or port.  Only an outbound connection may be left unbound:
+    // POSIX binds a socket implicitly at listen or first send, and Windows
+    // refuses to listen on, or receive from, an unbound one.
+    Socket open_socket (int family, int type, int protocol, bool must_bind) const;
+
     std::string   name_;
     std::uint16_t port_;
 };

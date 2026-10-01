@@ -58,7 +58,12 @@ private:
     std::string              program_;
     std::vector<std::string> arguments_;
 
+#ifdef _WIN32
+    long    pid_ = -1;           // its process id, for the log
+    void   *process_ = nullptr;  // its process HANDLE
+#else
     ::pid_t pid_ = -1;
+#endif
     int     to_child_ = -1;      // its standard input
     int     from_child_ = -1;    // its standard output
     int     child_log_ = -1;     // its standard error

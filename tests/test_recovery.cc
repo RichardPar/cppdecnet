@@ -3,6 +3,7 @@
 // circuit must come back when traffic resumes.
 
 #include "harness.h"
+#include "posix_compat.h"
 
 #include "decnet/common/socket.h"
 #include "decnet/config.h"
@@ -20,10 +21,9 @@
 #include <mutex>
 #include <thread>
 
+#ifndef _WIN32
 #include <netinet/in.h>
-#include <poll.h>
-#include <sys/socket.h>
-#include <unistd.h>
+#endif
 
 using namespace decnet;
 using namespace decnet::nice;
@@ -40,6 +40,16 @@ std::uint16_t free_port ()
     socklen_t len = sizeof sa;
     ::getsockname (s.fd (), reinterpret_cast<sockaddr *> (&sa), &len);
     return ntohs (reinterpret_cast<sockaddr_in *> (&sa)->sin_port);
+}
+
+// A pollfd waiting for input on fd.  The fd member is a SOCKET on Windows,
+// so this is not a plain aggregate initialiser.
+pollfd poll_for (int fd)
+{
+    pollfd p {};
+    p.fd = fd;
+    p.events = POLLIN;
+    return p;
 }
 
 template <typename P>
@@ -74,14 +84,14 @@ public:
 private:
     static int connect_to (std::uint16_t port)
     {
-        int fd = ::socket (AF_INET, SOCK_STREAM, 0);
+        int fd = sock_open (AF_INET, SOCK_STREAM);
         if (fd < 0) return -1;
         sockaddr_in sa {};
         sa.sin_family = AF_INET;
         sa.sin_port = htons (port);
         sa.sin_addr.s_addr = htonl (INADDR_LOOPBACK);
         if (::connect (fd, reinterpret_cast<sockaddr *> (&sa), sizeof sa) < 0) {
-            ::close (fd);
+            sock_close (fd);
             return -1;
         }
         return fd;
@@ -89,9 +99,10 @@ private:
 
     void run ()
     {
-        int lfd = ::socket (AF_INET, SOCK_STREAM, 0);
+        int lfd = sock_open (AF_INET, SOCK_STREAM);
         int one = 1;
-        ::setsockopt (lfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+        ::setsockopt (lfd, SOL_SOCKET, SO_REUSEADDR,
+                      reinterpret_cast<const char *> (&one), sizeof one);
         sockaddr_in sa {};
         sa.sin_family = AF_INET;
         sa.sin_port = htons (lport_);
@@ -99,43 +110,43 @@ private:
         if (::bind (lfd, reinterpret_cast<sockaddr *> (&sa), sizeof sa) < 0
             || ::listen (lfd, 4) < 0) {
             std::printf ("  relay: cannot listen on %u\n", lport_);
-            ::close (lfd);
+            sock_close (lfd);
             return;
         }
 
         while (!stop_.load ()) {
-            pollfd p { lfd, POLLIN, 0 };
-            if (::poll (&p, 1, 100) <= 0) continue;
-            int cfd = ::accept (lfd, nullptr, nullptr);
+            pollfd p = poll_for (lfd);
+            if (sock_poll (&p, 1, 100) <= 0) continue;
+            int cfd = sock_accept (lfd);
             if (cfd < 0) continue;
             int sfd = connect_to (dport_);
-            if (sfd < 0) { ::close (cfd); continue; }
+            if (sfd < 0) { sock_close (cfd); continue; }
             pump (cfd, sfd);
-            ::close (cfd);
-            ::close (sfd);
+            sock_close (cfd);
+            sock_close (sfd);
         }
-        ::close (lfd);
+        sock_close (lfd);
     }
 
     void pump (int a, int b)
     {
         std::uint8_t buf[8192];
         while (!stop_.load ()) {
-            pollfd p[2] = { { a, POLLIN, 0 }, { b, POLLIN, 0 } };
-            int n = ::poll (p, 2, 100);
+            pollfd p[2] = { poll_for (a), poll_for (b) };
+            int n = sock_poll (p, 2, 100);
             if (n < 0) return;
             if (n == 0) continue;
             for (int i = 0; i < 2; ++i) {
                 if (!(p[i].revents & (POLLIN | POLLHUP | POLLERR))) continue;
                 int from = i == 0 ? a : b;
                 int to   = i == 0 ? b : a;
-                ssize_t got = ::recv (from, buf, sizeof buf, 0);
+                ssize_t got = sock_recv (from, buf, sizeof buf);
                 if (got <= 0) return;           // closed: drop both ends
                 if (deaf_.load ()) continue;    // swallow it
                 ssize_t off = 0;
                 while (off < got) {
-                    ssize_t put = ::send (to, buf + off, got - off,
-                                          MSG_NOSIGNAL);
+                    ssize_t put = sock_send (to, buf + off,
+                                          static_cast<std::size_t> (got - off));
                     if (put <= 0) return;
                     off += put;
                 }

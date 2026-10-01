@@ -7,8 +7,10 @@
 #include "decnet/dap/fal.h"
 
 #include "decnet/common/exceptions.h"
+#include "decnet/common/platform.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
@@ -17,12 +19,147 @@
 #include <iostream>
 #include <memory>
 
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#include <sys/stat.h>
+#include <windows.h>
+#else
 #include <dirent.h>
 #include <fcntl.h>
 #include <fnmatch.h>
 #include <pwd.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#endif
+
+#ifdef _WIN32
+
+// The POSIX calls this file uses, done the Windows way.  Paths stay
+// '/'-separated, which Windows accepts, and realpath returns them so too,
+// so the root containment check is the same on both.
+
+using uid_t  = int;
+using mode_t = unsigned short;
+
+#define S_ISDIR(m) (((m) & _S_IFMT) == _S_IFDIR)
+#define S_ISREG(m) (((m) & _S_IFMT) == _S_IFREG)
+// One set of permission bits, so group and world are the owner's.
+#define S_IRUSR _S_IREAD
+#define S_IWUSR _S_IWRITE
+#define S_IXUSR _S_IEXEC
+#define S_IRGRP _S_IREAD
+#define S_IWGRP _S_IWRITE
+#define S_IXGRP _S_IEXEC
+#define S_IROTH _S_IREAD
+#define S_IWOTH _S_IWRITE
+#define S_IXOTH _S_IEXEC
+
+// There is no search permission on a Windows directory: X_OK asks only
+// whether it exists.
+#define R_OK 4
+#define X_OK 0
+
+#define FNM_CASEFOLD 1
+
+namespace {
+
+// No symbolic links to worry about here; GetFinalPathName in realpath
+// resolves junctions and links for the containment check.
+int lstat (const char *path, struct stat *st) { return ::stat (path, st); }
+
+int fchmod (int, int) { return 0; }
+int fsync (int fd) { return ::_commit (fd); }
+
+int mkstemp (char *tmpl)
+{
+    std::size_t len = std::strlen (tmpl) + 1;
+    std::string base (tmpl);
+    for (int tries = 0; tries < 100; ++tries) {
+        std::memcpy (tmpl, base.c_str (), len);
+        if (::_mktemp_s (tmpl, len) != 0) return -1;
+        int fd = ::_open (tmpl, _O_CREAT | _O_EXCL | _O_RDWR | _O_BINARY,
+                          _S_IREAD | _S_IWRITE);
+        if (fd >= 0 || errno != EEXIST) return fd;
+    }
+    return -1;
+}
+
+// Like realpath (path, nullptr): canonical, links resolved, malloc'd.
+char *realpath (const char *path, char *)
+{
+    HANDLE h = ::CreateFileA (path, 0,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                              nullptr, OPEN_EXISTING,
+                              FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (h == INVALID_HANDLE_VALUE) { errno = ENOENT; return nullptr; }
+    char buf[MAX_PATH * 4];
+    DWORD n = ::GetFinalPathNameByHandleA (h, buf, sizeof buf,
+                                           FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    ::CloseHandle (h);
+    if (n == 0 || n >= sizeof buf) { errno = ENAMETOOLONG; return nullptr; }
+    std::string s (buf, n);
+    if (s.rfind ("\\\\?\\UNC\\", 0) == 0) s = "\\\\" + s.substr (8);
+    else if (s.rfind ("\\\\?\\", 0) == 0) s.erase (0, 4);
+    std::replace (s.begin (), s.end (), '\\', '/');
+    return ::_strdup (s.c_str ());
+}
+
+struct dirent { char d_name[MAX_PATH]; };
+
+struct DIR {
+    HANDLE           h = INVALID_HANDLE_VALUE;
+    WIN32_FIND_DATAA fd {};
+    bool             first = true;
+    dirent           e {};
+};
+
+DIR *opendir (const char *path)
+{
+    auto d = std::make_unique<DIR> ();
+    d->h = ::FindFirstFileA ((std::string (path) + "/*").c_str (), &d->fd);
+    if (d->h == INVALID_HANDLE_VALUE) return nullptr;
+    return d.release ();
+}
+
+dirent *readdir (DIR *d)
+{
+    if (!d->first && !::FindNextFileA (d->h, &d->fd)) return nullptr;
+    d->first = false;
+    std::strncpy (d->e.d_name, d->fd.cFileName, sizeof d->e.d_name - 1);
+    return &d->e;
+}
+
+int closedir (DIR *d)
+{
+    ::FindClose (d->h);
+    delete d;
+    return 0;
+}
+
+// fnmatch for the patterns glob_pattern makes: '*' and '?' only.
+int fnmatch (const char *pat, const char *s, int flags)
+{
+    auto eq = [flags] (char a, char b) {
+        if (flags & FNM_CASEFOLD)
+            return std::tolower (static_cast<unsigned char> (a))
+                == std::tolower (static_cast<unsigned char> (b));
+        return a == b;
+    };
+    const char *star = nullptr, *resume = nullptr;
+    while (*s) {
+        if (*pat == '*') { star = pat++; resume = s; }
+        else if (*pat == '?' || (*pat && eq (*pat, *s))) { ++pat; ++s; }
+        else if (star) { pat = star + 1; s = ++resume; }
+        else return 1;
+    }
+    while (*pat == '*') ++pat;
+    return *pat ? 1 : 0;
+}
+
+}   // namespace
+
+#endif
 
 namespace decnet::dap {
 
@@ -74,6 +211,20 @@ std::string dap_time (std::time_t t)
     return buf;
 }
 
+#ifdef _WIN32
+
+// stat gives no owner on Windows.  The files are the ones this daemon
+// serves, so name the account it runs as.
+std::string owner_name (uid_t)
+{
+    char buf[256];
+    DWORD len = sizeof buf;
+    if (::GetUserNameA (buf, &len)) return buf;
+    return "0";
+}
+
+#else
+
 std::string owner_name (uid_t uid)
 {
     struct passwd pw {}, *res = nullptr;
@@ -81,6 +232,21 @@ std::string owner_name (uid_t uid)
     if (::getpwuid_r (uid, &pw, buf, sizeof buf, &res) == 0 && res)
         return res->pw_name;
     return std::to_string (uid);
+}
+
+#endif
+
+// Rename over an existing file, which rename does on POSIX but not on
+// Windows.
+int replace_file (const std::string &from, const std::string &to)
+{
+#ifdef _WIN32
+    return ::MoveFileExA (from.c_str (), to.c_str (),
+                          MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)
+        ? 0 : -1;
+#else
+    return ::rename (from.c_str (), to.c_str ());
+#endif
 }
 
 // Deny bits from Unix permission bits.  Write permission covers delete.
@@ -456,7 +622,11 @@ std::vector<Message> FalServer::describe (const Found &f, const Access &a,
         auto size = static_cast<std::uint64_t> (st.st_size);
         at.bls = 512;
         at.rfm = v7_ ? Attributes::fb_slf : Attributes::fb_fix;
+#ifdef _WIN32
+        at.alq = (size + 511) / 512;    // no st_blocks: what the data needs
+#else
         at.alq = static_cast<std::uint64_t> (st.st_blocks);
+#endif
         at.hbk = at.ebk = size / 512 + 1;
         at.ffb = static_cast<std::uint16_t> (size % 512);
         if (attr_) {
@@ -735,7 +905,7 @@ void FalServer::create (const Access &a)
                 bool ok = std::fflush (fp.get ()) == 0
                        && ::fsync (::fileno (fp.get ())) == 0;
                 fp.reset ();
-                if (!ok || ::rename (tmp.c_str (), target->path.c_str ()) != 0) {
+                if (!ok || replace_file (tmp, target->path) != 0) {
                     ::unlink (tmp.c_str ());
                     return status (Status::close_error, rms_wer);
                 }

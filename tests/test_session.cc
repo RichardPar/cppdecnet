@@ -2,6 +2,7 @@
 // MIRROR loop run between two real nodes.
 
 #include "harness.h"
+#include "posix_compat.h"
 
 #include "decnet/common/socket.h"
 #include "decnet/config.h"

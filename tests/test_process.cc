@@ -1,6 +1,7 @@
 // Objects run as separate processes, using a small inline program.
 
 #include "harness.h"
+#include "posix_compat.h"
 
 #include "decnet/common/socket.h"
 #include "decnet/config.h"
@@ -121,7 +122,7 @@ for work in sys.stdin:
 std::string write_program (const std::string &name, const char *body)
 {
     // The scratch directory the harness runs in.
-    std::string path = "/tmp/dntest_" + name + ".py";
+    std::string path = dntest::tmp_dir () + "/dntest_" + name + ".py";
     std::ofstream f (path);
     f << body;
     f.close ();

@@ -4,6 +4,7 @@
 
 #include <charconv>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
@@ -11,6 +12,16 @@
 namespace decnet {
 
 namespace {
+
+std::string default_api_socket ()
+{
+#ifdef _WIN32
+    std::error_code ec;
+    auto dir = std::filesystem::temp_directory_path (ec);
+    if (!ec) return (dir / "decnetapi.sock").generic_string ();
+#endif
+    return "/tmp/decnetapi.sock";
+}
 
 unsigned to_uint (const std::string &s, const char *what)
 {
@@ -219,10 +230,11 @@ void Config::apply (ConfigLine line)
 
     if (line.command == "api") {
         // api [socket] [--mode octal].  Defaults as config.py: $DECNETAPI
-        // or /tmp/decnetapi.sock, mode 666.
+        // or /tmp/decnetapi.sock, mode 666.  Windows has no /tmp; there the
+        // default is decnetapi.sock in the temporary directory, %TEMP%.
         const char *env = std::getenv ("DECNETAPI");
         api_socket_ = !line.positional.empty () ? line.positional[0]
-                    : env ? env : "/tmp/decnetapi.sock";
+                    : env ? env : default_api_socket ();
         if (has (line, "mode")) {
             std::string m = opt (line, "mode", empty);
             unsigned v = 0;

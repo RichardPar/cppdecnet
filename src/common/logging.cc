@@ -1,5 +1,7 @@
 #include "decnet/common/logging.h"
 
+#include "decnet/common/platform.h"
+
 #include <chrono>
 #include <cstdio>
 #include <mutex>

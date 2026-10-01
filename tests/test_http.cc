@@ -4,6 +4,7 @@
 // connection to a running node.
 
 #include "harness.h"
+#include "posix_compat.h"
 
 #include "decnet/common/socket.h"
 #include "decnet/config.h"
@@ -12,11 +13,8 @@
 
 #include <chrono>
 #include <cstring>
-#include <netdb.h>
 #include <thread>
 #include <string>
-#include <sys/socket.h>
-#include <unistd.h>
 
 using namespace decnet;
 using namespace decnet::http;
@@ -356,17 +354,18 @@ DN_TEST (http, a_page_is_served_over_a_real_connection)
     DN_ASSERT (sock.valid ());
 
     // create_connection is non-blocking; wait for it to finish.
-    DN_ASSERT (wait_until ([&] { return sock.socket_error () == 0; },
-                           std::chrono::seconds (5)));
+    PollResult p = poll_socket (sock.fd (), false, true, 5000);
+    DN_ASSERT (p.writable && sock.socket_error () == 0);
 
     const char *req = "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n";
-    DN_ASSERT (::send (sock.fd (), req, std::strlen (req), 0) > 0);
+    DN_ASSERT (sock_send (sock.fd (), req, std::strlen (req)) > 0);
 
     std::string got;
     char buf[4096];
     auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
     while (std::chrono::steady_clock::now () < deadline) {
-        ssize_t k = ::recv (sock.fd (), buf, sizeof buf, MSG_DONTWAIT);
+        // The socket is still non-blocking, so this does not wait.
+        ssize_t k = sock_recv (sock.fd (), buf, sizeof buf);
         if (k > 0) { got.append (buf, static_cast<std::size_t> (k)); continue; }
         if (k == 0) break;
         if (contains (got, "</html>")) break;

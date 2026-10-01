@@ -5,6 +5,7 @@
 // against the NM spec's event-list definition.
 
 #include "harness.h"
+#include "posix_compat.h"
 
 #include "decnet/common/socket.h"
 #include "decnet/config.h"
@@ -245,7 +246,7 @@ DN_TEST (eventlog, the_monitor_sink_delivers_to_its_callback)
 
 DN_TEST (eventlog, the_file_sink_writes_counted_records)
 {
-    std::string path = "/tmp/dn-eventlog-test.dat";
+    std::string path = dntest::tmp_dir () + "/dn-eventlog-test.dat";
     std::remove (path.c_str ());
 
     Config cfg = Config::from_string ("routing 1.1 --type l1router\n"
