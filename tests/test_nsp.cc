@@ -787,3 +787,28 @@ DN_TEST (nsp, a_packet_for_an_unknown_link_is_ignored)
 
     l.stop ();
 }
+
+DN_TEST (nsp, the_congestion_window_opens_and_closes)
+{
+    // DEC-TR-353 style congestion control inside the qmax window: it starts
+    // small, opens as acknowledgements come back, and closes to one on a
+    // timeout, with everything unacknowledged queued to go again.  VMS asks
+    // for no flow control and drops what it has no room for; without this a
+    // dropped burst took one timeout per segment to recover.
+    Link l ("nsp --qmax 8\n");
+    l.start ();
+    Connection *c = l.b->nsp ()->connect (Nodeid::parse ("1.1"), {});
+    DN_ASSERT (wait_until ([&] { return c->running (); }));
+    DN_ASSERT_EQ (c->window (), 2u);
+
+    for (int i = 0; i < 40; ++i) c->send_data (bytes_of ("steady"));
+    DN_ASSERT (wait_until ([&] { return l.sa.messages () == 40; }));
+    DN_ASSERT_EQ (c->window (), 8u);
+
+    // The far end goes quiet: what is in flight times out, and one segment
+    // goes again while the rest wait for the window to reopen.
+    l.a->stop ();
+    for (int i = 0; i < 8; ++i) c->send_data (bytes_of ("lost"));
+    DN_ASSERT (wait_until ([&] { return c->window () == 1u && c->in_flight () == 1u; }));
+    l.b->stop ();
+}

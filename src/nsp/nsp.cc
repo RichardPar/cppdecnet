@@ -27,6 +27,13 @@ Connection::Connection (NSP *parent, std::uint16_t srcaddr, Nodeid dest)
 {
     segsize_ = MSS;
     qmax_ = parent->qmax ();
+    ssthresh_ = static_cast<double> (qmax_);
+}
+
+unsigned Connection::window () const noexcept
+{
+    unsigned w = static_cast<unsigned> (cwnd_);
+    return std::max (1u, std::min (w, qmax_));
 }
 
 std::string Connection::statename () const
@@ -296,9 +303,11 @@ bool Connection::flow_ok (const TxEntry &e) const
     if (!xon_) return false;
 
     // The window: at most qmax segments outstanding, measured from the
-    // oldest unacknowledged one.
-    unsigned maxq = txq_.empty () ? qmax_ - 1
-                                  : txq_.front ().segnum + qmax_ - 1;
+    // oldest unacknowledged one, and fewer while the congestion window is
+    // smaller.
+    unsigned w = window ();
+    unsigned maxq = txq_.empty () ? w - 1
+                                  : txq_.front ().segnum + w - 1;
     if (e.segnum > maxq) return false;
 
     switch (flow_) {
@@ -382,13 +391,22 @@ void Connection::process_ack (Seq num)
 {
     // Acknowledge everything up to num that has been sent.
     bool progress = false;
+    unsigned acked = 0;
     while (!txq_.empty () && txq_.front ().sent && !(num < txq_.front ().seq)) {
         max_acked_seg_ = txq_.front ().segnum;
+        if (txq_.front ().is_data) ++acked;
         // If this was the packet being timed, the round trip is now known.
         update_delay (txq_.front ().txtime);
         txq_.pop_front ();
         progress = true;
     }
+    // Open the congestion window: quickly below the threshold, then by
+    // about one segment per window's worth acknowledged.
+    for (unsigned i = 0; i < acked; ++i) {
+        if (cwnd_ < ssthresh_) cwnd_ += 1.0;
+        else                   cwnd_ += 1.0 / cwnd_;
+    }
+    cwnd_ = std::min (cwnd_, static_cast<double> (qmax_));
     highest_acked_ = num;
     if (progress) {
         // Progress resets the retransmit count and restarts the timer.  PyDECnet
@@ -679,15 +697,25 @@ void Connection::retransmit ()
     }
     DN_TRACE ("link {} retransmitting, {} in flight, try {}", srcaddr_, n,
               retries_);
+    // A timeout means the far end, or the way to it, could not keep up:
+    // halve the threshold and start again from a window of one (DEC-TR-353).
+    // Everything unacknowledged goes again, the oldest now and the rest as
+    // the window opens; the far end acknowledges what it already had.
+    // Resending only the oldest, one per timeout, took a timeout for every
+    // segment a peer had dropped.
+    ssthresh_ = std::max (2.0, static_cast<double> (n) / 2.0);
+    cwnd_ = 1.0;
+    bool first = true;
     for (TxEntry &e : txq_) {
         if (!e.sent) continue;
         // Stop timing a packet once retransmitted.
         e.txtime = std::chrono::steady_clock::time_point {};
-        parent_->send_to (dest_, e.frame);
-        // Retransmit only the oldest unacknowledged packet.  There is one timer
-        // per connection, and resending the whole window would send a burst of up
-        // to qmax frames.
-        break;
+        if (first) {
+            parent_->send_to (dest_, e.frame);
+            first = false;
+        } else if (e.is_data) {
+            e.sent = false;             // send_blocked sends it again
+        }
     }
     timer_is_retransmit_ = true;
 

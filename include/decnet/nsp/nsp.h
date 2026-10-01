@@ -10,7 +10,12 @@
 // Flow control is outbound only, as in PyDECnet.  Our connect message
 // requests SVC_NONE.  The peer's requested mode (segment or message) and
 // link service credit govern what we send.  A window of qmax
-// unacknowledged segments always applies.
+// unacknowledged segments always applies, and within it a congestion window,
+// after DEC-TR-353 (Jain): it opens as acknowledgements arrive and closes
+// on a timeout, when everything unacknowledged is sent again.  A peer that
+// asks for no flow control -- VMS does -- may still drop what it has no room
+// for, and without this a burst it dropped took one timeout per segment to
+// recover.
 //
 // Each link has two subchannels: data, and "other" (interrupts and link
 // service).  Each has its own sequence numbers.  A plain acknowledgement
@@ -106,6 +111,10 @@ public:
     std::uint8_t flow_control () const noexcept { return flow_; }
     std::size_t queued () const noexcept { return txq_.size (); }
     std::size_t in_flight () const noexcept;
+
+    // The congestion window: how many segments may be in flight now, at
+    // most qmax.  For tests and monitoring.
+    unsigned window () const noexcept;
     std::size_t out_of_order () const noexcept { return ooo_.size (); }
     unsigned interrupt_credit () const noexcept
     { return int_max_msg_ >= int_next_msg_ ? int_max_msg_ - int_next_msg_ + 1
@@ -240,6 +249,11 @@ private:
     unsigned     max_msg_ = 0;   // message mode: highest message allowed
     bool         xon_ = true;
     unsigned     qmax_ = 20;     // unacknowledged segments in flight
+    // Congestion control: the window, which grows by one per acknowledged
+    // segment up to ssthresh (slow start) and by about one per window after
+    // it; a timeout halves ssthresh and starts the window again from one.
+    double       cwnd_ = 2.0;
+    double       ssthresh_ = 20.0;
 
     // Segments received ahead of their turn, keyed by sequence number.
     std::map<std::uint16_t, DataSeg> ooo_;
