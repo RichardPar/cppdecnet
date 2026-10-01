@@ -9,8 +9,15 @@ known defects in [BUGS.md](BUGS.md).
 - [ ] Request flow control for inbound data (send link service messages
       as a receiver)
 - [ ] Offer interrupt credit to the remote end
-- [ ] Delayed acknowledgement
+- [x] Delayed acknowledgement, when the sender sets the delay bit: held
+      one tick for a reply to carry it, as PyDECnet does
+- [ ] Set the delay bit on our own data segments
 - [ ] Phase II connections (no connect acknowledgement)
+- [x] Congestion control after DEC-TR-353: a window that opens with each
+      acknowledgement and shuts on a loss, go-back-N on a timeout, an
+      immediate resend on a NAK (uploads to VMS stalled without it)
+- [x] Retransmit timer from a weighted average of measured round trips
+      (one to five seconds), as PyDECnet does
 
 ## Session control
 
@@ -39,7 +46,13 @@ known defects in [BUGS.md](BUGS.md).
 
 ## MOP, events, NICE
 
-- [ ] MOP console carrier
+- [x] MOP system id on 60-02, the console protocol type, where VMS and
+      RSX listen for it
+- [x] Accept a system id whose last item runs past the end (RSX pads it)
+- [ ] MOP console carrier: reservation, client and server, an API request
+      (`connect` with `dest` and `verification`, `data`, `disconnect`),
+      as PyDECnet's `CarrierClientConnection`
+- [ ] MOP load and dump (PyDECnet has neither)
 - [ ] Raise data link and physical line events (classes 5 and 6)
 - [x] Include the source circuit in packet loss events (4.0 to 4.3)
 - [ ] ZERO COUNTERS
@@ -65,7 +78,10 @@ known defects in [BUGS.md](BUGS.md).
 - [ ] Per-connection NSP page, event display, bridge page
 - [ ] HTTPS
 - [x] `apiserver`: JSON API over a Unix socket, session API
-- [ ] The API's node, nsp, routing, mop and ncp requests (need nested JSON)
+- [x] Nested JSON objects and numbers with fractions
+- [x] The API's mop requests: `get`, `sysid`, `counters`, `loop`
+- [x] An API on a node that runs only MOP, with no `routing` line
+- [ ] The API's node, nsp, routing and ncp requests
 
 ## Other
 
@@ -86,3 +102,11 @@ known defects in [BUGS.md](BUGS.md).
 - [ ] Per-state packet type filtering, and the `ru4l1`, `ru4l2`, `ru3r`
       substates
 - [ ] Daemon mode: `--daemon`, pid file, log rotation
+
+## Build
+
+- [ ] Rebuild when the compiler flags change. Installing libpcap after a
+      build changes `FEATURE_FLAGS`, but nothing is recompiled until
+      `make clean`
+- [ ] Cache the feature probes in `$(BUILDDIR)/features.mk`, as
+      `mk/config.mk` says it does; they run on every `make` now

@@ -38,7 +38,11 @@ control reject) is never raised. For the same reason NICE is read only.
 
 - Inbound flow control is not requested (`SVC_NONE`), same as PyDECnet.
 - Interrupt credit is not offered to the remote end, same as PyDECnet.
-- Acknowledgements are never delayed.
+- Acknowledgements are delayed only when the far end asks with the delay
+  bit; our own data segments never set it, so every one is acknowledged.
+- A lost segment that no NAK reports still costs a full retransmit
+  timeout (the round trip estimate times the delay factor, at least two
+  seconds). Congestion control then resends everything outstanding.
 
 ### Routing
 
@@ -47,9 +51,20 @@ control reject) is never raised. For the same reason NICE is read only.
 
 ### MOP
 
-The console carrier messages parse, but reservation and the client and
-server are not implemented. Load and dump are not implemented (nor are
-they in PyDECnet).
+System id, counters and loopback work, on Ethernet circuits with
+`--mop`, and through the API. The console carrier messages parse, but
+reservation and the client and server are not implemented, so there is no
+remote console. Load and dump are not implemented (nor are they in
+PyDECnet). MOP runs inside decnetd only, so like pcap circuits it needs a
+wired interface and the capabilities to use it.
+
+### API
+
+The session and mop APIs are implemented. The node, nsp, routing and ncp
+requests are not, so a program can't read or change the node's state
+through the API; it can use NICE (object 19) over a logical link instead.
+The API does no authentication of its own: anyone who can open the socket
+acts as this node, so its file mode is the only access control.
 
 ### Data links
 
