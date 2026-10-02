@@ -35,6 +35,7 @@ namespace events   { class Event; class EventLogger; }
 namespace http     { class Server; }
 namespace api      { class Server; }
 class NodeFetcher;
+class NameLearner;
 
 // The NSP counters kept for every node we have talked to.  Port of
 // nsp.NspCounters.  "User" counts what session control handed over; "total"
@@ -183,6 +184,17 @@ public:
     // anything changed.  Node thread only.
     bool set_node_name (Nodeid id, const std::string &name);
 
+    // A name learned from the network (node @neighbours).  Only fills a
+    // gap: a node that has a name keeps it, and a name another address
+    // already has is not given to a second.  True if it was taken.  Node
+    // thread only.
+    bool learn_node_name (Nodeid id, const std::string &name);
+
+    // A logical link to this node is running, in either direction.  Session
+    // control says so, so that a node with no name can be asked for one.
+    void link_running (Nodeid id);
+    NameLearner *name_learner () const noexcept { return name_learner_.get (); }
+
     // How many names came from a fetched list at the last refresh, for the
     // log line and for the tests.
     std::size_t fetched_names () const noexcept { return fetched_names_; }
@@ -223,6 +235,10 @@ private:
     // Addresses the configuration named itself, which a refresh leaves be.
     std::set<std::uint16_t>                                      config_named_;
     std::size_t                                                  fetched_names_ = 0;
+
+    // Before the layers, so that it outlives session control, which may
+    // still hold its queries when it is destroyed.
+    std::unique_ptr<NameLearner>             name_learner_;
 
     // Layers, in node.Node.startlist order.  They are started in this
     // order and stopped in the reverse.

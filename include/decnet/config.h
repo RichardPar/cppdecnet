@@ -157,6 +157,10 @@ public:
     const std::vector<NodeConfig>    &nodes    () const noexcept { return nodes_; }
     const std::vector<NodeSourceConfig> &node_sources () const noexcept
     { return node_sources_; }
+
+    // node @neighbours [--refresh seconds]: learn names from the network.
+    bool learn_names () const noexcept { return learn_names_; }
+    unsigned learn_refresh () const noexcept { return learn_refresh_; }
     const std::vector<ObjectConfig>  &objects  () const noexcept { return objects_; }
     const std::vector<LoggingConfig> &logging  () const noexcept { return logging_; }
     const NspConfig &nsp () const noexcept { return nsp_; }
@@ -205,6 +209,8 @@ private:
     std::vector<CircuitConfig>   circuits_;
     std::vector<NodeConfig>      nodes_;
     std::vector<NodeSourceConfig> node_sources_;
+    bool                          learn_names_ = false;
+    unsigned                      learn_refresh_ = 3600;
     std::vector<ObjectConfig>    objects_;
     std::vector<LoggingConfig>   logging_;
     NspConfig                    nsp_;
