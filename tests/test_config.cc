@@ -19,6 +19,12 @@ DN_TEST (config, tokenizing)
 
     DN_ASSERT (split_config_line ("   # just a comment").empty ());
     DN_ASSERT (split_config_line ("").empty ());
+
+    // A line from a file with CR LF line ends, as Notepad saves them.
+    auto crlf = split_config_line ("node @hecnet\r");
+    DN_ASSERT_EQ (crlf.size (), 2u);
+    DN_ASSERT_EQ (crlf[1], std::string ("@hecnet"));
+    DN_ASSERT (split_config_line ("\r").empty ());
 }
 
 DN_TEST (config, circuit_line)

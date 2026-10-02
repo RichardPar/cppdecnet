@@ -78,7 +78,9 @@ std::vector<std::string> split_config_line (const std::string &line)
         if (c == '"' || c == '\'') { quote = c; in_word = true; continue; }
         // A '#' outside quotes starts a comment, as in PyDECnet's files.
         if (c == '#') break;
-        if (c == ' ' || c == '\t') {
+        // '\r' too: a file saved with CR LF line ends (Notepad's) would
+        // otherwise leave one on the last word of every line.
+        if (c == ' ' || c == '\t' || c == '\r') {
             if (in_word) { words.push_back (cur); cur.clear (); in_word = false; }
             continue;
         }
