@@ -281,6 +281,7 @@ void Session::connect_confirmed (nsp::Connection &c, ByteView data)
     // An accept is delivered to the application as a connect, so that an
     // outbound and an inbound conversation look the same to it.
     l->app->connect_received (*l->conn, data);
+    if (node ()) node ()->link_running (c.dest ());
 }
 
 void Session::connect_rejected (nsp::Connection &c, unsigned reason,
@@ -311,6 +312,7 @@ void Session::run_state (nsp::Connection &c)
     Live *l = find_live (c);
     if (!l) return;
     l->app->run_state (*l->conn);
+    if (node ()) node ()->link_running (c.dest ());
 }
 
 void Session::disconnected (nsp::Connection &c, unsigned reason, ByteView)
