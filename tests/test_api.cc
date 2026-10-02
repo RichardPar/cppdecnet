@@ -200,6 +200,60 @@ DN_TEST (api, the_api_line_is_parsed)
     DN_ASSERT_THROWS (std::runtime_error,
                       Config::from_string ("api --mode 999\n"));
     DN_ASSERT (Config::from_string ("routing 1.1\n").api_socket ().empty ());
+
+    // On demand: off unless asked for, and two hours idle unless told.
+    DN_ASSERT (!d.api_on_demand ());
+    Config e = Config::from_string ("api /tmp/x.sock --on-demand\n");
+    DN_ASSERT (e.api_on_demand ());
+    DN_ASSERT_EQ (e.api_idle (), 7200u);
+    Config f = Config::from_string ("api /tmp/x.sock --on-demand --idle 60\n");
+    DN_ASSERT_EQ (f.api_idle (), 60u);
+    DN_ASSERT_THROWS (std::runtime_error,
+                      Config::from_string ("api --on-demand --idle 0\n"));
+}
+
+// --------------------------------------------------------------- on demand
+
+DN_TEST (api, on_demand_circuits_follow_the_api_clients)
+{
+    // A is an ordinary router; B brings its circuit to A up only while an
+    // API client is connected, and takes it down two seconds after.
+    std::uint16_t port = free_port ();
+    std::string bpath = socket_path ();
+    Config acfg = Config::from_string (
+        "routing 1.1 --type l1router\nnode 1.1 NODEA\nnode 1.2 NODEB\n"
+        "circuit mul-0 Multinet 127.0.0.1:" + std::to_string (port)
+        + ":listen --t3 2\n");
+    Config bcfg = Config::from_string (
+        "routing 1.2 --type endnode\nnode 1.2 NODEB\nnode 1.1 NODEA\n"
+        "circuit mul-0 Multinet 127.0.0.1:" + std::to_string (port)
+        + ":connect --t3 2\napi " + bpath + " --on-demand --idle 2\n");
+    Node a (acfg), b (bcfg);
+    a.start ();
+    b.start ();
+
+    // Nobody has asked: no circuit, however long we wait.
+    std::this_thread::sleep_for (std::chrono::seconds (3));
+    DN_ASSERT_EQ (a.routing ()->adjacency_count (), 0u);
+
+    {
+        ApiClient c (bpath);
+        DN_ASSERT (c.connected ());
+        DN_ASSERT (wait_until ([&] { return a.routing ()->adjacency_count () == 1; }));
+        // Up while the client stays, past the idle time.
+        std::this_thread::sleep_for (std::chrono::seconds (3));
+        DN_ASSERT_EQ (a.routing ()->adjacency_count (), 1u);
+    }
+    // The client has gone: down after the idle time.
+    DN_ASSERT (wait_until ([&] { return a.routing ()->adjacency_count () == 0; }));
+
+    // And up again for the next one.
+    {
+        ApiClient c (bpath);
+        DN_ASSERT (wait_until ([&] { return a.routing ()->adjacency_count () == 1; }));
+    }
+    b.stop ();
+    a.stop ();
 }
 
 // ---------------------------------------------------------------- requests

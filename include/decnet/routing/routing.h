@@ -35,6 +35,13 @@ public:
     virtual void start ();
     virtual void stop ();
 
+    // The circuits alone, for a node that brings them up only while it is
+    // being used (api --on-demand).  hold_circuits () before start () makes
+    // start () leave them down; stop () stops them either way.
+    void hold_circuits () noexcept { hold_circuits_ = true; }
+    void start_circuits ();
+    void stop_circuits ();
+
     Nodeid   nodeid () const noexcept { return nodeid_; }
     unsigned homearea () const noexcept { return nodeid_.area (); }
     unsigned tid () const noexcept { return nodeid_.tid (); }
@@ -145,6 +152,7 @@ protected:
     std::map<std::string, std::unique_ptr<LanCircuit>> lan_circuits_;
     std::vector<LanCircuit *>                          lan_order_;
     std::map<std::uint16_t, AdjacencyPtr>              adjacencies_;
+    bool                                               hold_circuits_ = false;
 };
 
 // Routing for a Phase IV endnode.  Port of routing.EndnodeRouting.

@@ -194,6 +194,12 @@ public:
 
     const WorkStats &stats () const noexcept { return stats_; }
 
+    // An API client has connected, or gone.  Node thread only.  With
+    // api --on-demand they bring the circuits up and, idle long enough,
+    // take them down again.
+    void api_client_arrived ();
+    void api_client_left ();
+
 private:
     // Stop every layer, in order.  Runs on the node's thread; see stop().
     void stop_layers ();
@@ -229,6 +235,13 @@ private:
     std::unique_ptr<api::Server>             api_;
     std::unique_ptr<NodeFetcher>             node_fetcher_;
     std::unique_ptr<events::EventLogger>     event_logger_;
+
+    // api --on-demand.  Node thread only.
+    void arm_idle_timer ();
+    std::size_t                     api_clients_ = 0;
+    bool                            circuits_up_ = true;
+    std::unique_ptr<CallbackTimer>  idle_timer_;
+    std::chrono::steady_clock::time_point idle_deadline_;
     // PORT: the bridge follows.
 };
 

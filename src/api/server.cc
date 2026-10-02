@@ -898,6 +898,7 @@ void Client::closed ()
 {
     if (gone_) return;
     gone_ = true;
+    node_->api_client_left ();
     DN_TRACE ("API client gone: {} links, {} objects", conns_.size (),
               binds_.size ());
     for (auto &[h, b] : binds_)
@@ -1003,6 +1004,11 @@ void Server::run ()
             break;                      // listener shut down
         }
         reap ();
+        // Counted on the node thread, ahead of anything the client asks:
+        // with api --on-demand, its arrival brings the circuits up.
+        if (node_)
+            node_->add_work (std::make_unique<CallbackWork> (
+                [node = node_] { node->api_client_arrived (); }));
         auto c = std::make_shared<Client> (node_, Socket (fd));
         c->start ();
         std::lock_guard l (clients_m_);

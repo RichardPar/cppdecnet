@@ -245,6 +245,15 @@ void Config::apply (ConfigLine line)
                                           + m);
             api_mode_ = v;
         }
+        // --on-demand [--idle seconds]: an extension.  The circuits come up
+        // when the first API client connects and go down once none has been
+        // connected for --idle seconds, two hours unless said otherwise.
+        api_on_demand_ = has (line, "on-demand");
+        if (has (line, "idle")) {
+            api_idle_ = to_uint (opt (line, "idle", empty), "idle");
+            if (api_idle_ == 0)
+                throw std::runtime_error ("--idle must be at least 1 second");
+        }
         return;
     }
 

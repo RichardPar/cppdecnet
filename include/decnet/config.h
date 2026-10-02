@@ -172,6 +172,11 @@ public:
     const std::string &api_socket () const noexcept { return api_socket_; }
     unsigned api_mode () const noexcept { return api_mode_; }
 
+    // api --on-demand: circuits stay down until an API client connects, and
+    // go down again api_idle () seconds after the last one has gone.
+    bool api_on_demand () const noexcept { return api_on_demand_; }
+    unsigned api_idle () const noexcept { return api_idle_; }
+
     // Lines no layer has claimed.  Kept rather than rejected so PyDECnet
     // configuration files load.
     const std::vector<ConfigLine> &unhandled () const noexcept { return unhandled_; }
@@ -210,6 +215,8 @@ private:
     unsigned                     http_port_ = 0;
     std::string                  api_socket_;
     unsigned                     api_mode_ = 0666;
+    bool                         api_on_demand_ = false;
+    unsigned                     api_idle_ = 7200;      // two hours
 };
 
 // Split a config file line into words, honouring quotes and '#' comments.
