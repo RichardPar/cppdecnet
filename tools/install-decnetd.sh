@@ -297,6 +297,12 @@ hecnet=no
 if yes_no "Keep HECnet's list of node names, fetched weekly from MIM?" n; then
     hecnet=yes
 fi
+say "  Nodes nobody has named can still be asked: the neighbours for the names"
+say "  they know, and any node you connect to for its own."
+learn=no
+if yes_no "Learn node names from the network?" y; then
+    learn=yes
+fi
 
 http=
 if yes_no "Serve the monitoring web pages?" n; then
@@ -328,6 +334,9 @@ config=$(
     for l in "${peer_nodes[@]}"; do printf '%s\n' "$l"; done
     if [ "$hecnet" = yes ]; then
         printf 'node @hecnet --cache %s/hecnet.dat\n' "$statedir"
+    fi
+    if [ "$learn" = yes ]; then
+        printf 'node @neighbours\n'
     fi
     printf '\n'
     for l in "${circuits[@]}"; do printf '%s\n' "$l"; done

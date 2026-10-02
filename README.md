@@ -225,6 +225,21 @@ $ decnetd --fetch-nodes /etc/decnet/myhecnet.conf
 http://mim.softjar.se/hecnet.dat unchanged since Thu, 17 Sep 2026 22:52:00 GMT
 ```
 
+`node @neighbours` learns names from the network itself, for the nodes
+nobody's list has. Each neighbour is asked for the names it knows (as
+`TELL n SHOW KNOWN NODES` would) once its adjacency is up, and again every
+hour (`--refresh <seconds>` to change that). And any node a logical link
+runs to, in either direction, is asked its own name (`TELL n SHOW
+EXECUTOR`) if we have none for it. Open a file on an unnamed VMS node and
+from then on you can call it by name. Learned names only fill gaps: they
+never replace a name from the configuration or a fetched list, and never
+give one name to two addresses. They are not kept across restarts; the
+neighbours are simply asked again. An extension, not in PyDECnet.
+
+```
+node @neighbours
+```
+
 If a simulator on the same host shares the Ethernet segment, the host
 needs a bridge and a tap device; see `samples/gateway/README.txt`.
 
@@ -367,84 +382,189 @@ as this node, so set the mode accordingly.
 
 `dnfal` is a File Access Listener: it lets other nodes list, read and
 write files in one directory. decnetd runs it as object 17, one process
-per connection, in place of PyDECnet's `fal.py`:
+per connection, in place of PyDECnet's `fal.py`. It works with VMS
+`DIRECTORY`, `TYPE`, `COPY`, `RENAME` and `DELETE`, and with the
+PathNoWorks file tools.
+
+### Setting up a file server
+
+This makes the machine a file server for the rest of the network, with a
+public directory anyone may read and a private one for you. The examples
+assume decnetd runs as the user `richard` and is set up as a service the
+way `tools/install-decnetd.sh` does it, with its configuration in
+`/etc/decnet/decnetd.conf`.
+
+**1. The directories.** dnfal serves one directory tree, the root, and
+reads and writes files as the user decnetd runs as, so that user must own
+it:
+
+```sh
+sudo mkdir -p /srv/decnet/pub /srv/decnet/richard
+sudo chown -R richard: /srv/decnet          # or decnet:, if it runs as decnet
+echo "Welcome to PNW" > /srv/decnet/pub/readme.txt
+```
+
+**2. The users file.** Who may connect, with what password, to which
+directory, and whether they may write. Make a password hash first;
+`dnfal --hash` asks for the password and prints the hash:
+
+```sh
+$ dnfal --hash
+Password:
+$y$j9T$D2rJ5...
+```
+
+Then write `/etc/decnet/fal.users`:
 
 ```
-object --number 17 --name FAL --file /usr/local/bin/dnfal --argument /srv/decnet
+# user    password hash      directory   access
+RICHARD   $y$j9T$D2rJ5...    richard     rw
+GUEST     -                  pub         ro
+
+# Connections that give no user at all.  Leave this out to refuse them.
+*         -                  pub         ro
+
+# Proxy access: users on other nodes, let in without a password.
+proxy     VAXXY::RICHARD     richard
+proxy     *::SYSTEM          -
 ```
 
-Add `--argument rw` to let remote nodes create, delete and rename files,
-and `--argument trace` to log each DAP message and its bytes (seen with
-decnetd at `--log-level debug`). dnfal tells requesters it is VMS with an
-RMS-32 file system: VMS COPY will not send a binary file to a file system
-it thinks is ULTRIX's, which is what PyDECnet's FAL says it is.
-`--argument ostype=192 --argument filesys=13` says that instead.
+It holds password hashes, so keep it from other users, while letting
+decnetd's user read it:
 
-Tested with OpenVMS VAX 6.2 as the requester: DIRECTORY, TYPE, COPY in
-both directions (text, fixed and variable binary), RENAME and DELETE.
-From VMS:
-
-```
-$ DIRECTORY CPPNOD::
-$ COPY CPPNOD::"hello.txt" []
-$ COPY LOGIN.COM CPPNOD::
+```sh
+sudo chown root:richard /etc/decnet/fal.users
+sudo chmod 640 /etc/decnet/fal.users
 ```
 
-File names may be Unix (`sub/file.txt`) or VMS style
-(`[SUB]FILE.TXT;1`); names match without regard to case, and versions are
-ignored. Nothing outside the directory can be reached, through `..` or a
-symbolic link. Text sent as variable length records with carriage return
-control is stored with a newline per record; anything else is stored as
-received. A file being written is renamed into place only when the
-transfer completes.
-
-### Access control
-
-Without a user file anyone who can reach the node can read the directory,
-and, with `rw`, change it. With one, each connection must name a user and
-password from the file, which also gives that user's directory and access:
+**3. The object.** Add this line to `/etc/decnet/decnetd.conf`, all on
+one line, and restart decnetd:
 
 ```
 object --number 17 --name FAL --file /usr/local/bin/dnfal --argument /srv/decnet --argument users=/etc/decnet/fal.users
 ```
 
-```
-# user    password hash      directory        access
-RICHARD   $y$j9T$...         richard          rw
-GUEST     -                  pub              ro
-*         -                  pub              ro
+```sh
+sudo systemctl restart decnetd
 ```
 
-- Relative directories are under the root given to dnfal.
-- `-` means no password.
-- `*` is for connections that give no user; leave it out to refuse them.
-- `dnfal --hash` prints a hash for a password it reads; `openssl passwd -6`
-  and `mkpasswd` hashes work too.
-- Names match without regard to case. A password that fails as sent is
-  tried in lower case, since VMS upper-cases one typed without quotes.
+The users file is read again for every connection, so changes to it apply
+at once, with no restart. Only the `object` line needs one.
 
-Proxy lines let users on other nodes in without a password, as a VMS
-proxy database does. A proxy request names who the user is at its node;
-the most specific line wins (node and user, then node, then user, then
-`*::*`), and `-` refuses:
+**4. Try it.** From another Linux machine with PathNoWorks, where PNW is
+this node:
+
+```sh
+$ pnw-dir 'PNW::'                           # no user: the "*" entry, pub
+Directory PNW::/
+
+readme.txt                            1  02-OCT-26 10:36:54  [richard]  (,RWD,RWD,R)
+
+Total of 1 file, 1 block.
+$ pnw-type 'PNW"GUEST"::readme.txt'
+Welcome to PNW
+$ pnw-dir 'PNW"RICHARD secret"::'           # RICHARD's own directory
+$ pnw-copy notes.txt 'PNW"RICHARD secret"::'
+notes.txt -> PNW::/notes.txt (6 bytes, text)
+$ pnw-copy notes.txt 'PNW"GUEST"::'
+pnw-copy: Open error: privilege violation (OS denies access).
+$ pnw-dir 'PNW"RICHARD wrong"::'
+pnw-dir: cannot connect to FAL: Access control rejected
+```
+
+And from VMS:
 
 ```
-proxy   VMSNOD::RICHARD   richard
-proxy   VMSNOD::*         guest
-proxy   *::SYSTEM         -
+$ DIRECTORY PNW::                              ! proxy, or the "*" entry
+$ TYPE PNW"GUEST"::"readme.txt"
+$ DIRECTORY PNW"RICHARD secret"::
+$ COPY LOGIN.COM PNW"RICHARD secret"::
+$ COPY PNW"RICHARD secret"::"notes.txt" []
 ```
 
-With no matching line a proxy request gets the `*` entry, as VMS falls
-back to its default account, or is refused if there is none. A proxy
-request's user name is never taken as a user in the file. Proxy access
+VMS sends a password typed without quotes in capitals. dnfal tries one
+that doesn't match as sent again in lower case, so a lower-case password
+works either way; mixed-case ones are best avoided.
+
+### Who gets in
+
+Each connection is matched against the users file like this:
+
+| The connection gives | It gets |
+|---|---|
+| a user and password that match a line | that line's directory and access |
+| a user and a wrong password, or a user not in the file | refused |
+| no user at all | the `*` line, or refused if there isn't one |
+| a proxy request (no password, the proxy flag set) | the best `proxy` line, or the `*` line if none matches |
+
+- Names match without regard to case.
+- The hash is anything crypt(3) accepts: `dnfal --hash`,
+  `openssl passwd -6` or `mkpasswd`. `-` means no password.
+- A relative directory is under the root given to dnfal; an absolute one
+  is used as it is. Nobody gets outside their directory, through `..` or
+  a symbolic link.
+- `rw` lets that user create, delete and rename files; `ro` is read only.
+
+Proxy lines work as a VMS proxy database does. A proxy request says who
+the user is at the far node; the most specific line wins (node and user,
+then node, then user, then `*::*`), and `-` refuses:
+
+```
+proxy   VMSNOD::RICHARD   richard      # that user, from that node
+proxy   VMSNOD::*         guest        # anyone else from that node
+proxy   *::SYSTEM         -            # SYSTEM from anywhere: never
+```
+
+A node is a name or an address. With no matching line a proxy request
+gets the `*` entry, as VMS falls back to its default account. The name a
+proxy request gives is never taken as a user in the file. Proxy access
 trusts the far node to say truthfully who its user is, as DECnet always
-has.
+has, so give it out only to nodes you trust. VMS asks for proxy access
+whenever no user and password are given, unless its executor's outgoing
+proxy is disabled. From PathNoWorks, `pnw-dir --proxy 'PNW::'` asks as
+your Linux login name.
 
-A refused connection is rejected with reason 34, which VMS shows as
-invalid login information, after a second's delay, and logged. The file is
-read for each connection, so changes apply at once. It is dnfal's own:
-decnetd does not need to run as root, and files are read and written as
-the daemon's user.
+Without a users file at all, anyone who can reach the node can read the
+root, and, with `--argument rw`, change it too. That's fine on a private
+network of your own, but please don't put a FAL on HECnet without one.
+
+### Logging and trouble
+
+dnfal logs each connection through decnetd (`journalctl -u decnetd`):
+
+```
+dnfal: connection from VAXXY (29.157) user GUEST, /srv/decnet/pub read only
+dnfal: connection from VAXXY (29.157) user RICHARD by proxy as RICHARD, /srv/decnet/richard read/write
+dnfal: access control rejected for user RICHARD from VAXXY (29.157)
+```
+
+| What you see | Why |
+|---|---|
+| `Access control rejected`; VMS says the login information is invalid | wrong user or password, no `*` line for a connection without one, or a proxy refused with `-`. It comes after a second's delay, on purpose |
+| `Unrecognized object` (VMS: `%SYSTEM-F-NOSUCHOBJ`) | no `object --number 17` line, or decnetd wasn't restarted after adding it |
+| `privilege violation` on a write | the user's access is `ro`; or the directory isn't writable by decnetd's user |
+| decnetd's log says the users file has a mistake | it names the line; nobody gets in until it's fixed |
+
+`--argument trace` logs every DAP message and its bytes, seen with decnetd
+at `--log-level debug`. It's the first thing to look at when a transfer
+misbehaves.
+
+### Other arguments
+
+dnfal tells requesters it is VMS with an RMS-32 file system: VMS `COPY`
+will not send a binary file to a file system it thinks is ULTRIX's, which
+is what PyDECnet's FAL says it is. `--argument ostype=192 --argument
+filesys=13` says that instead.
+
+File names may be Unix (`sub/file.txt`) or VMS style
+(`[SUB]FILE.TXT;1`); names match without regard to case, and versions are
+ignored. Text sent as variable length records with carriage return
+control is stored with a newline per record; anything else is stored as
+received. A file being written is renamed into place only when the
+transfer completes.
+
+Tested with OpenVMS VAX 6.2 as the requester: DIRECTORY, TYPE, COPY in
+both directions (text, fixed and variable binary), RENAME and DELETE.
 
 ## Running as a service
 

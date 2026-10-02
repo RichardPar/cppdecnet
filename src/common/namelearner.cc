@@ -111,7 +111,8 @@ void NameLearner::tick ()
         }
     }
     if (learned_ != learned_before_) {
-        DN_INFO ("{} node names learned from the network so far", learned_);
+        DN_INFO ("{} node name{} learned from the network so far", learned_,
+                 learned_ == 1 ? "" : "s");
         learned_before_ = learned_;
     }
     node_->timers ().start (&timer_, TICK);

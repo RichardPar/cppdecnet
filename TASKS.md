@@ -70,6 +70,9 @@ known defects in [BUGS.md](BUGS.md).
 - [x] `decnetd --fetch-nodes` for cron
 - [ ] Fetch over DECnet instead: `MIM::HECNET:` needs DAP/FAL, or NICE
       `COPY KNOWN NODES FROM MIM` needs a NICE client
+- [x] `node @neighbours`: names learned from each neighbour's known nodes,
+      and from any node a link runs to (its executor), filling gaps only
+- [ ] Keep learned names across restarts (a `--cache` file, as `@hecnet`)
 
 ## Monitoring and API
 
