@@ -356,9 +356,8 @@ as PyDECnet does, unless `fast` is true.
 
 [PathNoWorks](https://github.com/RichardPar/PathNoWorks) is built on
 this API: network management, file access, a FUSE mount, remote login,
-mail, MOP, X11 over DECnet and a Qt desktop, all for Linux. It needs this
-branch, `PathNoWorksAPI`, until it reaches `main`; PathNoWorks' `build.sh`
-clones it for you.
+mail, MOP, X11 over DECnet and a Qt desktop, all for Linux. Its
+`build.sh` clones cppdecnet for you.
 
 The session and mop APIs are implemented; the node, nsp and routing ones
 are not. Anyone who can open the socket can make and accept connections
@@ -449,8 +448,33 @@ the daemon's user.
 
 ## Running as a service
 
-`samples/gateway/decnetd.service` runs the daemon as an unprivileged user
-with only `CAP_NET_RAW` and `CAP_NET_ADMIN`:
+`tools/install-decnetd.sh` does the whole job on a Linux machine with
+systemd. It asks:
+
+- the node's type (endnode, level 1 or level 2 router), name and address;
+- how it reaches the network, once per circuit: Multinet to a peer that
+  listens (its IP address or host name, and port), Multinet listening for
+  a peer (and which address may connect), or Ethernet through pcap;
+- the peer's DECnet name and address, so you can use its name;
+- for an endnode, whether to disconnect when idle (`api --on-demand`);
+- whether to keep HECnet's node list and serve the monitoring pages;
+- whether to run as you or as a `decnet` user of its own.
+
+Then it shows the configuration, and once you say so, builds decnetd if
+needed, installs it under `/usr/local`, writes `/etc/decnet/decnetd.conf`
+and a systemd unit with only the capabilities the circuits need, and
+starts it. Run it as yourself; it uses sudo where it must. If decnetd is
+already running by hand, it offers to stop it first rather than put the
+node on the network twice.
+
+```sh
+tools/install-decnetd.sh                  # ask, install, start
+tools/install-decnetd.sh --dry-run DIR    # ask, write the files to DIR only
+tools/install-decnetd.sh --uninstall      # stop and remove the service
+```
+
+To do it by hand instead, `samples/gateway/decnetd.service` runs the
+daemon as an unprivileged user with only `CAP_NET_RAW` and `CAP_NET_ADMIN`:
 
 ```sh
 sudo install -d /etc/decnet
