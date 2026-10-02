@@ -9,6 +9,8 @@
 
 #include "decnet/session/session.h"
 
+#include "decnet/common/platform.h"
+
 #include <chrono>
 #include <cstdio>
 #include <ctime>
@@ -62,7 +64,14 @@ Bytes timestamp_reply (ByteView request, std::chrono::system_clock::time_point n
     if (binary) {
         // The wall clock time in the chosen zone, counted from the VMS
         // epoch as though it were UTC -- what a VMS system clock holds.
-        std::int64_t wall = secs + (utc ? 0 : tm.tm_gmtoff);
+#ifdef _WIN32
+        // No tm_gmtoff: the offset is the broken-down time read back as UTC.
+        std::tm copy = tm;
+        std::int64_t gmtoff = utc ? 0 : static_cast<std::int64_t> (::_mkgmtime (&copy)) - secs;
+#else
+        std::int64_t gmtoff = utc ? 0 : tm.tm_gmtoff;
+#endif
+        std::int64_t wall = secs + gmtoff;
         auto vms = static_cast<std::uint64_t> (
             (wall + vms_epoch_offset) * 10000000 + frac * 10);
         Bytes out (8);

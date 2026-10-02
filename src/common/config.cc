@@ -4,11 +4,22 @@
 
 #include <charconv>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
 
 namespace decnet {
+
+std::string default_api_socket ()
+{
+#ifdef _WIN32
+    std::error_code ec;
+    auto dir = std::filesystem::temp_directory_path (ec);
+    if (!ec) return (dir / "decnetapi.sock").generic_string ();
+#endif
+    return "/tmp/decnetapi.sock";
+}
 
 namespace {
 
@@ -219,10 +230,11 @@ void Config::apply (ConfigLine line)
 
     if (line.command == "api") {
         // api [socket] [--mode octal].  Defaults as config.py: $DECNETAPI
-        // or /tmp/decnetapi.sock, mode 666.
+        // or /tmp/decnetapi.sock, mode 666.  Windows has no /tmp; there the
+        // default is decnetapi.sock in the temporary directory, %TEMP%.
         const char *env = std::getenv ("DECNETAPI");
         api_socket_ = !line.positional.empty () ? line.positional[0]
-                    : env ? env : "/tmp/decnetapi.sock";
+                    : env ? env : default_api_socket ();
         if (has (line, "mode")) {
             std::string m = opt (line, "mode", empty);
             unsigned v = 0;
@@ -232,6 +244,15 @@ void Config::apply (ConfigLine line)
                 throw std::runtime_error ("Invalid octal number in --mode: "
                                           + m);
             api_mode_ = v;
+        }
+        // --on-demand [--idle seconds]: an extension.  The circuits come up
+        // when the first API client connects and go down once none has been
+        // connected for --idle seconds, two hours unless said otherwise.
+        api_on_demand_ = has (line, "on-demand");
+        if (has (line, "idle")) {
+            api_idle_ = to_uint (opt (line, "idle", empty), "idle");
+            if (api_idle_ == 0)
+                throw std::runtime_error ("--idle must be at least 1 second");
         }
         return;
     }

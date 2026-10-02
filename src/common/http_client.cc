@@ -5,8 +5,6 @@
 #include "decnet/common/logging.h"
 #include "decnet/common/socket.h"
 
-#include <sys/socket.h>
-#include <unistd.h>
 
 #include <algorithm>
 #include <cctype>
@@ -71,7 +69,7 @@ bool read_some (int fd, std::string &buf, bool &eof,
     if (p.timeout) return true;         // nothing yet; the caller loops
     if (!p.readable) return true;
     char tmp[8192];
-    ssize_t n = ::recv (fd, tmp, sizeof tmp, 0);
+    ssize_t n = sock_recv (fd, tmp, sizeof tmp);
     if (n < 0) { error = "read failed"; return false; }
     if (n == 0) { eof = true; return true; }
     if (buf.size () + static_cast<std::size_t> (n) > max_bytes) {
@@ -121,9 +119,7 @@ Fetch get_once (const Url &url, std::chrono::steady_clock::time_point deadline,
         r.error = p.timeout ? "connect timed out" : "connect failed";
         return r;
     }
-    int err = 0;
-    socklen_t elen = sizeof err;
-    if (::getsockopt (s.fd (), SOL_SOCKET, SO_ERROR, &err, &elen) == 0 && err) {
+    if (s.socket_error ()) {
         r.error = "connect failed";
         return r;
     }
@@ -136,8 +132,7 @@ Fetch get_once (const Url &url, std::chrono::steady_clock::time_point deadline,
     req += "Connection: close\r\n\r\n";
     std::size_t off = 0;
     while (off < req.size ()) {
-        ssize_t n = ::send (s.fd (), req.data () + off, req.size () - off,
-                            MSG_NOSIGNAL);
+        ssize_t n = sock_send (s.fd (), req.data () + off, req.size () - off);
         if (n <= 0) { r.error = "send failed"; return r; }
         off += static_cast<std::size_t> (n);
     }

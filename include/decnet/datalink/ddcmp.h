@@ -411,7 +411,11 @@ private:
     // A tty is not a socket, so this cannot use PtpDatalink::recvall.
     Bytes read_line (std::size_t n);
 
+#ifdef _WIN32
+    void *com_ = nullptr;       // the COM port HANDLE, opened overlapped
+#else
     int fd_ = -1;
+#endif
 };
 
 }   // namespace decnet::datalink

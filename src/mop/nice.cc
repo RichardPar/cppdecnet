@@ -10,6 +10,8 @@
 #include "decnet/nice/nml.h"
 #include "decnet/node.h"
 
+#include "decnet/common/platform.h"
+
 #include <ctime>
 
 namespace decnet::mop {
@@ -42,7 +44,7 @@ Value last_report_value (std::chrono::system_clock::time_point t)
 {
     std::time_t tt = std::chrono::system_clock::to_time_t (t);
     std::tm tm {};
-    ::localtime_r (&tt, &tm);
+    localtime_r (&tt, &tm);
     return Value::cm ({ Value::du (static_cast<unsigned> (tm.tm_mday)),
                         Value::du (static_cast<unsigned> (tm.tm_mon + 1)),
                         Value::du (static_cast<unsigned> (tm.tm_hour)),

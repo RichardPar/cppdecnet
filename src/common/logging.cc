@@ -1,5 +1,7 @@
 #include "decnet/common/logging.h"
 
+#include "decnet/common/platform.h"
+
 #include <chrono>
 #include <cstdio>
 #include <mutex>
@@ -45,7 +47,13 @@ bool set_level (std::string_view name) noexcept
 
 bool set_logfile (const std::string &path)
 {
+    // Not inherited by object programs: "e" is glibc's close-on-exec, "N"
+    // the Windows C runtime's, which aborts at a mode letter it doesn't know.
+#ifdef _WIN32
+    std::FILE *f = std::fopen (path.c_str (), "aN");
+#else
     std::FILE *f = std::fopen (path.c_str (), "ae");
+#endif
     if (!f) return false;
     std::lock_guard lock (out_mutex);
     if (out_file != stderr) std::fclose (out_file);

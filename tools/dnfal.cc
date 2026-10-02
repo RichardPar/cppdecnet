@@ -35,8 +35,14 @@
 #include <string>
 #include <thread>
 
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#include <windows.h>
+#else
 #include <termios.h>
 #include <unistd.h>
+#endif
 
 using namespace decnet;
 
@@ -138,6 +144,27 @@ private:
 };
 
 // dnfal --hash: a hash for the user file.
+#ifdef _WIN32
+
+int make_hash ()
+{
+    HANDLE in = ::GetStdHandle (STD_INPUT_HANDLE);
+    DWORD old = 0;
+    bool tty = ::GetConsoleMode (in, &old);
+    if (tty) {
+        std::cerr << "Password: " << std::flush;
+        ::SetConsoleMode (in, old & ~static_cast<DWORD> (ENABLE_ECHO_INPUT));
+    }
+    std::string pw;
+    std::getline (std::cin, pw);
+    if (!pw.empty () && pw.back () == '\r') pw.pop_back ();
+    if (tty) {
+        ::SetConsoleMode (in, old);
+        std::cerr << "\n";
+    }
+
+#else
+
 int make_hash ()
 {
     bool tty = ::isatty (STDIN_FILENO);
@@ -155,6 +182,8 @@ int make_hash ()
         ::tcsetattr (STDIN_FILENO, TCSANOW, &old);
         std::cerr << "\n";
     }
+
+#endif
     if (pw.empty ()) {
         std::cerr << "dnfal: empty password; use - in the file for none\n";
         return 2;
@@ -172,6 +201,12 @@ int make_hash ()
 
 int main (int argc, char **argv)
 {
+#ifdef _WIN32
+    // decnetd talks to us over pipes in JSON lines.  Text mode would turn
+    // "\n" into "\r\n" and take a ^Z byte as end of file.
+    ::_setmode (::_fileno (stdin), _O_BINARY);
+    ::_setmode (::_fileno (stdout), _O_BINARY);
+#endif
     dap::FalOptions opts;
     std::string users_file;
     for (int i = 1; i < argc; ++i) {

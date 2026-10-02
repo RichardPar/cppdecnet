@@ -110,6 +110,21 @@ void BaseRouter::start ()
 {
     DN_DEBUG ("starting routing layer");
     node_state (node (), st_off, st_on);
+    if (hold_circuits_)
+        DN_DEBUG ("routing circuits held down until wanted");
+    else
+        start_circuits ();
+}
+
+void BaseRouter::stop ()
+{
+    DN_DEBUG ("stopping routing layer");
+    node_state (node (), st_on, st_off);
+    stop_circuits ();
+}
+
+void BaseRouter::start_circuits ()
+{
     for (PtpCircuit *c : circuit_order_) {
         try {
             c->start ();
@@ -130,10 +145,8 @@ void BaseRouter::start ()
     }
 }
 
-void BaseRouter::stop ()
+void BaseRouter::stop_circuits ()
 {
-    DN_DEBUG ("stopping routing layer");
-    node_state (node (), st_on, st_off);
     for (LanCircuit *c : lan_order_) {
         try {
             c->stop ();

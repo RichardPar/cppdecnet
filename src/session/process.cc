@@ -7,10 +7,16 @@
 #include <cstring>
 #include <string>
 
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#include <windows.h>
+#else
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#endif
 
 namespace decnet::session {
 
@@ -24,6 +30,18 @@ std::int64_t next_handle ()
     return counter.fetch_add (1);
 }
 
+// The pipes to the program are file descriptors on both systems: on
+// Windows they are CRT descriptors wrapped round the pipe handles.
+#ifdef _WIN32
+int fd_read (int fd, void *buf, unsigned len) { return ::_read (fd, buf, len); }
+int fd_write (int fd, const void *buf, unsigned len) { return ::_write (fd, buf, len); }
+void fd_close (int fd) { ::_close (fd); }
+#else
+ssize_t fd_read (int fd, void *buf, std::size_t len) { return ::read (fd, buf, len); }
+ssize_t fd_write (int fd, const void *buf, std::size_t len) { return ::write (fd, buf, len); }
+void fd_close (int fd) { ::close (fd); }
+#endif
+
 // Read one line from a file descriptor, unbuffered.  Returns false at end
 // of file.
 bool read_line (int fd, std::string &out)
@@ -31,16 +49,64 @@ bool read_line (int fd, std::string &out)
     out.clear ();
     char c;
     for (;;) {
-        ssize_t n = ::read (fd, &c, 1);
+        auto n = fd_read (fd, &c, 1);
         if (n == 0) return !out.empty ();
         if (n < 0) {
             if (errno == EINTR) continue;
             return !out.empty ();
         }
-        if (c == '\n') return true;
+        if (c == '\n') {
+            // A program on Windows writes its stdout in text mode.
+            if (!out.empty () && out.back () == '\r') out.pop_back ();
+            return true;
+        }
         out += c;
     }
 }
+
+#ifdef _WIN32
+
+// Quote one argument so CommandLineToArgvW, and so the C runtime of the
+// program, hands it back unchanged.
+void append_quoted (std::string &cmd, const std::string &arg)
+{
+    if (!cmd.empty ()) cmd += ' ';
+    if (!arg.empty () && arg.find_first_of (" \t\n\v\"") == std::string::npos) {
+        cmd += arg;
+        return;
+    }
+    cmd += '"';
+    for (std::size_t i = 0; ; ++i) {
+        std::size_t slashes = 0;
+        while (i < arg.size () && arg[i] == '\\') { ++slashes; ++i; }
+        if (i == arg.size ()) {
+            cmd.append (slashes * 2, '\\');     // before the closing quote
+            break;
+        }
+        if (arg[i] == '"') {
+            cmd.append (slashes * 2 + 1, '\\');
+            cmd += '"';
+        } else {
+            cmd.append (slashes, '\\');
+            cmd += arg[i];
+        }
+    }
+    cmd += '"';
+}
+
+std::string last_error_text ()
+{
+    DWORD err = ::GetLastError ();
+    char buf[256] = "";
+    DWORD n = ::FormatMessageA (FORMAT_MESSAGE_FROM_SYSTEM
+                                | FORMAT_MESSAGE_IGNORE_INSERTS,
+                                nullptr, err, 0, buf, sizeof buf, nullptr);
+    while (n && (buf[n - 1] == '\r' || buf[n - 1] == '\n' || buf[n - 1] == '.'))
+        buf[--n] = '\0';
+    return n ? std::string (buf) : "error " + std::to_string (err);
+}
+
+#endif
 
 }   // namespace
 
@@ -61,11 +127,26 @@ void ProcessApplication::shutdown ()
 {
     stopping_.store (true);
     // Close stdin to tell the program to exit.
-    if (to_child_ >= 0) { ::close (to_child_); to_child_ = -1; }
+    if (to_child_ >= 0) { fd_close (to_child_); to_child_ = -1; }
     if (out_thread_.joinable ()) out_thread_.join ();
     if (err_thread_.joinable ()) err_thread_.join ();
-    if (from_child_ >= 0) { ::close (from_child_); from_child_ = -1; }
-    if (child_log_ >= 0)  { ::close (child_log_); child_log_ = -1; }
+    if (from_child_ >= 0) { fd_close (from_child_); from_child_ = -1; }
+    if (child_log_ >= 0)  { fd_close (child_log_); child_log_ = -1; }
+#ifdef _WIN32
+    if (process_) {
+        // As below: it should be gone already, so only force it if not.
+        if (::WaitForSingleObject (process_, 0) == WAIT_TIMEOUT) {
+            ::TerminateProcess (process_, 1);
+            ::WaitForSingleObject (process_, INFINITE);
+        }
+        DWORD status = 0;
+        ::GetExitCodeProcess (process_, &status);
+        DN_TRACE ("object {} exited with status {}", program_, status);
+        ::CloseHandle (process_);
+        process_ = nullptr;
+        pid_ = -1;
+    }
+#else
     if (pid_ > 0) {
         int status = 0;
         // It has had its input closed and both pipes drained, so this
@@ -82,7 +163,105 @@ void ProcessApplication::shutdown ()
                       WEXITSTATUS (status));
         pid_ = -1;
     }
+#endif
 }
+
+#ifdef _WIN32
+
+bool ProcessApplication::spawn ()
+{
+    // Three pipes; only the child's ends are inheritable.
+    SECURITY_ATTRIBUTES sa { sizeof sa, nullptr, TRUE };
+    HANDLE in_r = nullptr, in_w = nullptr;
+    HANDLE out_r = nullptr, out_w = nullptr;
+    HANDLE err_r = nullptr, err_w = nullptr;
+    auto close_all = [&] {
+        for (HANDLE h : { in_r, in_w, out_r, out_w, err_r, err_w })
+            if (h) ::CloseHandle (h);
+    };
+    if (!::CreatePipe (&in_r, &in_w, &sa, 0)
+        || !::CreatePipe (&out_r, &out_w, &sa, 0)
+        || !::CreatePipe (&err_r, &err_w, &sa, 0)) {
+        DN_ERROR ("cannot make pipes for object {}: {}", program_,
+                  last_error_text ());
+        close_all ();
+        return false;
+    }
+    ::SetHandleInformation (in_w, HANDLE_FLAG_INHERIT, 0);
+    ::SetHandleInformation (out_r, HANDLE_FLAG_INHERIT, 0);
+    ::SetHandleInformation (err_r, HANDLE_FLAG_INHERIT, 0);
+
+    // Run .py files with the Python interpreter, as PyDECnet does.  Windows
+    // installs it as python, not python3.
+    std::string cmd;
+    if (program_.size () > 3
+        && program_.compare (program_.size () - 3, 3, ".py") == 0) {
+        const char *py = ::getenv ("DN_PYTHON");
+        append_quoted (cmd, py ? py : "python");
+    }
+    append_quoted (cmd, program_);
+    for (const std::string &a : arguments_) append_quoted (cmd, a);
+
+    // Pass the child these three handles and nothing else.  Sockets and
+    // files are inheritable by default on Windows, and one held open by an
+    // object would keep a port bound or a file locked; this is what
+    // close-on-exec does on POSIX.
+    HANDLE inherit[] = { in_r, out_w, err_w };
+    SIZE_T attr_size = 0;
+    ::InitializeProcThreadAttributeList (nullptr, 1, 0, &attr_size);
+    std::vector<char> attr_buf (attr_size);
+    auto attrs = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST> (attr_buf.data ());
+    if (!::InitializeProcThreadAttributeList (attrs, 1, 0, &attr_size)
+        || !::UpdateProcThreadAttribute (attrs, 0,
+                                         PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+                                         inherit, sizeof inherit,
+                                         nullptr, nullptr)) {
+        DN_ERROR ("cannot run object {}: {}", program_, last_error_text ());
+        close_all ();
+        return false;
+    }
+
+    STARTUPINFOEXA si {};
+    si.StartupInfo.cb = sizeof si;
+    si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    si.StartupInfo.hStdInput  = in_r;
+    si.StartupInfo.hStdOutput = out_w;
+    si.StartupInfo.hStdError  = err_w;
+    si.lpAttributeList = attrs;
+    PROCESS_INFORMATION pi {};
+    // A new process group, so Ctrl-C at the daemon's console does not also
+    // hit the object; the counterpart of setsid.
+    BOOL ok = ::CreateProcessA (nullptr, cmd.data (), nullptr, nullptr, TRUE,
+                                CREATE_NEW_PROCESS_GROUP
+                                | EXTENDED_STARTUPINFO_PRESENT,
+                                nullptr, nullptr, &si.StartupInfo, &pi);
+    ::DeleteProcThreadAttributeList (attrs);
+    if (!ok) {
+        DN_ERROR ("cannot run object {}: {}", program_, last_error_text ());
+        close_all ();
+        return false;
+    }
+    ::CloseHandle (pi.hThread);
+    ::CloseHandle (in_r);
+    ::CloseHandle (out_w);
+    ::CloseHandle (err_w);
+
+    process_    = pi.hProcess;
+    pid_        = static_cast<long> (pi.dwProcessId);
+    to_child_   = ::_open_osfhandle (reinterpret_cast<intptr_t> (in_w),
+                                     _O_WRONLY | _O_BINARY);
+    from_child_ = ::_open_osfhandle (reinterpret_cast<intptr_t> (out_r),
+                                     _O_RDONLY | _O_BINARY);
+    child_log_  = ::_open_osfhandle (reinterpret_cast<intptr_t> (err_r),
+                                     _O_RDONLY | _O_BINARY);
+
+    DN_DEBUG ("started object {} as pid {}", program_, pid_);
+    out_thread_ = std::thread ([this] { read_stdout (); });
+    err_thread_ = std::thread ([this] { read_stderr (); });
+    return true;
+}
+
+#else
 
 bool ProcessApplication::spawn ()
 {
@@ -180,6 +359,8 @@ bool ProcessApplication::spawn ()
     return true;
 }
 
+#endif
+
 void ProcessApplication::send (const json::Object &o)
 {
     if (to_child_ < 0) return;
@@ -188,7 +369,8 @@ void ProcessApplication::send (const json::Object &o)
     DN_TRACE ("to object {}: {}", program_, o.encode ());
     std::size_t off = 0;
     while (off < line.size ()) {
-        ssize_t n = ::write (to_child_, line.data () + off, line.size () - off);
+        auto n = fd_write (to_child_, line.data () + off,
+                           static_cast<unsigned> (line.size () - off));
         if (n < 0) {
             if (errno == EINTR) continue;
             DN_DEBUG ("write to object {} failed: {}", program_,

@@ -121,11 +121,63 @@ Node::Node (const Config &config)
     if (!config.api_socket ().empty ())
         api_ = std::make_unique<api::Server> (this, config.api_socket (),
                                               config.api_mode ());
+
+    // On demand: no circuits until a client wants them.
+    if (api_ && routing_ && config.api_on_demand ()) {
+        routing_->hold_circuits ();
+        circuits_up_ = false;
+        idle_timer_ = std::make_unique<CallbackTimer> ([this] {
+            // The timer fires on the node thread.
+            if (api_clients_ || !circuits_up_) return;
+            // The idle time may be longer than the timer wheel reaches:
+            // step towards the deadline.
+            if (std::chrono::steady_clock::now () < idle_deadline_) {
+                arm_idle_timer ();
+                return;
+            }
+            DN_INFO ("no API client for {} seconds: taking the circuits down",
+                     config_.api_idle ());
+            routing_->stop_circuits ();
+            circuits_up_ = false;
+        });
+    }
 }
 
 Node::~Node ()
 {
     stop ();
+}
+
+void Node::api_client_arrived ()
+{
+    ++api_clients_;
+    if (!idle_timer_) return;               // not on demand
+    timers_.stop (idle_timer_.get ());
+    if (!circuits_up_) {
+        DN_INFO ("an API client has connected: bringing the circuits up");
+        routing_->start_circuits ();
+        circuits_up_ = true;
+    }
+}
+
+void Node::api_client_left ()
+{
+    if (api_clients_) --api_clients_;
+    if (!idle_timer_ || api_clients_ || !circuits_up_) return;
+    DN_DEBUG ("no API clients: circuits go down in {} seconds unless one "
+              "connects", config_.api_idle ());
+    idle_deadline_ = std::chrono::steady_clock::now ()
+                   + std::chrono::seconds (config_.api_idle ());
+    arm_idle_timer ();
+}
+
+void Node::arm_idle_timer ()
+{
+    // At most 50 minutes at a time: the wheel spans an hour.
+    using namespace std::chrono;
+    auto left = duration_cast<milliseconds> (idle_deadline_ - steady_clock::now ());
+    if (left < milliseconds (1)) left = milliseconds (1);
+    timers_.start (idle_timer_.get (), std::min (left, milliseconds (minutes (50))));
 }
 
 void Node::add_work (WorkPtr w)
@@ -325,6 +377,7 @@ void Node::stop_layers ()
 {
     // Reverse start order: session control releases connections before NSP
     // frees them, and remote event sinks close before session control stops.
+    if (idle_timer_) timers_.stop (idle_timer_.get ());
     if (event_logger_) event_logger_->stop_remote ();
     if (session_)  session_->stop ();
     if (nsp_)      nsp_->stop ();

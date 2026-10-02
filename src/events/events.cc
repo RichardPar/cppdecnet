@@ -1,10 +1,11 @@
 #include "decnet/events/events.h"
 
 #include "decnet/common/exceptions.h"
+#include "decnet/common/platform.h"
 
+#include <chrono>
 #include <cstdio>
 #include <ctime>
-#include <sys/time.h>
 
 namespace decnet::events {
 
@@ -65,10 +66,10 @@ Event::Event (EventId i, Entity ent)
 
 void Event::stamp_now ()
 {
-    timeval tv { };
-    gettimeofday (&tv, nullptr);
+    auto us = std::chrono::duration_cast<std::chrono::microseconds> (
+        std::chrono::system_clock::now ().time_since_epoch ()).count ();
     std::tm lt { };
-    time_t secs = tv.tv_sec;
+    time_t secs = static_cast<time_t> (us / 1000000);
     localtime_r (&secs, &lt);
 
     long days = days_from_civil (lt.tm_year + 1900,
@@ -80,7 +81,7 @@ void Event::stamp_now ()
                  + static_cast<unsigned> (lt.tm_sec);
     halfday = static_cast<std::uint16_t> (days * 2 + sod / half_day);
     seconds = static_cast<std::uint16_t> (sod % half_day);
-    milliseconds = static_cast<std::uint16_t> (tv.tv_usec / 1000);
+    milliseconds = static_cast<std::uint16_t> (us % 1000000 / 1000);
     ms_absent = false;
 }
 

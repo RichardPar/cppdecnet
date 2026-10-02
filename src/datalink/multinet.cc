@@ -7,8 +7,6 @@
 #include <cstring>
 #include <stdexcept>
 
-#include <sys/socket.h>
-
 namespace decnet::datalink {
 
 namespace {
@@ -213,8 +211,8 @@ void TcpMultinet::send (Bytes msg)
     // let a peer see a torn frame if the connection drops between the two.
     std::size_t off = 0;
     while (off < frame.size ()) {
-        ssize_t n = ::send (socket_.fd (), frame.data () + off,
-                            frame.size () - off, MSG_NOSIGNAL);
+        ssize_t n = sock_send (socket_.fd (), frame.data () + off,
+                               frame.size () - off);
         if (n <= 0) {
             DN_TRACE ("send error on {}, reconnecting", name_);
             reconnect ();
@@ -254,7 +252,7 @@ bool ConnectMultinet::check_connection ()
         int err = socket_.socket_error ();
         if (err) {
             DN_TRACE ("Multinet {} connect failed: {}", name_,
-                      std::strerror (err));
+                      sock_strerror (err));
             return false;
         }
         DN_TRACE ("Multinet {} connected", name_);
@@ -291,8 +289,12 @@ bool ListenMultinet::check_connection ()
         if (p.error) return false;
         if (p.timeout || !p.readable) continue;
 
-        Socket conn (::accept (listener_.fd (), nullptr, nullptr));
+        Socket conn (sock_accept (listener_.fd ()));
         if (!conn) continue;
+        // Windows hands the listener's non-blocking mode on to the new
+        // socket; POSIX does not.  The receive loop polls, so blocking is
+        // what it expects.
+        conn.set_nonblocking (false);
 
         Endpoint peer = peer_of (conn.fd ());
         if (!dest_.valid (peer)) {

@@ -13,7 +13,37 @@
 #include <string>
 #include <vector>
 
+#ifdef _WIN32
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
+#include <windows.h>
+#endif
+
 namespace {
+
+#ifdef _WIN32
+
+// Windows has no SIGTERM or sigwait.  Console control events (Ctrl-C,
+// Ctrl-Break, closing the window, logoff, shutdown) arrive on a thread of
+// their own; the handler passes them to main, which does the stopping.
+std::mutex              stop_mutex;
+std::condition_variable stop_cv;
+int                     stop_event = -1;
+bool                    stopped = false;
+
+BOOL WINAPI on_console_event (DWORD ev)
+{
+    std::unique_lock<std::mutex> lk (stop_mutex);
+    if (stop_event < 0) stop_event = static_cast<int> (ev);
+    stop_cv.notify_all ();
+    // The process ends as soon as this returns for a close, logoff or
+    // shutdown, so give the node a few seconds to stop cleanly first.
+    stop_cv.wait_for (lk, std::chrono::seconds (4), [] { return stopped; });
+    return TRUE;
+}
+
+#endif
 
 void usage (const char *argv0)
 {
@@ -126,6 +156,26 @@ int main (int argc, char **argv)
             return bad ? 1 : 0;
         }
 
+#ifdef _WIN32
+        ::SetConsoleCtrlHandler (on_console_event, TRUE);
+
+        decnet::Node node (cfg);
+        node.start ();
+
+        int ev;
+        {
+            std::unique_lock<std::mutex> lk (stop_mutex);
+            stop_cv.wait (lk, [] { return stop_event >= 0; });
+            ev = stop_event;
+        }
+        DN_INFO ("caught console event {}, shutting down", ev);
+        node.stop ();
+        {
+            std::lock_guard<std::mutex> lk (stop_mutex);
+            stopped = true;
+        }
+        stop_cv.notify_all ();
+#else
         // An object program that exits leaves a pipe with no reader.  Writing
         // to it must fail with EPIPE, not kill the node.
         std::signal (SIGPIPE, SIG_IGN);
@@ -146,6 +196,7 @@ int main (int argc, char **argv)
             ;
         DN_INFO ("caught signal {}, shutting down", sig);
         node.stop ();
+#endif
     } catch (const std::exception &e) {
         DN_CRIT ("fatal: {}", e.what ());
         std::fprintf (stderr, "%s: %s\n", argv[0], e.what ());

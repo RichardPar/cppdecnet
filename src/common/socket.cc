@@ -5,53 +5,124 @@
 #include <cerrno>
 #include <cstring>
 
+#ifndef _WIN32
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <poll.h>
 #include <unistd.h>
+#endif
 
 namespace decnet {
+
+// -------------------------------------------------------------- platform
+
+#ifdef _WIN32
+
+void net_init ()
+{
+    static const bool started = [] {
+        WSADATA wsa;
+        return ::WSAStartup (MAKEWORD (2, 2), &wsa) == 0;
+    } ();
+    (void) started;
+}
+
+std::string sock_strerror (int err)
+{
+    char buf[256] = "";
+    DWORD n = ::FormatMessageA (FORMAT_MESSAGE_FROM_SYSTEM
+                                | FORMAT_MESSAGE_IGNORE_INSERTS,
+                                nullptr, static_cast<DWORD> (err), 0,
+                                buf, sizeof buf, nullptr);
+    // System messages end in ".\r\n"; strerror's do not.
+    while (n && (buf[n - 1] == '\r' || buf[n - 1] == '\n' || buf[n - 1] == '.'))
+        buf[--n] = '\0';
+    if (!n) return "error " + std::to_string (err);
+    return buf;
+}
+
+#else
+
+void net_init () {}
+
+std::string sock_strerror (int err)
+{
+    return std::strerror (err);
+}
+
+#endif
 
 // ---------------------------------------------------------------- Socket
 
 void Socket::close () noexcept
 {
     if (fd_ >= 0) {
-        ::close (fd_);
+        sock_close (fd_);
         fd_ = -1;
     }
 }
 
 void Socket::shutdown () noexcept
 {
+#ifdef _WIN32
+    // Unlike POSIX, shutdown does not wake a thread blocked in recv or
+    // accept on this socket; cancelling its pending I/O does.  The retry
+    // then fails, as it would after shutdown on POSIX.
+    if (fd_ >= 0) {
+        ::shutdown (static_cast<SOCKET> (fd_), SD_BOTH);
+        ::CancelIoEx (reinterpret_cast<HANDLE> (static_cast<SOCKET> (fd_)),
+                      nullptr);
+    }
+#else
     if (fd_ >= 0) ::shutdown (fd_, SHUT_RDWR);
+#endif
 }
 
 void Socket::set_nonblocking (bool on) noexcept
 {
     if (fd_ < 0) return;
+#ifdef _WIN32
+    u_long mode = on ? 1 : 0;
+    ::ioctlsocket (static_cast<SOCKET> (fd_), FIONBIO, &mode);
+#else
     int flags = ::fcntl (fd_, F_GETFL, 0);
     if (flags < 0) return;
     flags = on ? (flags | O_NONBLOCK) : (flags & ~O_NONBLOCK);
     ::fcntl (fd_, F_SETFL, flags);
+#endif
 }
+
+namespace {
+
+void set_int_option (int fd, int level, int name, int value) noexcept
+{
+#ifdef _WIN32
+    ::setsockopt (static_cast<SOCKET> (fd), level, name,
+                  reinterpret_cast<const char *> (&value), sizeof value);
+#else
+    ::setsockopt (fd, level, name, &value, sizeof value);
+#endif
+}
+
+}   // namespace
 
 void Socket::set_reuseaddr () noexcept
 {
-    int one = 1;
-    if (fd_ >= 0)
-        ::setsockopt (fd_, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+    // On Windows SO_REUSEADDR lets a second socket bind a port that is in
+    // active use, which is not what this is for; Windows already allows
+    // rebinding a port in TIME_WAIT without it.
+#ifndef _WIN32
+    if (fd_ >= 0) set_int_option (fd_, SOL_SOCKET, SO_REUSEADDR, 1);
+#endif
 }
 
 void Socket::set_nodelay () noexcept
 {
     // Multinet frames are small and latency sensitive; Nagle would coalesce
     // them into round trip delays.
-    int one = 1;
-    if (fd_ >= 0)
-        ::setsockopt (fd_, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
+    if (fd_ >= 0) set_int_option (fd_, IPPROTO_TCP, TCP_NODELAY, 1);
 }
 
 int Socket::socket_error () const noexcept
@@ -59,8 +130,13 @@ int Socket::socket_error () const noexcept
     if (fd_ < 0) return EBADF;
     int err = 0;
     socklen_t len = sizeof err;
+#ifdef _WIN32
+    if (::getsockopt (static_cast<SOCKET> (fd_), SOL_SOCKET, SO_ERROR,
+                      reinterpret_cast<char *> (&err), &len) < 0)
+#else
     if (::getsockopt (fd_, SOL_SOCKET, SO_ERROR, &err, &len) < 0)
-        return errno;
+#endif
+        return sock_errno ();
     return err;
 }
 
@@ -75,10 +151,10 @@ PollResult poll_socket (int fd, bool want_read, bool want_write, int ms)
     p.fd = fd;
     p.events = static_cast<short> ((want_read ? POLLIN : 0)
                                  | (want_write ? POLLOUT : 0));
-    int n = ::poll (&p, 1, ms);
+    int n = sock_poll (&p, 1, ms);
     if (n < 0) {
         // EINTR is not an error: the caller loops and checks its stop flag.
-        if (errno == EINTR) { r.timeout = true; return r; }
+        if (sock_interrupted (sock_errno ())) { r.timeout = true; return r; }
         r.error = true;
         return r;
     }
@@ -97,7 +173,8 @@ std::string Endpoint::str () const
     char serv[NI_MAXSERV] = "?";
     if (len)
         ::getnameinfo (reinterpret_cast<const sockaddr *> (&addr), len,
-                       host, sizeof host, serv, sizeof serv,
+                       host, static_cast<socklen_t> (sizeof host),
+                       serv, static_cast<socklen_t> (sizeof serv),
                        NI_NUMERICHOST | NI_NUMERICSERV);
     return std::string (host) + ":" + serv;
 }
@@ -143,6 +220,7 @@ namespace {
 std::vector<Endpoint> lookup (const std::string &name, std::uint16_t port,
                               bool passive)
 {
+    net_init ();
     std::vector<Endpoint> out;
     addrinfo hints {};
     hints.ai_family   = AF_UNSPEC;
@@ -162,7 +240,7 @@ std::vector<Endpoint> lookup (const std::string &name, std::uint16_t port,
         if (a->ai_family != AF_INET && a->ai_family != AF_INET6) continue;
         Endpoint e;
         std::memcpy (&e.addr, a->ai_addr, a->ai_addrlen);
-        e.len    = a->ai_addrlen;
+        e.len    = static_cast<socklen_t> (a->ai_addrlen);
         e.family = a->ai_family;
         // getaddrinfo returns one entry per socket type; keep each address
         // once.
@@ -239,12 +317,21 @@ SourceAddress::SourceAddress (std::string name, std::uint16_t port)
 
 Socket SourceAddress::bind_socket (int family, int type, int protocol) const
 {
-    Socket s (::socket (family, type, protocol));
+    return open_socket (family, type, protocol, type != SOCK_STREAM);
+}
+
+Socket SourceAddress::open_socket (int family, int type, int protocol,
+                                   bool must_bind) const
+{
+    Socket s (sock_open (family, type, protocol));
     if (!s) return s;
     s.set_reuseaddr ();
+    // An IPv6 socket takes IPv4 too only if IPV6_V6ONLY is off.  That is
+    // the Linux default, but Windows and the BSDs default to on.
+    if (family == AF_INET6) set_int_option (s.fd (), IPPROTO_IPV6, IPV6_V6ONLY, 0);
 
     // Nothing to bind to: an outbound connection with no source constraint.
-    if (name_.empty () && port_ == 0) return s;
+    if (name_.empty () && port_ == 0 && !must_bind) return s;
 
     std::vector<Endpoint> addrs = lookup (name_, port_, true);
     for (const Endpoint &e : addrs) {
@@ -252,7 +339,8 @@ Socket SourceAddress::bind_socket (int family, int type, int protocol) const
         if (::bind (s.fd (), reinterpret_cast<const sockaddr *> (&e.addr),
                     e.len) == 0)
             return s;
-        DN_TRACE ("bind to {} failed: {}", e.str (), std::strerror (errno));
+        DN_TRACE ("bind to {} failed: {}", e.str (),
+                  sock_strerror (sock_errno ()));
     }
     if (addrs.empty ())
         DN_TRACE ("no local address for {}", str ());
@@ -264,10 +352,10 @@ Socket SourceAddress::create_server () const
     // Prefer IPv6, which accepts IPv4 too on a dual stack host; fall back
     // to IPv4 where IPv6 is unavailable.
     for (int family : { AF_INET6, AF_INET }) {
-        Socket s = bind_socket (family, SOCK_STREAM);
+        Socket s = open_socket (family, SOCK_STREAM, 0, true);
         if (!s) continue;
         if (::listen (s.fd (), 1) < 0) {
-            DN_TRACE ("listen failed: {}", std::strerror (errno));
+            DN_TRACE ("listen failed: {}", sock_strerror (sock_errno ()));
             continue;
         }
         return s;
@@ -296,8 +384,9 @@ Socket create_connection (HostAddress &dest, const SourceAddress &src)
 
     if (::connect (s.fd (), reinterpret_cast<const sockaddr *> (&e->addr),
                    e->len) < 0
-        && errno != EINPROGRESS) {
-        DN_TRACE ("connect to {} failed: {}", e->str (), std::strerror (errno));
+        && !sock_in_progress (sock_errno ())) {
+        DN_TRACE ("connect to {} failed: {}", e->str (),
+                  sock_strerror (sock_errno ()));
         return Socket {};
     }
     return s;
@@ -315,9 +404,17 @@ Socket create_udp (HostAddress &dest, const SourceAddress &src)
 bool send_datagram (int fd, ByteView data, const Endpoint &to)
 {
     if (fd < 0 || !to.len) return false;
+#ifdef _WIN32
+    ssize_t n = ::sendto (static_cast<SOCKET> (fd),
+                          reinterpret_cast<const char *> (data.data ()),
+                          static_cast<int> (data.size ()), 0,
+                          reinterpret_cast<const sockaddr *> (&to.addr),
+                          to.len);
+#else
     ssize_t n = ::sendto (fd, data.data (), data.size (), MSG_NOSIGNAL,
                           reinterpret_cast<const sockaddr *> (&to.addr),
                           to.len);
+#endif
     return n == static_cast<ssize_t> (data.size ());
 }
 
@@ -325,9 +422,17 @@ ssize_t recv_datagram (int fd, std::uint8_t *buf, std::size_t len,
                        Endpoint &from)
 {
     from.len = sizeof from.addr;
+#ifdef _WIN32
+    ssize_t n = ::recvfrom (static_cast<SOCKET> (fd),
+                            reinterpret_cast<char *> (buf),
+                            static_cast<int> (len), 0,
+                            reinterpret_cast<sockaddr *> (&from.addr),
+                            &from.len);
+#else
     ssize_t n = ::recvfrom (fd, buf, len, 0,
                             reinterpret_cast<sockaddr *> (&from.addr),
                             &from.len);
+#endif
     if (n < 0) { from.len = 0; return n; }
     from.family = reinterpret_cast<sockaddr *> (&from.addr)->sa_family;
     return n;

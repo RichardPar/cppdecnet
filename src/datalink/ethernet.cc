@@ -11,9 +11,11 @@
 #include <cstring>
 #include <stdexcept>
 
+#ifndef _WIN32
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#endif
 
 #ifdef __linux__
 #include <linux/if.h>
@@ -479,7 +481,11 @@ void TapEthernet::receive_loop ()
         if (p.error) return;
         if (p.timeout || !p.readable) continue;
 
+#ifdef _WIN32
+        ssize_t n = -1;                 // tap is Linux only; never started
+#else
         ssize_t n = ::read (socket_.fd (), buf, sizeof buf);
+#endif
         if (n <= static_cast<ssize_t> (ETH_HDR_LEN)) continue;
         receive_frame (ByteView (buf, static_cast<std::size_t> (n)));
     }
@@ -490,7 +496,11 @@ void TapEthernet::send_frame (const Bytes &frame)
     if (!socket_) return;
     // Send errors are ignored.  The result is assigned because write() is
     // warn_unused_result.
+#ifdef _WIN32
+    ssize_t n = -1;                     // tap is Linux only; never started
+#else
     ssize_t n = ::write (socket_.fd (), frame.data (), frame.size ());
+#endif
     if (n < 0)
         DN_TRACE ("send failed on {}: {}", name_, std::strerror (errno));
 }

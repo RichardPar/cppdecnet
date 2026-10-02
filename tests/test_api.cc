@@ -1,6 +1,7 @@
 // Tests for the API server: the PyDECnet JSON protocol over a Unix socket.
 
 #include "harness.h"
+#include "posix_compat.h"
 
 #include "decnet/api/server.h"
 #include "decnet/common/json.h"
@@ -17,9 +18,10 @@
 #include <optional>
 #include <thread>
 
+#ifndef _WIN32
 #include <sys/socket.h>
 #include <sys/un.h>
-#include <unistd.h>
+#endif
 
 using namespace decnet;
 
@@ -52,7 +54,7 @@ bool wait_until (P pred, std::chrono::milliseconds timeout
 std::string socket_path ()
 {
     static int n = 0;
-    return "/tmp/dnapi-" + std::to_string (::getpid ()) + "-"
+    return dntest::tmp_dir () + "/dnapi-" + std::to_string (::getpid ()) + "-"
         + std::to_string (++n) + ".sock";
 }
 
@@ -63,7 +65,7 @@ class ApiClient {
 public:
     explicit ApiClient (const std::string &path)
     {
-        sock_ = Socket (::socket (AF_UNIX, SOCK_STREAM, 0));
+        sock_ = Socket (sock_open (AF_UNIX, SOCK_STREAM));
         sockaddr_un a {};
         a.sun_family = AF_UNIX;
         std::strncpy (a.sun_path, path.c_str (), sizeof a.sun_path - 1);
@@ -78,7 +80,7 @@ public:
     void send (const json::Object &o)
     {
         std::string text = o.encode () + "\n";
-        (void) ::send (sock_.fd (), text.data (), text.size (), MSG_NOSIGNAL);
+        (void) sock_send (sock_.fd (), text.data (), text.size ());
     }
 
     // The next message, or nothing if none arrives in time.
@@ -100,7 +102,7 @@ public:
                                         static_cast<int> (left));
             if (!r.readable) return std::nullopt;
             char buf[4096];
-            ssize_t n = ::recv (sock_.fd (), buf, sizeof buf, 0);
+            ssize_t n = sock_recv (sock_.fd (), buf, sizeof buf);
             if (n <= 0) return std::nullopt;
             pending_.append (buf, static_cast<std::size_t> (n));
         }
@@ -188,12 +190,70 @@ DN_TEST (api, the_api_line_is_parsed)
     // No name means the PyDECnet default.
     ::unsetenv ("DECNETAPI");
     Config d = Config::from_string ("api\n");
+#ifdef _WIN32
+    DN_ASSERT_EQ (d.api_socket (), dntest::tmp_dir () + "/decnetapi.sock");
+#else
     DN_ASSERT_EQ (d.api_socket (), std::string ("/tmp/decnetapi.sock"));
+#endif
     DN_ASSERT_EQ (d.api_mode (), 0666u);
 
     DN_ASSERT_THROWS (std::runtime_error,
                       Config::from_string ("api --mode 999\n"));
     DN_ASSERT (Config::from_string ("routing 1.1\n").api_socket ().empty ());
+
+    // On demand: off unless asked for, and two hours idle unless told.
+    DN_ASSERT (!d.api_on_demand ());
+    Config e = Config::from_string ("api /tmp/x.sock --on-demand\n");
+    DN_ASSERT (e.api_on_demand ());
+    DN_ASSERT_EQ (e.api_idle (), 7200u);
+    Config f = Config::from_string ("api /tmp/x.sock --on-demand --idle 60\n");
+    DN_ASSERT_EQ (f.api_idle (), 60u);
+    DN_ASSERT_THROWS (std::runtime_error,
+                      Config::from_string ("api --on-demand --idle 0\n"));
+}
+
+// --------------------------------------------------------------- on demand
+
+DN_TEST (api, on_demand_circuits_follow_the_api_clients)
+{
+    // A is an ordinary router; B brings its circuit to A up only while an
+    // API client is connected, and takes it down two seconds after.
+    std::uint16_t port = free_port ();
+    std::string bpath = socket_path ();
+    Config acfg = Config::from_string (
+        "routing 1.1 --type l1router\nnode 1.1 NODEA\nnode 1.2 NODEB\n"
+        "circuit mul-0 Multinet 127.0.0.1:" + std::to_string (port)
+        + ":listen --t3 2\n");
+    Config bcfg = Config::from_string (
+        "routing 1.2 --type endnode\nnode 1.2 NODEB\nnode 1.1 NODEA\n"
+        "circuit mul-0 Multinet 127.0.0.1:" + std::to_string (port)
+        + ":connect --t3 2\napi " + bpath + " --on-demand --idle 2\n");
+    Node a (acfg), b (bcfg);
+    a.start ();
+    b.start ();
+
+    // Nobody has asked: no circuit, however long we wait.
+    std::this_thread::sleep_for (std::chrono::seconds (3));
+    DN_ASSERT_EQ (a.routing ()->adjacency_count (), 0u);
+
+    {
+        ApiClient c (bpath);
+        DN_ASSERT (c.connected ());
+        DN_ASSERT (wait_until ([&] { return a.routing ()->adjacency_count () == 1; }));
+        // Up while the client stays, past the idle time.
+        std::this_thread::sleep_for (std::chrono::seconds (3));
+        DN_ASSERT_EQ (a.routing ()->adjacency_count (), 1u);
+    }
+    // The client has gone: down after the idle time.
+    DN_ASSERT (wait_until ([&] { return a.routing ()->adjacency_count () == 0; }));
+
+    // And up again for the next one.
+    {
+        ApiClient c (bpath);
+        DN_ASSERT (wait_until ([&] { return a.routing ()->adjacency_count () == 1; }));
+    }
+    b.stop ();
+    a.stop ();
 }
 
 // ---------------------------------------------------------------- requests
@@ -252,7 +312,7 @@ DN_TEST (api, bad_requests_get_an_error_with_their_tag)
 DN_TEST (api, a_request_that_is_not_json_is_answered_and_the_link_stays_up)
 {
     Single s;
-    int fd = ::socket (AF_UNIX, SOCK_STREAM, 0);
+    int fd = sock_open (AF_UNIX, SOCK_STREAM);
     Socket sock (fd);
     sockaddr_un a {};
     a.sun_family = AF_UNIX;
@@ -260,14 +320,14 @@ DN_TEST (api, a_request_that_is_not_json_is_answered_and_the_link_stays_up)
     DN_ASSERT (::connect (fd, reinterpret_cast<sockaddr *> (&a), sizeof a) == 0);
 
     std::string text = "not json\n{}\n";
-    DN_ASSERT (::send (fd, text.data (), text.size (), 0)
+    DN_ASSERT (sock_send (fd, text.data (), text.size ())
                == static_cast<ssize_t> (text.size ()));
     std::string got;
     char buf[1024];
     DN_ASSERT (wait_until ([&] {
         PollResult r = poll_socket (fd, true, false, 100);
         if (r.readable) {
-            ssize_t n = ::recv (fd, buf, sizeof buf, 0);
+            ssize_t n = sock_recv (fd, buf, sizeof buf);
             if (n > 0) got.append (buf, static_cast<std::size_t> (n));
         }
         return std::count (got.begin (), got.end (), '\n') >= 2;
@@ -506,12 +566,12 @@ DN_TEST (api, the_socket_is_removed_at_stop_and_a_stale_one_replaced)
     std::string path = socket_path ();
     // A file left behind by a server that died.
     {
-        int fd = ::socket (AF_UNIX, SOCK_STREAM, 0);
+        int fd = sock_open (AF_UNIX, SOCK_STREAM);
         sockaddr_un a {};
         a.sun_family = AF_UNIX;
         std::strncpy (a.sun_path, path.c_str (), sizeof a.sun_path - 1);
         DN_ASSERT (::bind (fd, reinterpret_cast<sockaddr *> (&a), sizeof a) == 0);
-        ::close (fd);
+        sock_close (fd);
     }
     DN_ASSERT (::access (path.c_str (), F_OK) == 0);
 

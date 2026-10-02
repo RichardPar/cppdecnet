@@ -23,10 +23,18 @@
 #include <map>
 #include <optional>
 
+#ifdef _WIN32
+#include <io.h>
+// No close-on-exec for sockets: the object spawner passes children only
+// the handles it names.
+#define SOCK_CLOEXEC 0
+#define F_OK 0
+#else
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
 #include <unistd.h>
+#endif
 
 namespace decnet::api {
 
@@ -281,8 +289,8 @@ void Client::read ()
     std::string pending;
     char buf[4096];
     for (;;) {
-        ssize_t n = ::recv (sock_.fd (), buf, sizeof buf, 0);
-        if (n < 0 && errno == EINTR) continue;
+        ssize_t n = sock_recv (sock_.fd (), buf, sizeof buf);
+        if (n < 0 && sock_interrupted (sock_errno ())) continue;
         if (n <= 0) break;
         pending.append (buf, static_cast<std::size_t> (n));
 
@@ -356,11 +364,11 @@ void Client::write ()
         }
         std::size_t off = 0;
         while (off < text.size ()) {
-            ssize_t n = ::send (sock_.fd (), text.data () + off,
-                                text.size () - off, MSG_NOSIGNAL);
-            if (n < 0 && errno == EINTR) continue;
+            ssize_t n = sock_send (sock_.fd (), text.data () + off,
+                                   text.size () - off);
+            if (n < 0 && sock_interrupted (sock_errno ())) continue;
             if (n <= 0) {
-                DN_DEBUG ("API send failure: {}", std::strerror (errno));
+                DN_DEBUG ("API send failure: {}", sock_strerror (sock_errno ()));
                 std::lock_guard l (out_m_);
                 closing_ = true;
                 sock_.shutdown ();
@@ -890,6 +898,7 @@ void Client::closed ()
 {
     if (gone_) return;
     gone_ = true;
+    node_->api_client_left ();
     DN_TRACE ("API client gone: {} links, {} objects", conns_.size (),
               binds_.size ());
     for (auto &[h, b] : binds_)
@@ -925,7 +934,7 @@ bool Server::start ()
     // A socket file left by a server that died is removed; one that
     // answers belongs to a server still running.
     if (::access (path_.c_str (), F_OK) == 0) {
-        Socket probe (::socket (AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0));
+        Socket probe (sock_open (AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC));
         if (probe && ::connect (probe.fd (), reinterpret_cast<sockaddr *> (&a),
                                 sizeof a) == 0) {
             DN_ERROR ("api: another server is already using {}", path_);
@@ -933,17 +942,22 @@ bool Server::start ()
         }
         ::unlink (path_.c_str ());
     }
-    listener_ = Socket (::socket (AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0));
+    listener_ = Socket (sock_open (AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC));
     if (!listener_
         || ::bind (listener_.fd (), reinterpret_cast<sockaddr *> (&a),
                    sizeof a) < 0) {
-        DN_ERROR ("api: cannot bind {}: {}", path_, std::strerror (errno));
+        DN_ERROR ("api: cannot bind {}: {}", path_,
+                  sock_strerror (sock_errno ()));
         listener_.close ();
         return false;
     }
+#ifndef _WIN32
+    // On Windows the socket file takes its directory's ACL instead.
     ::chmod (path_.c_str (), mode_);
+#endif
     if (::listen (listener_.fd (), 8) < 0) {
-        DN_ERROR ("api: cannot listen on {}: {}", path_, std::strerror (errno));
+        DN_ERROR ("api: cannot listen on {}: {}", path_,
+                  sock_strerror (sock_errno ()));
         listener_.close ();
         ::unlink (path_.c_str ());
         return false;
@@ -959,6 +973,10 @@ void Server::stop ()
     stopping_ = true;
     // Shutting the listener down is what wakes the accept.
     listener_.shutdown ();
+#ifdef _WIN32
+    // Shutdown does not stop a later accept on Windows; closing does.
+    listener_.close ();
+#endif
     thread_.join ();
     listener_.close ();
     ::unlink (path_.c_str ());
@@ -976,12 +994,21 @@ void Server::run ()
 {
     logging::set_thread_name (node_ ? node_->name () : "api");
     while (!stopping_) {
+#ifdef _WIN32
+        int fd = sock_accept (listener_.fd ());
+#else
         int fd = ::accept4 (listener_.fd (), nullptr, nullptr, SOCK_CLOEXEC);
+#endif
         if (fd < 0) {
-            if (errno == EINTR) continue;
+            if (sock_interrupted (sock_errno ())) continue;
             break;                      // listener shut down
         }
         reap ();
+        // Counted on the node thread, ahead of anything the client asks:
+        // with api --on-demand, its arrival brings the circuits up.
+        if (node_)
+            node_->add_work (std::make_unique<CallbackWork> (
+                [node = node_] { node->api_client_arrived (); }));
         auto c = std::make_shared<Client> (node_, Socket (fd));
         c->start ();
         std::lock_guard l (clients_m_);

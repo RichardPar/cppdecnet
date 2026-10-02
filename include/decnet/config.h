@@ -138,6 +138,11 @@ struct LoggingConfig {
     std::string events;          // event list, empty for the default
 };
 
+// Where the API socket is when the "api" line names none and $DECNETAPI is
+// unset: /tmp/decnetapi.sock, as PyDECnet has it, or decnetapi.sock in the
+// temporary directory on Windows.  Clients use it to find the server.
+std::string default_api_socket ();
+
 class Config {
 public:
     // Read a PyDECnet configuration file.  Throws std::runtime_error with a
@@ -166,6 +171,11 @@ public:
     // API socket path and file mode.  An empty path means not configured.
     const std::string &api_socket () const noexcept { return api_socket_; }
     unsigned api_mode () const noexcept { return api_mode_; }
+
+    // api --on-demand: circuits stay down until an API client connects, and
+    // go down again api_idle () seconds after the last one has gone.
+    bool api_on_demand () const noexcept { return api_on_demand_; }
+    unsigned api_idle () const noexcept { return api_idle_; }
 
     // Lines no layer has claimed.  Kept rather than rejected so PyDECnet
     // configuration files load.
@@ -205,6 +215,8 @@ private:
     unsigned                     http_port_ = 0;
     std::string                  api_socket_;
     unsigned                     api_mode_ = 0666;
+    bool                         api_on_demand_ = false;
+    unsigned                     api_idle_ = 7200;      // two hours
 };
 
 // Split a config file line into words, honouring quotes and '#' comments.

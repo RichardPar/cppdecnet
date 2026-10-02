@@ -5,16 +5,13 @@
 // nothing here needs the network.
 
 #include "harness.h"
+#include "posix_compat.h"
 
 #include "decnet/common/http_client.h"
 #include "decnet/common/socket.h"
 #include "decnet/config.h"
 #include "decnet/node.h"
 #include "decnet/nodefetch.h"
-
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <unistd.h>
 
 #include <atomic>
 #include <cstdio>
@@ -29,7 +26,7 @@ namespace {
 std::string temp_path (const char *stem)
 {
     static std::atomic<int> seq { 0 };
-    return "/tmp/cppdecnet-test-" + std::string (stem) + "-"
+    return dntest::tmp_dir () + "/cppdecnet-test-" + std::string (stem) + "-"
          + std::to_string (::getpid ()) + "-"
          + std::to_string (seq.fetch_add (1));
 }
@@ -89,13 +86,13 @@ private:
             PollResult p = poll_socket (listener_.fd (), true, false, 200);
             if (stopping_ || p.error) return;
             if (!p.readable) continue;
-            int fd = ::accept (listener_.fd (), nullptr, nullptr);
+            int fd = sock_accept (listener_.fd ());
             if (fd < 0) continue;
             Socket c (fd);
             std::string req;
             char tmp[2048];
             while (req.find ("\r\n\r\n") == std::string::npos) {
-                ssize_t n = ::recv (c.fd (), tmp, sizeof tmp, 0);
+                ssize_t n = sock_recv (c.fd (), tmp, sizeof tmp);
                 if (n <= 0) break;
                 req.append (tmp, static_cast<std::size_t> (n));
             }
@@ -119,7 +116,7 @@ private:
                 resp += "Content-Length: " + std::to_string (body_.size ())
                       + "\r\nConnection: close\r\n\r\n" + body_;
             }
-            ::send (c.fd (), resp.data (), resp.size (), MSG_NOSIGNAL);
+            sock_send (c.fd (), resp.data (), resp.size ());
             c.shutdown ();
             ++served_;
         }

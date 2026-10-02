@@ -3,16 +3,16 @@
 // collected.
 
 #include "harness.h"
+#include "posix_compat.h"
 
 #include "decnet/dap/fal.h"
 
 #include <cstdlib>
 #include <deque>
+#include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <sstream>
-
-#include <sys/stat.h>
-#include <unistd.h>
 
 using namespace decnet;
 using namespace decnet::dap;
@@ -63,10 +63,14 @@ struct Tree {
     std::string root;
     Tree ()
     {
-        char tmpl[] = "/tmp/dnfal-test-XXXXXX";
-        root = ::mkdtemp (tmpl);
+        std::string tmpl = dntest::tmp_dir () + "/dnfal-test-XXXXXX";
+        root = ::mkdtemp (tmpl.data ());
     }
-    ~Tree () { if (std::system (("rm -rf '" + root + "'").c_str ())) {} }
+    ~Tree ()
+    {
+        std::error_code ec;
+        std::filesystem::remove_all (root, ec);
+    }
     void file (const std::string &name, const std::string &data) const
     {
         std::ofstream (root + "/" + name, std::ios::binary) << data;
@@ -82,8 +86,9 @@ struct Tree {
     }
     bool exists (const std::string &name) const
     {
-        struct stat st;
-        return ::lstat ((root + "/" + name).c_str (), &st) == 0;
+        std::error_code ec;
+        return std::filesystem::exists (
+            std::filesystem::symlink_status (root + "/" + name, ec));
     }
 };
 
@@ -266,8 +271,17 @@ DN_TEST (fal, nothing_outside_the_root_is_reachable)
     Tree t;
     Tree outside;
     outside.file ("secret", "s");
+#ifdef _WIN32
+    // Making a symbolic link needs Developer Mode or elevation here.
+    if (::symlink ((outside.root + "/secret").c_str (),
+                   (t.root + "/link").c_str ()) != 0) {
+        std::cout << "  (skipped: cannot create symbolic links)\n";
+        return;
+    }
+#else
     DN_ASSERT (::symlink ((outside.root + "/secret").c_str (),
                           (t.root + "/link").c_str ()) == 0);
+#endif
     DN_ASSERT (::symlink (outside.root.c_str (),
                           (t.root + "/dirlink").c_str ()) == 0);
     Script s;
@@ -350,10 +364,8 @@ DN_TEST (fal, an_abandoned_create_leaves_the_old_file)
 
     // No temporary files left behind.
     std::string out;
-    FILE *ls = ::popen (("ls -A '" + t.root + "'").c_str (), "r");
-    char buf[256];
-    while (std::fgets (buf, sizeof buf, ls)) out += buf;
-    ::pclose (ls);
+    for (const auto &e : std::filesystem::directory_iterator (t.root))
+        out += e.path ().filename ().string () + "\n";
     DN_ASSERT_EQ (out, std::string ("f\n"));
 }
 

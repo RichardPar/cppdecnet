@@ -22,10 +22,12 @@
 #include <thread>
 #include <vector>
 
+#ifndef _WIN32
 #include <fcntl.h>
 #include <poll.h>
 #include <stdlib.h>
 #include <unistd.h>
+#endif
 
 using namespace decnet;
 using namespace decnet::datalink;
@@ -625,6 +627,10 @@ DN_TEST (ddcmp, the_telnet_device_form_is_accepted)
 // --------------------------------------------------------------- serial
 //
 // Two pseudo-terminals with a thread copying bytes between them.
+// POSIX only: Windows has no pseudo-terminals, and a pair of virtual COM
+// ports (com0com) is not something a test can count on.
+
+#ifndef _WIN32
 
 namespace {
 
@@ -714,6 +720,8 @@ DN_TEST (ddcmp, two_nodes_come_up_over_a_serial_line)
     b.stop ();
     a.stop ();
 }
+
+#endif  // !_WIN32
 
 DN_TEST (ddcmp, an_unsupported_serial_speed_is_refused)
 {
