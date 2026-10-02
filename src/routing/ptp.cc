@@ -124,6 +124,17 @@ PtpCircuit::State PtpCircuit::restart (const char *why, events::EventId ev,
     return restart (why);
 }
 
+PtpCircuit::State PtpCircuit::halt ()
+{
+    // The hello or listen timer may still be running.  Left to expire, s0
+    // would take it as a retry and open the datalink again: harmless when
+    // the node is going away, but not when it stops a circuit for a while
+    // (api --on-demand).
+    if (node ()) node ()->timers ().stop (this);
+    port_->close ();
+    return DN_MY_STATE (PtpCircuit, s0);
+}
+
 PtpCircuit::State PtpCircuit::restart (const char *why)
 {
     DN_TRACE ("{} restart due to {}", name_, why);
@@ -216,8 +227,7 @@ PtpCircuit::State PtpCircuit::ds (Work &w)
     if (dynamic_cast<CircuitDown *> (&w)) return restart ("circuit down");
     if (dynamic_cast<CircuitStop *> (&w)) {
         routeevent ({ 4, 9 });              // circuit down, operator initiated
-        port_->close ();
-        return DN_MY_STATE (PtpCircuit, s0);
+        return halt ();
     }
     return nullptr;
 }
@@ -234,8 +244,7 @@ PtpCircuit::State PtpCircuit::ri (Work &w)
     }
     if (dynamic_cast<CircuitStop *> (&w)) {
         routeevent ({ 4, 9 });              // circuit down, operator initiated
-        port_->close ();
-        return DN_MY_STATE (PtpCircuit, s0);
+        return halt ();
     }
     if (!packet_) return nullptr;
 
@@ -327,8 +336,7 @@ PtpCircuit::State PtpCircuit::rv (Work &w)
     }
     if (dynamic_cast<CircuitStop *> (&w)) {
         routeevent ({ 4, 9 });              // circuit down, operator initiated
-        port_->close ();
-        return DN_MY_STATE (PtpCircuit, s0);
+        return halt ();
     }
     if (!packet_) return nullptr;
 
@@ -363,8 +371,7 @@ PtpCircuit::State PtpCircuit::ru (Work &w)
     }
     if (dynamic_cast<CircuitStop *> (&w)) {
         down ();
-        port_->close ();
-        return DN_MY_STATE (PtpCircuit, s0);
+        return halt ();
     }
     if (!packet_) return nullptr;
 

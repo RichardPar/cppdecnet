@@ -139,6 +139,10 @@ private:
     // Same, reporting an event first.
     State restart (const char *why, events::EventId ev, int reason);
 
+    // Stop, as asked: close the datalink and stop the timer, which s0 would
+    // otherwise take as the word to start again.  Returns s0.
+    State halt ();
+
     // Raise a class 4 event about this circuit, naming the neighbour if we
     // have one.  reason < 0 leaves the reason parameter out.
     void routeevent (events::EventId ev, int reason = -1,
