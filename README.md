@@ -294,9 +294,21 @@ api /run/decnet/api.sock --mode 660
 Programs talk to the node over a Unix socket, one JSON object per line,
 in PyDECnet's format, so PyDECnet's `decnet/connectors.py` and
 `async_connectors.py` work unchanged. The socket defaults to `$DECNETAPI`
-or `/tmp/decnetapi.sock`, mode 666. A socket file left by a node that
-died is replaced; one that still answers stops the second node's API from
-starting.
+or `/tmp/decnetapi.sock`, mode 666 (on Windows, `decnetapi.sock` in
+`%TEMP%`). A socket file left by a node that died is replaced; one that
+still answers stops the second node's API from starting.
+
+```
+api --on-demand --idle 7200
+```
+
+`--on-demand` is an extension, for a desktop node that's on the network
+only while it's being used. The node starts with its routing circuits
+down, so it connects to nothing, and brings them up when the first API
+client connects. Once the last client has gone, it takes them down again
+after `--idle` seconds (two hours if not given), unless another client
+connects first. The first request after a quiet spell takes a second or
+two longer, while the circuit comes up.
 
 `{}` lists the system and its APIs. The `session` API opens and accepts
 logical links:
