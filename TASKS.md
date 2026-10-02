@@ -73,7 +73,7 @@ known defects in [BUGS.md](BUGS.md).
 
 ## Monitoring and API
 
-- [ ] Delete or wire up `src/http/monitor.cc`, which nothing instantiates
+- [x] Delete `src/http/monitor.cc`, an older monitoring interface nothing used
 - [ ] `logging` pages are empty: `EventLogger::nice_read` is a stub
 - [ ] Per-connection NSP page, event display, bridge page
 - [ ] HTTPS
@@ -108,5 +108,7 @@ known defects in [BUGS.md](BUGS.md).
 - [ ] Rebuild when the compiler flags change. Installing libpcap after a
       build changes `FEATURE_FLAGS`, but nothing is recompiled until
       `make clean`
+- [ ] Rebuild `libdecnet.a` when a source file is removed. Nothing in it
+      is newer, so the old object stays in the archive until `make clean`
 - [ ] Cache the feature probes in `$(BUILDDIR)/features.mk`, as
       `mk/config.mk` says it does; they run on every `make` now
