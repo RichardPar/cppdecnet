@@ -299,6 +299,19 @@ void Config::apply (ConfigLine line)
         // URL to fetch it from.  "@hecnet" is the HECnet list.
         if (line.positional[0].size () > 1 && line.positional[0][0] == '@') {
             std::string inc = line.positional[0].substr (1);
+            // "@neighbours" isn't a list at all: names are learned from the
+            // neighbours, and from the nodes we talk to.  An extension.
+            if (inc == "neighbours" || inc == "neighbors") {
+                learn_names_ = true;
+                if (has (line, "refresh")) {
+                    learn_refresh_ = to_uint (opt (line, "refresh", empty),
+                                              "refresh");
+                    if (learn_refresh_ == 0)
+                        throw std::runtime_error (
+                            "--refresh must be at least 1 second");
+                }
+                return;
+            }
             bool is_url = inc.rfind ("http://", 0) == 0
                        || inc.rfind ("https://", 0) == 0;
             if (inc == "hecnet" || is_url) {

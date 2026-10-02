@@ -1,5 +1,6 @@
 #include "decnet/api/server.h"
 #include "decnet/http/server.h"
+#include "decnet/namelearner.h"
 #include "decnet/nodefetch.h"
 #include "decnet/node.h"
 
@@ -114,6 +115,9 @@ Node::Node (const Config &config)
             session_ = std::make_unique<session::Session> (this, config);
             session::add_default_objects (*session_);
             nsp_->set_session_control (session_.get ());
+            if (config.learn_names ())
+                name_learner_ = std::make_unique<NameLearner> (
+                    this, config.learn_refresh ());
         }
     }
     // The API: session control's, if there is one, and MOP's.  A node that
@@ -215,6 +219,22 @@ bool Node::set_node_name (Nodeid id, const std::string &name)
     info->name = name;
     by_name_[name] = info;
     return true;
+}
+
+bool Node::learn_node_name (Nodeid id, const std::string &name)
+{
+    std::string n;
+    try { n = nodename (name); } catch (const std::exception &) { return false; }
+    if (id == id_) return false;
+    const Nodeinfo *have = find_node (id, false);
+    if (have && !have->name.empty ()) return false;
+    if (by_name_.count (n)) return false;
+    return set_node_name (id, n);
+}
+
+void Node::link_running (Nodeid id)
+{
+    if (name_learner_) name_learner_->link_running (id);
 }
 
 Nodeinfo *Node::find_node (Nodeid id, bool add)
@@ -367,6 +387,7 @@ void Node::start ()
     if (session_)  session_->start ();
     if (http_)     http_->start ();
     if (api_)      api_->start ();
+    if (name_learner_) name_learner_->start ();
     // Last, and only once the loop below is about to run: it hands its
     // results to the node thread.
     if (node_fetcher_) node_fetcher_->start ();
@@ -378,6 +399,7 @@ void Node::stop_layers ()
     // Reverse start order: session control releases connections before NSP
     // frees them, and remote event sinks close before session control stops.
     if (idle_timer_) timers_.stop (idle_timer_.get ());
+    if (name_learner_) name_learner_->stop ();
     if (event_logger_) event_logger_->stop_remote ();
     if (session_)  session_->stop ();
     if (nsp_)      nsp_->stop ();
