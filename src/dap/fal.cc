@@ -70,6 +70,7 @@ int lstat (const char *path, struct stat *st) { return ::stat (path, st); }
 
 int fchmod (int, int) { return 0; }
 int fsync (int fd) { return ::_commit (fd); }
+int ftruncate (int fd, long len) { return ::_chsize_s (fd, len) == 0 ? 0 : -1; }
 
 int mkstemp (char *tmpl)
 {
@@ -177,6 +178,51 @@ constexpr unsigned rms_wer = 0163;      // file write error
 // DAP field codes for "unsupported" statuses: MACCODE 2 with the field.
 constexpr unsigned f_accfunc = 0320;
 constexpr unsigned f_bls = 0225;
+
+// The unit of block mode: a virtual block, numbered from one.
+constexpr std::size_t blksize = 512;
+
+// The VBN a block mode Control names in its key: an unsigned integer, low
+// byte first.
+std::uint64_t key_vbn (const Bytes &key)
+{
+    std::uint64_t v = 0;
+    for (std::size_t i = key.size (); i-- > 0; )
+        v = v << 8 | key[i];
+    return v;
+}
+
+// The records of an RMS variable length file, as block mode writes it:
+// each a count word, low byte first, then the data, padded to a word.  A
+// count of all ones means the rest of the block is unused.  The first hdr
+// bytes of each record, VFC's fixed part, are dropped, and each record is
+// ended with a newline if lines.  With no exact size the last block's
+// zero fill ends the file, rather than reading as empty records.
+Bytes unpack_records (ByteView raw, std::size_t hdr, bool lines, bool exact)
+{
+    Bytes out;
+    std::size_t pos = 0;
+    while (pos + 2 <= raw.size ()) {
+        std::size_t n = raw[pos] | raw[pos + 1] << 8;
+        if (n == 0xffff) {
+            pos = (pos / blksize + 1) * blksize;
+            continue;
+        }
+        if (n == 0 && !exact
+            && std::all_of (raw.begin () + static_cast<std::ptrdiff_t> (pos),
+                            raw.end (), [] (std::uint8_t c) { return c == 0; }))
+            break;
+        pos += 2;
+        if (pos + n > raw.size ()) break;           // cut short: dropped
+        auto rec = raw.begin () + static_cast<std::ptrdiff_t> (pos);
+        out.insert (out.end (),
+                    rec + static_cast<std::ptrdiff_t> (std::min (hdr, n)),
+                    rec + static_cast<std::ptrdiff_t> (n));
+        if (lines) out.push_back ('\n');
+        pos += n + (n & 1);
+    }
+    return out;
+}
 
 bool is_wild (const std::string &s)
 {
@@ -440,7 +486,7 @@ void FalServer::run ()
     ours.ostype = o_.ostype;
     ours.filesys = o_.filesys;
     for (unsigned b : { Config::cap_fo_seq, Config::cap_seq_xfer,
-                        Config::cap_blocking, Config::cap_len2, Config::cap_dir,
+                        Config::cap_random_blk, Config::cap_blocking, Config::cap_len2, Config::cap_dir,
                         Config::cap_dattim_xa, Config::cap_fprot_xa,
                         Config::cap_seq_ra, Config::cap_glob, Config::cap_name })
         ours.syscap.set (b);
@@ -767,13 +813,51 @@ void FalServer::get (const Access &a)
         c = std::get_if<Control> (&*m);
         if (!c) return status (Status::out_of_sync, type_of (*m));
         if (c->ctlfunc != Control::get) return status (Status::unsupported, 0420);
-        if (!c->menu[Control::m_rac] || c->rac != Control::rb_seqf)
+        // Record file transfer, or block mode: the whole file a block at a
+        // time, or one block for each GET.
+        if (!c->menu[Control::m_rac]
+            || (c->rac != Control::rb_seqf && c->rac != Control::rb_blkf
+                && c->rac != Control::rb_blk))
             return status (Status::unsupported, 0422);
 
         std::unique_ptr<std::FILE, int (*) (std::FILE *)> fp (
             std::fopen (f.path.c_str (), "rb"), std::fclose);
         if (!fp) return status (Status::open_error, rms_prv);
-        if (text) {
+        // One block by its VBN; false past the end.  The last is sent
+        // short, not padded: VMS EXCHANGE takes the end of file from the
+        // data, not the attributes, and would keep the padding.
+        auto read_block = [&] (std::uint64_t vbn, Bytes &block) {
+            block.assign (blksize, 0);
+            if (vbn == 0
+                || std::fseek (fp.get (), static_cast<long> ((vbn - 1) * blksize),
+                               SEEK_SET) != 0)
+                return false;
+            block.resize (std::fread (block.data (), 1, blksize, fp.get ()));
+            return !block.empty ();
+        };
+        if (c->rac == Control::rb_blk) {
+            // Random block access: each GET names its block, until the
+            // requester closes.  Past the end is end of file, not the end.
+            for (;;) {
+                Bytes block;
+                std::uint64_t vbn = c->menu[Control::m_key] ? key_vbn (c->key) : 0;
+                if (read_block (vbn, block)) send (Data { vbn, block });
+                else if (std::ferror (fp.get ()))
+                    return status (Status::transfer_error, rms_rer);
+                else status (Status::transfer_error, Status::rms_eof);
+                m = next ();
+                if (!m) return;
+                c = std::get_if<Control> (&*m);
+                if (!c) break;
+                if (c->ctlfunc != Control::get || c->rac != Control::rb_blk)
+                    return status (Status::unsupported, 0420);
+            }
+        } else if (c->rac == Control::rb_blkf) {
+            // Every byte as it is, whatever the format.
+            Bytes block;
+            for (std::uint64_t vbn = 1; read_block (vbn, block); ++vbn)
+                send (Data { vbn, block });
+        } else if (text) {
             std::string line;
             int ch;
             bool any = false;
@@ -800,12 +884,14 @@ void FalServer::get (const Access &a)
                 send (Data { 0, block });
             }
         }
-        if (std::ferror (fp.get ()))
-            return status (Status::transfer_error, rms_rer);
-        status (Status::transfer_error, Status::rms_eof);
-
-        m = next ();
-        if (!m) return;
+        // Random block access has the requester's next message already.
+        if (std::holds_alternative<Control> (*m)) {
+            if (std::ferror (fp.get ()))
+                return status (Status::transfer_error, rms_rer);
+            status (Status::transfer_error, Status::rms_eof);
+            m = next ();
+            if (!m) return;
+        }
         auto *ac = std::get_if<AccessComplete> (&*m);
         if (!ac) return status (Status::out_of_sync, type_of (*m));
         if (ac->cmpfunc == AccessComplete::eos) {
@@ -828,6 +914,52 @@ void FalServer::get (const Access &a)
 
 // -------------------------------------------------------------- create
 
+// A file written in block mode holds the requester's blocks as they were on
+// its disk.  Cut it to the size the attributes give, and make RMS records
+// what record mode would have stored: a line each for text, the bare
+// records otherwise.  Stream text loses the CR before each LF.
+bool FalServer::unblock (std::FILE *fp, std::uint64_t end)
+{
+    auto size = attr_ ? attr_->size () : std::nullopt;
+    bool exact = size && *size <= end;
+    std::uint8_t rfm = Attributes::fb_fix;
+    if (attr_ && attr_->has (Attributes::m_rfm)) rfm = attr_->rfm;
+    bool text = attr_ && attr_->text ();
+
+    Bytes raw (static_cast<std::size_t> (end));
+    if (std::fflush (fp) != 0 || std::fseek (fp, 0, SEEK_SET) != 0
+        || std::fread (raw.data (), 1, raw.size (), fp) != raw.size ())
+        return false;
+    if (exact) raw.resize (static_cast<std::size_t> (*size));
+
+    Bytes out;
+    switch (rfm) {
+    case Attributes::fb_var:
+        out = unpack_records (raw, 0, text, exact);
+        break;
+    case Attributes::fb_vfc:
+        // The fixed part is two bytes unless the attributes say otherwise.
+        out = unpack_records (raw, attr_->has (Attributes::m_fsz) && attr_->fsz
+                                   ? attr_->fsz : 2, text, exact);
+        break;
+    case Attributes::fb_stm:
+    case Attributes::fb_slf:
+    case Attributes::fb_scr:
+        // Zeros at the end stay, given no size: a requester sends its last
+        // block short, as VMS does, and a binary may well end in zeros.
+        for (std::size_t i = 0; i < raw.size (); ++i)
+            if (!(rfm == Attributes::fb_stm && raw[i] == '\r'
+                  && i + 1 < raw.size () && raw[i + 1] == '\n'))
+                out.push_back (raw[i]);
+        break;
+    default:
+        out = std::move (raw);
+    }
+    return std::fflush (fp) == 0 && ::ftruncate (::fileno (fp), 0) == 0
+        && std::fseek (fp, 0, SEEK_SET) == 0
+        && std::fwrite (out.data (), 1, out.size (), fp) == out.size ();
+}
+
 void FalServer::create (const Access &a)
 {
     if (!o_.writable) return status (Status::open_error, rms_prv);
@@ -847,7 +979,7 @@ void FalServer::create (const Access &a)
     if (fd < 0) return status (Status::open_error, rms_prv);
     ::fchmod (fd, 0644);
     std::unique_ptr<std::FILE, int (*) (std::FILE *)> fp (
-        ::fdopen (fd, "wb"), std::fclose);
+        ::fdopen (fd, "w+b"), std::fclose);    // block mode reads it back
     auto abandon = [&] { fp.reset (); ::unlink (tmp.c_str ()); };
 
     // Tell the requester what it is getting, as for an open.
@@ -865,6 +997,10 @@ void FalServer::create (const Access &a)
     }
     send (Ack {});
 
+    // Block mode: the file's blocks, each where its VBN puts it.
+    bool block = false;
+    std::uint64_t next_vbn = 1, end = 0;
+
     for (;;) {
         auto m = next ();
         if (!m) { abandon (); return; }
@@ -873,12 +1009,25 @@ void FalServer::create (const Access &a)
             else if (c->ctlfunc != Control::put) {
                 abandon ();
                 return status (Status::unsupported, 0420);
+            } else if (c->menu[Control::m_rac]
+                       && (c->rac == Control::rb_blk
+                           || c->rac == Control::rb_blkf)) {
+                block = true;
+                if (c->menu[Control::m_key]) next_vbn = key_vbn (c->key);
             }
             // PUT: the data follows; in record mode, one per record.
         } else if (auto *d = std::get_if<Data> (&*m)) {
             ByteView r = d->payload;
             bool ok;
-            if (text) {
+            if (block) {
+                std::uint64_t vbn = d->recnum ? d->recnum : next_vbn;
+                ok = vbn != 0
+                  && std::fseek (fp.get (), static_cast<long> ((vbn - 1) * blksize),
+                                 SEEK_SET) == 0
+                  && std::fwrite (r.data (), 1, r.size (), fp.get ()) == r.size ();
+                next_vbn = vbn + (r.size () + blksize - 1) / blksize;
+                end = std::max (end, (vbn - 1) * blksize + r.size ());
+            } else if (text) {
                 while (!r.empty () && (r.back () == '\n' || r.back () == '\r'))
                     r = r.first (r.size () - 1);
                 ok = std::fwrite (r.data (), 1, r.size (), fp.get ()) == r.size ()
@@ -902,7 +1051,8 @@ void FalServer::create (const Access &a)
             if (ac->cmpfunc == AccessComplete::purge) {
                 abandon ();
             } else {
-                bool ok = std::fflush (fp.get ()) == 0
+                bool ok = !block || unblock (fp.get (), end);
+                ok = ok && std::fflush (fp.get ()) == 0
                        && ::fsync (::fileno (fp.get ())) == 0;
                 fp.reset ();
                 if (!ok || replace_file (tmp, target->path) != 0) {

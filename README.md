@@ -563,6 +563,16 @@ control is stored with a newline per record; anything else is stored as
 received. A file being written is renamed into place only when the
 transfer completes.
 
+Block mode (block I/O) works both ways, a block at a time or the whole
+file. Reading, the blocks are the file's bytes exactly as they are, whatever
+format the requester asked for. Writing, the blocks are cut to the size the
+requester's attributes give, and RMS variable length (and VFC) records are
+unpacked as record mode would have stored them: a line each for text, the
+bare records otherwise. VMS `COPY` still asks for records;
+`EXCHANGE/NETWORK/TRANSFER_MODE=BLOCK` asks for blocks. Tested with
+OpenVMS VAX 6.2 both ways: text, a fixed 512 binary and Stream_LF, all
+byte for byte.
+
 Tested with OpenVMS VAX 6.2 as the requester: DIRECTORY, TYPE, COPY in
 both directions (text, fixed and variable binary), RENAME and DELETE.
 

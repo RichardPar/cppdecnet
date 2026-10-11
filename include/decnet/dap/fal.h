@@ -14,6 +14,7 @@
 // Files are reported as PyDECnet reports them -- Stream_LF (fixed 512 for
 // DAP before version 7), with the end of file block and first free byte
 // giving the exact size -- so the same requesters work with both.
+// Block mode moves those bytes as they are, 512 to a block.
 //
 // PORT: no access control.  The server runs as whoever started it; the
 // connect's user name and password are not checked.
@@ -23,6 +24,7 @@
 
 #include "decnet/dap/messages.h"
 
+#include <cstdio>
 #include <optional>
 #include <string>
 #include <vector>
@@ -83,6 +85,10 @@ private:
     void create (const Access &a);
     void erase (const Access &a);
     void rename (const Access &a);
+
+    // Make a file written in block mode, end bytes of it, what record
+    // mode would have stored.  False if it could not be read or written.
+    bool unblock (std::FILE *fp, std::uint64_t end);
 
     // Files matching a specification.  Sends the error and returns
     // nothing if the directory does not exist or the spec is not allowed.

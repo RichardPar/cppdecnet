@@ -463,6 +463,161 @@ DN_TEST (fal, vms_binary_marked_ascii_is_kept_as_binary)
     DN_ASSERT_EQ (t.read ("b.bin").size (), 1024u);
 }
 
+// ----------------------------------------------------------- block mode
+
+Control block_control (std::uint8_t fn, std::uint8_t rac, int vbn = -1)
+{
+    Control c;
+    c.ctlfunc = fn;
+    c.menu.set (Control::m_rac);
+    c.rac = rac;
+    if (vbn >= 0) {
+        c.menu.set (Control::m_key);
+        c.key = Bytes { static_cast<std::uint8_t> (vbn) };
+    }
+    return c;
+}
+
+// One 512 byte block, the given bytes then zeros.
+Bytes block_of (const Bytes &b)
+{
+    Bytes out (b);
+    out.resize (512, 0);
+    return out;
+}
+
+DN_TEST (fal, block_mode_get_sends_every_block_by_vbn)
+{
+    Tree t;
+    std::string data (700, 'q');
+    data[0] = '\n';                     // as it is, not records
+    t.file ("f.txt", data);
+    Attributes want;                    // even when asked for as text
+    want.menu.set (Attributes::m_rfm).set (Attributes::m_rat);
+    want.rfm = Attributes::fb_var;
+    want.rat.set (Attributes::rat_cr);
+    Script s;
+    s << v7 () << want << access (Access::open, "f.txt")
+      << control (Control::connect)
+      << block_control (Control::get, Control::rb_blkf)
+      << complete (AccessComplete::close);
+    FalServer (s, { t.root }).run ();
+
+    auto d = s.all<Data> ();
+    DN_ASSERT_EQ (d.size (), 2u);
+    DN_ASSERT_EQ (d[0].recnum, 1u);
+    DN_ASSERT_EQ (d[1].recnum, 2u);
+    DN_ASSERT_EQ (d[0].payload, bytes_of (data.substr (0, 512)));
+    DN_ASSERT_EQ (d[1].payload, bytes_of (data.substr (512)));   // short
+    DN_ASSERT (s.all<Status> ().back ().eof ());
+    DN_ASSERT (std::holds_alternative<AccessComplete> (s.out.back ()));
+}
+
+DN_TEST (fal, block_mode_get_reads_blocks_by_number)
+{
+    Tree t;
+    t.file ("f.bin", std::string (512, 'a') + "bbb");
+    Script s;
+    s << v7 () << access (Access::open, "f.bin") << control (Control::connect)
+      << block_control (Control::get, Control::rb_blk, 2)
+      << block_control (Control::get, Control::rb_blk, 1)
+      << block_control (Control::get, Control::rb_blk, 3)
+      << complete (AccessComplete::close);
+    FalServer (s, { t.root }).run ();
+
+    auto d = s.all<Data> ();
+    DN_ASSERT_EQ (d.size (), 2u);
+    DN_ASSERT_EQ (d[0].recnum, 2u);
+    DN_ASSERT_EQ (d[0].payload, bytes_of ("bbb"));
+    DN_ASSERT_EQ (d[1].payload, bytes_of (std::string (512, 'a')));
+    // Past the end: end of file, and the requester still closes.
+    auto st = s.all<Status> ();
+    DN_ASSERT_EQ (st.size (), 1u);
+    DN_ASSERT (st[0].eof ());
+    DN_ASSERT (std::holds_alternative<AccessComplete> (s.out.back ()));
+}
+
+DN_TEST (fal, block_mode_create_stores_blocks_where_their_vbn_says)
+{
+    Tree t;
+    Script s;
+    s << v7 () << access (Access::create, "f.bin") << control (Control::connect)
+      << block_control (Control::put, Control::rb_blk, 2)
+      << Data { 0, block_of (bytes_of ("two")) }
+      << block_control (Control::put, Control::rb_blk, 1)
+      << Data { 0, block_of (bytes_of ("one")) }
+      << complete (AccessComplete::close);
+    FalServer (s, { t.root, true }).run ();
+    DN_ASSERT_EQ (last_status (s), std::string ("none"));
+    std::string f = t.read ("f.bin");
+    DN_ASSERT_EQ (f.size (), 1024u);    // no size given: whole blocks
+    DN_ASSERT_EQ (f.substr (0, 3), std::string ("one"));
+    DN_ASSERT_EQ (f.substr (512, 3), std::string ("two"));
+}
+
+DN_TEST (fal, block_mode_create_cuts_a_stream_file_to_its_size)
+{
+    Tree t;
+    Attributes at;
+    at.menu.set (Attributes::m_rfm).set (Attributes::m_ebk)
+           .set (Attributes::m_ffb);
+    at.rfm = Attributes::fb_slf;
+    at.ebk = 2;
+    at.ffb = 4;
+    std::string data = std::string (511, 'x') + "\nend\n";
+    Script s;
+    s << v7 () << at << access (Access::create, "s.txt")
+      << control (Control::connect)
+      << block_control (Control::put, Control::rb_blkf)
+      << Data { 1, bytes_of (data.substr (0, 512)) }
+      << Data { 2, block_of (bytes_of (data.substr (512))) }
+      << complete (AccessComplete::close);
+    FalServer (s, { t.root, true }).run ();
+    DN_ASSERT_EQ (last_status (s), std::string ("none"));
+    DN_ASSERT_EQ (t.read ("s.txt"), data);
+}
+
+DN_TEST (fal, block_mode_create_unpacks_rms_variable_records)
+{
+    Tree t;
+    // "ab", "cde" (padded to a word) and an empty record: twelve bytes.
+    Bytes recs { 2, 0, 'a', 'b', 3, 0, 'c', 'd', 'e', 0, 0, 0 };
+    Attributes txt;
+    txt.menu.set (Attributes::m_rfm).set (Attributes::m_rat)
+            .set (Attributes::m_ebk).set (Attributes::m_ffb);
+    txt.rfm = Attributes::fb_var;
+    txt.rat.set (Attributes::rat_cr);
+    txt.ebk = 1;
+    txt.ffb = 12;
+    // With no size: "x", the rest of block 1 unused, then "yz" and fill.
+    Bytes b1 { 1, 0, 'x', 0, 0xff, 0xff };
+    Bytes b2 { 2, 0, 'y', 'z' };
+    Attributes nosize = txt;
+    nosize.menu = Ext ().set (Attributes::m_rfm).set (Attributes::m_rat);
+    Attributes bin;                     // variable binary: the bare records
+    bin.menu.set (Attributes::m_rfm);
+    bin.rfm = Attributes::fb_var;
+    Script s;
+    s << v7 () << txt << access (Access::create, "t.txt")
+      << control (Control::connect)
+      << block_control (Control::put, Control::rb_blkf)
+      << Data { 1, block_of (recs) } << complete (AccessComplete::close)
+      << nosize << access (Access::create, "n.txt")
+      << control (Control::connect)
+      << block_control (Control::put, Control::rb_blkf)
+      << Data { 1, block_of (b1) } << Data { 2, block_of (b2) }
+      << complete (AccessComplete::close)
+      << bin << access (Access::create, "v.bin")
+      << control (Control::connect)
+      << block_control (Control::put, Control::rb_blkf)
+      << Data { 1, block_of (recs) } << complete (AccessComplete::close);
+    FalServer (s, { t.root, true }).run ();
+    DN_ASSERT_EQ (last_status (s), std::string ("none"));
+    DN_ASSERT_EQ (t.read ("t.txt"), std::string ("ab\ncde\n\n"));
+    DN_ASSERT_EQ (t.read ("n.txt"), std::string ("x\nyz\n"));
+    DN_ASSERT_EQ (t.read ("v.bin"), std::string ("abcde"));
+}
+
 DN_TEST (fal, erase_and_rename_answer_names_as_vms_fal_does)
 {
     // VMS DELETE and RENAME ask for names back, and take any other answer

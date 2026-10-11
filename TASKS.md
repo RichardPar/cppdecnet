@@ -99,7 +99,8 @@ known defects in [BUGS.md](BUGS.md).
       PyDECnet does
 - [x] Proxy access: proxy lines in dnfal's user file.  Check against VMS
       which field carries the remote user (RQSTRID or the source end user)
-- [ ] dnfal: block mode and record access, append, submit/execute
+- [x] dnfal: block mode, sequential and by VBN, reading and writing
+- [ ] dnfal: record access, append, submit/execute
 - [ ] More than one node per process (`src/main/main.cc`)
 - [ ] Background name resolution
 - [ ] Per-state packet type filtering, and the `ru4l1`, `ru4l2`, `ru3r`
