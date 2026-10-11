@@ -963,6 +963,7 @@ bool FalServer::unblock (std::FILE *fp, std::uint64_t end)
 void FalServer::create (const Access &a)
 {
     if (!o_.writable) return status (Status::open_error, rms_prv);
+    if (auto dir = directory_named (a.filespec)) return make_directory (*dir);
     auto target = new_file (a.filespec);
     if (!target) return;
 
@@ -1076,6 +1077,11 @@ void FalServer::create (const Access &a)
 void FalServer::erase (const Access &a)
 {
     if (!o_.writable) return status (Status::open_error, rms_prv);
+    if (auto dir = directory_named (a.filespec)) return remove_directory (*dir, a);
+    // No file name at all is not "every file": a delete names what it
+    // deletes, wildcards included.
+    if (auto comps = split_spec (a.filespec); comps && comps->back ().empty ())
+        return status (Status::open_error, rms_fnm);
     auto found = find (a.filespec, false);
     if (!found) return;
     if (found->empty ()) return status (Status::open_error, rms_fnf);
@@ -1086,6 +1092,71 @@ void FalServer::erase (const Access &a)
         // protocol error without it.  VMS FAL's answer: the name, then an
         // acknowledge, for each file.
         if (a.display[Access::d_name]) { send (spec_name (f)); send (Ack {}); }
+    }
+    AccessComplete done;
+    done.cmpfunc = AccessComplete::response;
+    send (done);
+}
+
+// ---------------------------------------------------------- directories
+
+std::optional<std::vector<std::string>>
+FalServer::directory_named (const std::string &spec)
+{
+    auto comps = split_spec (spec);
+    if (!comps || comps->size () < 2 || !comps->back ().empty ())
+        return std::nullopt;
+    comps->pop_back ();
+    return comps;
+}
+
+void FalServer::make_directory (const std::vector<std::string> &comps)
+{
+    // The parent must be there; the new one must not.
+    std::string name = comps.back ();
+    if (is_wild (name)) return status (Status::open_error, rms_fnm);
+    std::string cur = root_real_;
+    for (std::size_t i = 0; i + 1 < comps.size (); ++i) {
+        std::string n = lookup (cur, comps[i]);
+        struct stat st;
+        if (n.empty () || ::stat ((cur + "/" + n).c_str (), &st) != 0
+            || !S_ISDIR (st.st_mode) || !inside_root (cur + "/" + n))
+            return status (Status::open_error, rms_dnf);
+        cur += "/" + n;
+    }
+    if (!lookup (cur, name).empty ()) return status (Status::open_error, rms_fex);
+    if (::mkdir ((cur + "/" + name).c_str (), 0755) != 0)
+        return status (Status::open_error, errno == EEXIST ? rms_fex : rms_prv);
+    AccessComplete done;
+    done.cmpfunc = AccessComplete::response;
+    send (done);
+}
+
+void FalServer::remove_directory (const std::vector<std::string> &comps,
+                                  const Access &a)
+{
+    std::string cur = root_real_, rel;
+    for (const std::string &c : comps) {
+        if (is_wild (c)) return status (Status::open_error, rms_fnm);
+        std::string n = lookup (cur, c);
+        struct stat st;
+        if (n.empty () || ::stat ((cur + "/" + n).c_str (), &st) != 0
+            || !S_ISDIR (st.st_mode) || !inside_root (cur + "/" + n))
+            return status (Status::open_error, rms_dnf);
+        cur += "/" + n;
+        rel += (rel.empty () ? "" : "/") + n;
+    }
+    // Only an empty one, and never the root itself, which comps rules out
+    // by having at least one component.  A symbolic link to a directory
+    // is not ours to remove either: rmdir refuses it.
+    if (::rmdir (cur.c_str ()) != 0)
+        return status (Status::open_error, rms_prv);   // not empty, or not ours
+    if (a.display[Access::d_name]) {
+        Name n;
+        n.nametype.set (Name::filespec);
+        n.namespec = "/" + rel + "/";
+        send (n);
+        send (Ack {});
     }
     AccessComplete done;
     done.cmpfunc = AccessComplete::response;

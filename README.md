@@ -556,6 +556,12 @@ will not send a binary file to a file system it thinks is ULTRIX's, which
 is what PyDECnet's FAL says it is. `--argument ostype=192 --argument
 filesys=13` says that instead.
 
+Directories can be made and removed by naming a directory and no file
+in it, as `sub/` or `[.SUB]`: a create makes it (its parent must exist),
+and an erase removes it, only if it's empty. An erase with no file name
+at all is refused rather than taken to mean every file. VMS's own FAL does
+neither; the PathNoWorks desktop uses DCL for VMS folders.
+
 File names may be Unix (`sub/file.txt`) or VMS style
 (`[SUB]FILE.TXT;1`); names match without regard to case, and versions are
 ignored. Text sent as variable length records with carriage return

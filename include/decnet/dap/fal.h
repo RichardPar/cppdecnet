@@ -98,6 +98,15 @@ private:
     // Where a new file named by spec would go, or nothing (error sent).
     std::optional<Found> new_file (const std::string &spec);
 
+    // A directory and no file in it -- "sub/", "a/b/", "[.SUB]" -- which
+    // create and erase take as making and removing that directory.  Its
+    // path components, or nothing if spec names a file.
+    static std::optional<std::vector<std::string>> directory_named (
+        const std::string &spec);
+    void make_directory (const std::vector<std::string> &comps);
+    void remove_directory (const std::vector<std::string> &comps,
+                           const Access &a);
+
     // The description of one file: its Name, Attributes, Date and
     // Protection messages, as the Access's display bits ask.
     std::vector<Message> describe (const Found &f, const Access &a,

@@ -11,12 +11,22 @@
 #
 # Run it as yourself; it uses sudo for the parts that need root.  Running
 # it again replaces the configuration (the old one is kept as a .bak).
+#
+# From a cppdecnet checkout it builds decnetd and installs it under
+# /usr/local.  Installed by a package, as decnetd-setup, decnetd is already
+# there, and it only configures the node.
 
 set -euo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo=$(cd "$here/.." && pwd)
-prefix=/usr/local
+if [ -f "$repo/Makefile" ] && [ -d "$repo/src" ]; then
+    packaged=no
+    prefix=/usr/local
+else
+    packaged=yes
+    prefix=$repo                        # /usr/sbin/decnetd-setup: /usr
+fi
 confdir=/etc/decnet
 conf=$confdir/decnetd.conf
 unit=/etc/systemd/system/decnetd.service
@@ -165,7 +175,9 @@ if [ "$action" = uninstall ]; then
     fi
     run rm -f "$unit"
     run systemctl daemon-reload
-    run rm -f "$prefix/bin/decnetd" "$prefix/bin/dnfal" "$prefix/bin/dnping"
+    if [ "$packaged" = no ]; then
+        run rm -f "$prefix/bin/decnetd" "$prefix/bin/dnfal" "$prefix/bin/dnping"
+    fi
     say "Done.  The configuration is still in $confdir, and the decnet user (if"
     say "there was one) is still there; remove them yourself if you're sure."
     exit 0
@@ -204,7 +216,13 @@ n_mul=0
 n_eth=0
 
 have_pcap=unknown
-if [ -x "$repo/build/release/bin/decnetd" ] || [ -f "$repo/Makefile" ]; then
+if [ "$packaged" = yes ]; then
+    if ldd "$prefix/bin/decnetd" 2>/dev/null | grep -q libpcap; then
+        have_pcap=yes
+    else
+        have_pcap=no
+    fi
+elif [ -x "$repo/build/release/bin/decnetd" ] || [ -f "$repo/Makefile" ]; then
     case $(make -s -C "$repo" features 2>/dev/null | awk '/libpcap/ {print $3}') in
         yes) have_pcap=yes ;; no) have_pcap=no ;;
     esac
@@ -391,28 +409,39 @@ yes_no "Go ahead?" y || { say "Nothing done."; exit 0; }
 
 section "Installing"
 
-# Build, as the person running this rather than as root.
-decnetd_bin=$repo/build/release/bin/decnetd
-if [ ! -x "$decnetd_bin" ]; then
-    say "  decnetd isn't built yet; building it."
-    if [ "$(id -u)" -eq 0 ] && [ "$me" != root ]; then
-        sudo -u "$me" make -C "$repo" -j "$(nproc)"
-    else
-        make -C "$repo" -j "$(nproc)"
+if [ "$packaged" = yes ]; then
+    # The package put them there.
+    for b in decnetd dnfal; do
+        [ -x "$prefix/bin/$b" ] || die "$prefix/bin/$b isn't there; is the package installed?"
+    done
+    if [ -z "$dry" ]; then
+        say "  sudo may ask for your password."
+        $sudo true
     fi
-fi
-for b in decnetd dnfal dnping; do
-    [ -x "$repo/build/release/bin/$b" ] || die "$b didn't build"
-done
+else
+    # Build, as the person running this rather than as root.
+    decnetd_bin=$repo/build/release/bin/decnetd
+    if [ ! -x "$decnetd_bin" ]; then
+        say "  decnetd isn't built yet; building it."
+        if [ "$(id -u)" -eq 0 ] && [ "$me" != root ]; then
+            sudo -u "$me" make -C "$repo" -j "$(nproc)"
+        else
+            make -C "$repo" -j "$(nproc)"
+        fi
+    fi
+    for b in decnetd dnfal dnping; do
+        [ -x "$repo/build/release/bin/$b" ] || die "$b didn't build"
+    done
 
-if [ -z "$dry" ]; then
-    say "  sudo may ask for your password."
-    $sudo true
-fi
+    if [ -z "$dry" ]; then
+        say "  sudo may ask for your password."
+        $sudo true
+    fi
 
-run install -d "$prefix/bin"
-run install -m 755 "$repo/build/release/bin/decnetd" "$repo/build/release/bin/dnfal" \
-    "$repo/build/release/bin/dnping" "$prefix/bin/"
+    run install -d "$prefix/bin"
+    run install -m 755 "$repo/build/release/bin/decnetd" "$repo/build/release/bin/dnfal" \
+        "$repo/build/release/bin/dnping" "$prefix/bin/"
+fi
 
 if [ "$runas" = decnet ] && ! id decnet >/dev/null 2>&1; then
     run useradd --system --user-group --home-dir "$statedir" --no-create-home \
@@ -482,3 +511,5 @@ say "  Service:        sudo systemctl {status|restart|stop} decnetd"
 say "  Log:            journalctl -u decnetd -f"
 [ "$add_me" = yes ] && say "  Log out and in again so the decnet group applies to $me."
 say "  Remove it with: $0 --uninstall"
+[ "$packaged" = yes ] && say "  (that stops the service; the package itself goes with apt remove)"
+true

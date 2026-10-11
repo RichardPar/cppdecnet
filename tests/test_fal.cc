@@ -643,3 +643,57 @@ DN_TEST (fal, erase_and_rename_answer_names_as_vms_fal_does)
     DN_ASSERT_EQ (n[1].namespec, std::string ("/old.txt"));
     DN_ASSERT_EQ (n[2].namespec, std::string ("/new.txt"));
 }
+
+DN_TEST (fal, directories_are_made_and_removed)
+{
+    Tree t;
+    t.dir ("full");
+    t.file ("full/x.txt", "x");
+    Script s;
+    s << v7 () << access (Access::create, "new/")
+      << access (Access::create, "[.NEW.INNER]")      // VMS form, nested
+      << access (Access::erase, "new/inner/");
+    FalServer (s, { t.root, true }).run ();
+    DN_ASSERT_EQ (last_status (s), std::string ("none"));
+    DN_ASSERT (t.exists ("new"));
+    DN_ASSERT (!t.exists ("new/inner"));
+
+    // Not twice; not under a directory that isn't there; not without rw.
+    Script again;
+    again << v7 () << access (Access::create, "NEW/");
+    FalServer (again, { t.root, true }).run ();
+    DN_ASSERT_EQ (last_status (again), std::string ("4:55"));      // exists
+    Script nowhere;
+    nowhere << v7 () << access (Access::create, "missing/new/");
+    FalServer (nowhere, { t.root, true }).run ();
+    DN_ASSERT_EQ (last_status (nowhere), std::string ("4:40"));    // no directory
+    Script ro;
+    ro << v7 () << access (Access::create, "other/");
+    FalServer (ro, { t.root, false }).run ();
+    DN_ASSERT_EQ (last_status (ro), std::string ("4:125"));
+    DN_ASSERT (!t.exists ("other"));
+}
+
+DN_TEST (fal, only_an_empty_directory_is_removed)
+{
+    // "full/" once meant every file in full.  Now it means the directory,
+    // and only if there is nothing in it.
+    Tree t;
+    t.dir ("full");
+    t.file ("full/x.txt", "x");
+    Script s;
+    s << v7 () << access (Access::erase, "full/");
+    FalServer (s, { t.root, true }).run ();
+    DN_ASSERT_EQ (last_status (s), std::string ("4:125"));
+    DN_ASSERT (t.exists ("full/x.txt"));
+
+    // No name at all, at the root, is not "every file" either.
+    t.file ("top.txt", "t");
+    Script root;
+    root << v7 () << access (Access::erase, "/");
+    FalServer (root, { t.root, true }).run ();
+    DN_ASSERT_EQ (last_status (root), std::string ("4:63"));     // file name
+    DN_ASSERT (t.exists ("top.txt"));
+    DN_ASSERT (t.exists ("full"));
+    DN_ASSERT (std::filesystem::exists (t.root));
+}
