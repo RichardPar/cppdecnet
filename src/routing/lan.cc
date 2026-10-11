@@ -543,7 +543,15 @@ void RoutingLanCircuit::handle (RoutingPacketBase &pkt, Macaddr src)
     } else {
         return;
     }
-    (void) src;
+    // Traffic from an endnode is as good as its hello.  RSX, busy sending,
+    // can miss hellos for longer than the listen time; dropping the
+    // adjacency then makes the node unreachable mid-transfer until the next
+    // one arrives.  Only for the address the adjacency was heard from.
+    if (auto it = adjacencies_.find (sd.srcnode.value ());
+        it != adjacencies_.end () && it->second.adj
+        && it->second.state == AdjState::up && it->second.ntype == ENDNODE
+        && it->second.macaddr == src)
+        it->second.adj->alive ();
     sd.src = this;                  // so forwarding can count it
     parent_->forward (sd);
 }

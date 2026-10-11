@@ -353,6 +353,9 @@ public:
     unsigned delay_weight () const noexcept { return weight_; }
     double   delay_factor () const noexcept { return delay_factor_; }
     unsigned retransmit_limit () const noexcept { return retransmits_; }
+    // The floor for a round trip measurement to dest: lan_min_delay if it is
+    // a direct neighbour on a broadcast circuit, min_delay otherwise.
+    double   min_delay (Nodeid dest) const;
 
 private:
     friend class Connection;
@@ -378,6 +381,8 @@ private:
     unsigned             maxconns_ = 4095;
     unsigned     weight_ = 3;
     double       delay_factor_ = 2.0;
+    double       min_delay_ = 1.0;
+    double       lan_min_delay_ = 1.0;
     unsigned     retransmits_ = 5;
     unsigned             nspver_ = VER_PH4;
     unsigned             qmax_ = 20;

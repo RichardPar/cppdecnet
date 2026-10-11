@@ -4,6 +4,7 @@
 #include "decnet/common/logging.h"
 #include "decnet/config.h"
 #include "decnet/node.h"
+#include "decnet/routing/lan.h"
 #include "decnet/routing/routing.h"
 
 #include <algorithm>
@@ -317,6 +318,15 @@ bool Connection::flow_ok (const TxEntry &e) const
     }
 }
 
+double NSP::min_delay (Nodeid dest) const
+{
+    if (lan_min_delay_ == min_delay_ || !routing_) return min_delay_;
+    routing::AdjacencyPtr adj = routing_->find_adjacency (dest);
+    if (adj && dynamic_cast<const routing::LanCircuit *> (adj->circuit ()))
+        return lan_min_delay_;
+    return min_delay_;
+}
+
 double Connection::acktimeout () const
 {
     // Initial estimate of two seconds, as in PyDECnet (the spec says five).
@@ -341,8 +351,11 @@ void Connection::update_delay (std::chrono::steady_clock::time_point txtime)
 
     // One second minimum, as in PyDECnet.  On DDCMP serial lines latency
     // depends on packet length, so an estimate from short packets causes false
-    // timeouts on long ones.
-    if (delta < 1.0) delta = 1.0;
+    // timeouts on long ones.  A neighbour on the same Ethernet may be given a
+    // lower floor (nsp --lan-min-delay): there the floor is the timeout, and
+    // each segment a slow peer drops would otherwise stall the link for it.
+    double floor = parent_->min_delay (dest_);
+    if (delta < floor) delta = floor;
 
     if (info->delay > 0) {
         // Weighted average: each measurement moves the estimate by
@@ -1013,6 +1026,8 @@ NSP::NSP (Element *parent, const Config &config)
     qmax_         = config.nsp ().qmax;
     weight_       = config.nsp ().weight;
     delay_factor_ = config.nsp ().delay_factor;
+    min_delay_    = config.nsp ().min_delay;
+    lan_min_delay_ = config.nsp ().lan_min_delay;
     retransmits_  = config.nsp ().retransmits;
     unsigned ph = static_cast<unsigned> (node () ? node ()->phase ()
                                                  : Phase::ph4);

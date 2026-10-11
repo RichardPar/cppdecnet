@@ -119,6 +119,14 @@ struct NspConfig {
     unsigned weight = 3;
     double   delay_factor = 2.0;
 
+    // The least a round trip measurement counts as, in seconds.  One second
+    // suits DDCMP, where latency grows with packet length; a neighbour on the
+    // same Ethernet answers in milliseconds, and the floor is then the whole
+    // of the retransmit timeout.  lan_min_delay applies to a node that is a
+    // direct adjacency on a broadcast circuit, min_delay to everything else.
+    double   min_delay = 1.0;
+    double   lan_min_delay = 1.0;
+
     // How many times a packet is sent before the link is given up on.
     unsigned retransmits = 5;
 };

@@ -384,6 +384,17 @@ void Config::apply (ConfigLine line)
             if (nsp_.delay_factor < 1.0 || nsp_.delay_factor > 15.94)
                 throw std::runtime_error ("nsp-delay out of range");
         }
+        if (has (line, "min-delay")) {
+            nsp_.min_delay = std::stod (opt (line, "min-delay", empty));
+            if (nsp_.min_delay < 0.01 || nsp_.min_delay > 60.0)
+                throw std::runtime_error ("min-delay out of range");
+        }
+        if (has (line, "lan-min-delay")) {
+            nsp_.lan_min_delay =
+                std::stod (opt (line, "lan-min-delay", empty));
+            if (nsp_.lan_min_delay < 0.01 || nsp_.lan_min_delay > 60.0)
+                throw std::runtime_error ("lan-min-delay out of range");
+        }
         if (has (line, "retransmits")) {
             nsp_.retransmits = to_uint (opt (line, "retransmits", empty),
                                         "retransmits");
