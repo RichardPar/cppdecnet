@@ -15,6 +15,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <vector>
 
 namespace decnet {
 
@@ -99,6 +100,19 @@ public:
             std::lock_guard lock (mutex_);
             queue_.push_back (std::move (w));
         }
+        cond_.notify_one ();
+    }
+
+    // Several at once, in order: one lock and one wakeup for the lot.
+    // Leaves ws empty.
+    void put_all (std::vector<WorkPtr> &ws)
+    {
+        if (ws.empty ()) return;
+        {
+            std::lock_guard lock (mutex_);
+            for (WorkPtr &w : ws) queue_.push_back (std::move (w));
+        }
+        ws.clear ();
         cond_.notify_one ();
     }
 

@@ -73,9 +73,10 @@ struct PollResult {
 // Wait for a socket, up to ms milliseconds.  A negative fd returns error.
 PollResult poll_socket (int fd, bool want_read, bool want_write, int ms);
 
-// The poll timeout the datalinks use, matching multinet's POLLTS: long
-// enough to be cheap, short enough that a stop request is noticed promptly.
-inline constexpr int poll_timeout_ms = 1000;
+// How long a datalink's reader waits for data before it looks again.  A
+// reader reads only when poll says there is something to read, so this is
+// only how soon a stop request is noticed.
+inline constexpr int poll_timeout_ms = 50;
 
 // One resolved endpoint.
 struct Endpoint {

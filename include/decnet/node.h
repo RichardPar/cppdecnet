@@ -159,6 +159,8 @@ public:
     // Queue work to this node from any thread.  Port of Node.addwork.
     void add_work (WorkPtr w);
     void add_work (WorkPtr w, Element *handler);
+    // Several, in order, for the cost of one.  Leaves ws empty.
+    void add_work (std::vector<WorkPtr> &ws);
 
     // Start every layer in order, then the main loop on its own thread.
     void start ();

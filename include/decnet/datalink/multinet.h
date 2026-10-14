@@ -21,6 +21,7 @@
 
 #include "decnet/datalink/ptp.h"
 
+#include <mutex>
 #include <optional>
 
 namespace decnet::datalink {
@@ -69,15 +70,42 @@ protected:
 };
 
 // The TCP forms share their framing, their send path and their teardown.
+//
+// The socket is non-blocking.  send() adds the frame to one buffer and has
+// the node thread write it once the work in hand is done, so a burst of
+// frames goes out in one write; a full buffer is written at once.
+// Whatever the connection does not take waits for the receive thread,
+// which writes it as the connection drains.  So a peer slow to read
+// neither holds up the node thread nor costs the circuit, and nothing goes
+// on the wire but whole frames.
 class TcpMultinet : public Multinet {
 public:
-    using Multinet::Multinet;
+    TcpMultinet (Element *owner, std::string name, MultinetDevice dev,
+                 std::string source_host = "");
 
     void send (Bytes msg) override;
 
 protected:
     void disconnect () override;
     void receive_loop () override;
+
+private:
+    // Write what is buffered until the connection is full.  False on an
+    // error that ends the connection.  Called with txm_ held.
+    bool flush ();
+    // The node thread's write of what send() buffered.
+    void flush_posted ();
+    // Have the receive thread look at the buffer now.
+    void wake ();
+
+    std::mutex  txm_;
+    Bytes       txbuf_;                 // whole frames, header and all
+    std::size_t txoff_ = 0;             // of txbuf_, already written
+    bool        posted_ = false;        // a flush_posted is queued
+    bool        blocked_ = false;       // the connection took no more
+    // A UDP socket connected to itself: a byte sent to it ends the receive
+    // thread's poll.  Works with poll and WSAPoll alike.
+    Socket            wake_;
 };
 
 // Active end: connect out, retry on a backoff.

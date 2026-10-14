@@ -195,6 +195,11 @@ void Node::add_work (WorkPtr w, Element *handler)
     queue_.put (std::move (w));
 }
 
+void Node::add_work (std::vector<WorkPtr> &ws)
+{
+    queue_.put_all (ws);
+}
+
 void Node::add_node (Nodeinfo info)
 {
     std::string name = info.name;
