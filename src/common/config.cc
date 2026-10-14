@@ -2,6 +2,8 @@
 
 #include "decnet/common/logging.h"
 
+#include <algorithm>
+#include <cctype>
 #include <charconv>
 #include <cstdlib>
 #include <filesystem>
@@ -418,6 +420,30 @@ void Config::apply (ConfigLine line)
             throw std::runtime_error ("object needs --file "
                                       "(--module is not supported)");
         objects_.push_back (std::move (o));
+        return;
+    }
+
+    if (line.command == "chost") {
+        if (line.positional.size () != 1)
+            throw std::runtime_error ("chost needs a name");
+        ChostConfig h;
+        h.name = line.positional[0];
+        std::transform (h.name.begin (), h.name.end (), h.name.begin (),
+                        [] (unsigned char c) { return std::toupper (c); });
+        if (h.name.size () > 16)
+            throw std::runtime_error ("chost name longer than 16 characters");
+        for (const ChostConfig &o : chosts_)
+            if (o.name == h.name)
+                throw std::runtime_error ("chost " + h.name + " is already "
+                                          "defined");
+        h.file = opt (line, "file", empty);
+        if (h.file.empty ())
+            throw std::runtime_error ("chost needs --file");
+        auto it = line.options.find ("argument");
+        if (it != line.options.end ()) h.arguments = it->second;
+        h.description = opt (line, "description", empty);
+        h.term = opt (line, "term", h.term);
+        chosts_.push_back (std::move (h));
         return;
     }
 

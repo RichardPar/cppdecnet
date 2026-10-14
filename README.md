@@ -19,6 +19,7 @@ gateway between a local Ethernet segment and the rest of the network.
 - [Monitoring](#monitoring)
 - [API](#api)
 - [File access](#file-access)
+- [SET HOST (CHOST)](#set-host-chost)
 - [Running as a service](#running-as-a-service)
 - [Development](#development)
 - [Licence](#licence)
@@ -47,6 +48,9 @@ Implemented:
   counters and loop tests from a program
 - File access: `dnfal`, a FAL (object 17) serving a directory, with
   directory, read and, if allowed, create, delete and rename
+- SET HOST: a CTERM host (object 42), and an RSX remote terminal host
+  (object 23), running local programs on a pseudo terminal, from `chost`
+  lines
 
 Tested against PyDECnet, and against a PDP-11 running RSX on a real
 Ethernet segment.
@@ -581,6 +585,42 @@ byte for byte.
 
 Tested with OpenVMS VAX 6.2 as the requester: DIRECTORY, TYPE, COPY in
 both directions (text, fixed and variable binary), RENAME and DELETE.
+
+## SET HOST (CHOST)
+
+`chost` lines offer local programs to `SET HOST` from VMS, RSX or Ultrix.
+decnetd answers CTERM (object 42), and the older remote terminal protocol
+(object 23) that RSX's RMT uses, and runs the program on a pseudo
+terminal, as ssh would:
+
+```
+chost INVADERS --file /usr/local/bin/space_invaders --description "Space Invaders"
+chost SHELL    --file /bin/bash --argument -l --description "A shell"
+chost LOGIN    --file /bin/login --term vt220
+```
+
+```
+chost <NAME> --file PROG [--argument A]... [--description TEXT] [--term TYPE]
+```
+
+With one `chost` line, `SET HOST` goes straight to its program. With
+several, the user gets a menu and picks one by number, name or the start
+of a name; ^Z leaves. When the program exits the session ends.
+
+The program runs as decnetd's user, with `TERM` from `--term` (default
+`vt100`) and the terminal's size as the far end reports it. It also gets
+`DECNET_NODE` and `DECNET_NODEID` (who connected), `DECNET_USER` (their
+end user) and `DECNET_CHOST`. Nothing checks who connects, so offer a
+shell only behind `/bin/login`, which needs decnetd to run as root.
+
+Every key goes to the pseudo terminal as typed: echo, line editing, ^C
+and ^Z are the program's, as for any Unix program. An `object` line for
+42 or 23 takes precedence over `chost` lines there. Not available on
+Windows.
+
+The object 23 side follows PyDECnet's notes on the protocol's RSX
+variant, which were worked out from RSTS's terminal end; `--log-level
+debug` logs each message it receives.
 
 ## Running as a service
 

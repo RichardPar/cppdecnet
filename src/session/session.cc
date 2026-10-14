@@ -5,6 +5,7 @@
 #include "decnet/config.h"
 #include "decnet/nice/nml.h"
 #include "decnet/node.h"
+#include "decnet/session/cterm.h"
 #include "decnet/session/process.h"
 
 #include <algorithm>
@@ -70,6 +71,30 @@ Session::Session (Element *parent, const Config &config)
         } catch (const std::exception &e) {
             DN_ERROR ("cannot register object {} ({}): {}", o.number,
                       o.name, e.what ());
+        }
+    }
+    // chost lines: SET HOST in CTERM on object 42, and in the older remote
+    // terminal protocol (RSX's) on object 23, each unless an object line
+    // has claimed it.
+    if (!config.chosts ().empty ()) {
+        if (!cterm_gate_supported ()) {
+            DN_ERROR ("chost lines ignored: no pseudo terminals on this "
+                      "system");
+        } else {
+            struct { std::uint8_t number; const char *name;
+                     ApplicationFactory (*make) (Node *, std::vector<ChostConfig>); }
+                gates[] = { { CTERM_OBJECT, "CTERM", cterm_gate },
+                            { RMT_OBJECT, "REMACP", rmt_gate } };
+            for (const auto &g : gates) {
+                if (find_object (g.number) || find_object (g.name))
+                    DN_WARN ("chost lines not offered on object {}: an object "
+                             "line already claims it", g.number);
+                else
+                    add_object (g.number, g.name,
+                                g.make (node (), config.chosts ()));
+            }
+            for (const ChostConfig &h : config.chosts ())
+                DN_DEBUG ("chost {} is program {}", h.name, h.file);
         }
     }
 }
