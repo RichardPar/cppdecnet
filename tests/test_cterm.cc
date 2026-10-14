@@ -650,4 +650,100 @@ DN_TEST (cterm, rsx_rmt_status_reports_are_answered_by_the_gate)
     p.stop ();
 }
 
+namespace {
+
+// n bytes of every value, the same each run, with no ESC [5n in them: the
+// RMT side answers that itself rather than passing it on.
+std::string noise (std::size_t n, std::uint32_t seed)
+{
+    std::string s;
+    s.reserve (n);
+    for (std::size_t i = 0; i < n; ++i) {
+        seed = seed * 1664525u + 1013904223u;
+        s += static_cast<char> (seed >> 24);
+        if (s.size () >= 4 && s.compare (s.size () - 4, 4, "\x1b[5n") == 0)
+            s.back () = 'N';
+    }
+    return s;
+}
+
+std::string write_file (const std::string &name, const std::string &body)
+{
+    std::string path = dntest::tmp_dir () + "/dntest_chost_" + name;
+    std::ofstream f (path, std::ios::binary);
+    f << body;
+    return path;
+}
+
+}   // namespace
+
+DN_TEST (cterm, output_arrives_byte_for_byte)
+{
+    // Every byte value, far more than the link holds at once, on a raw
+    // terminal so nothing is translated: what arrives is exactly what the
+    // program wrote, up to its last byte as it exits.
+    std::string data = noise (256 * 1024, 1);
+    std::string file = write_file ("noise.bin", data);
+    std::string prog = write_script ("noise", "stty raw -echo\nexec cat " + file + "\n");
+    Pair p ("chost NOISE --file " + prog + "\n");
+    p.start ();
+    Terminal *t = p.set_host ();
+    DN_ASSERT (wait_until ([&] { return t->disconnects () == 1; },
+                           std::chrono::seconds (60)));
+    std::string out = t->output ();
+    DN_ASSERT_EQ (out.size (), data.size ());
+    DN_ASSERT (out == data);
+    p.stop ();
+}
+
+DN_TEST (cterm, rsx_rmt_output_arrives_byte_for_byte)
+{
+    std::string data = noise (64 * 1024, 2);
+    std::string file = write_file ("rmtnoise.bin", data);
+    std::string prog = write_script ("rmtnoise", "stty raw -echo\nexec cat " + file + "\n");
+    Pair p ("chost NOISE --file " + prog + "\n");
+    p.start ();
+    RmtTerminal *t = p.rmt ();
+    DN_ASSERT (wait_until ([&] { return t->disconnects () == 1; },
+                           std::chrono::seconds (60)));
+    std::string out = t->output ();
+    DN_ASSERT_EQ (out.size (), data.size ());
+    DN_ASSERT (out == data);
+    p.stop ();
+}
+
+DN_TEST (cterm, rsx_rmt_game_frames_arrive_byte_for_byte)
+{
+    // As a game drives the screen: a frame of escape sequences, then ESC
+    // [5n, and wait for the answer before the next.  Every frame arrives,
+    // whole and in order, with none of the requests.
+    std::string dir = dntest::tmp_dir () + "/dntest_chost_frames";
+    ::mkdir (dir.c_str (), 0755);
+    std::string expected;
+    for (unsigned i = 0; i < 150; ++i) {
+        std::string frame = "\x1b[H\x1b[?25l";
+        frame += noise (1500 + i * 7, 100 + i);
+        char name[16];
+        std::snprintf (name, sizeof name, "/f%03u", i);
+        std::ofstream (dir + name, std::ios::binary) << frame;
+        expected += frame;
+    }
+    std::string prog = write_script ("frames",
+        "stty raw -echo\n"
+        "for f in " + dir + "/f*; do\n"
+        "  cat \"$f\"\n"
+        "  printf '\\033[5n'\n"
+        "  dd bs=4 count=1 >/dev/null 2>&1\n"
+        "done\n");
+    Pair p ("chost GAME --file " + prog + "\n");
+    p.start ();
+    RmtTerminal *t = p.rmt ();
+    DN_ASSERT (wait_until ([&] { return t->disconnects () == 1; },
+                           std::chrono::seconds (60)));
+    std::string out = t->output ();
+    DN_ASSERT_EQ (out.size (), expected.size ());
+    DN_ASSERT (out == expected);
+    p.stop ();
+}
+
 #endif

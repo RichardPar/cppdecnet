@@ -154,34 +154,198 @@ PtpDatalink::State Multinet::running (Work &w)
 
 // ----------------------------------------------------------- TcpMultinet
 
+namespace {
+
+// Frames waiting for the connection, at most.  A peer that has stopped
+// reading for this long has frames dropped, whole, as a lossy line would;
+// NSP sends again what mattered.
+constexpr std::size_t max_backlog = 256 * 1024;
+
+// Frames buffered, at most, before they are written there and then rather
+// than when the node thread gets to it.  A burst no bigger than this costs
+// one write.
+constexpr std::size_t cork_limit = 32 * 1024;
+
+Socket wake_socket ()
+{
+    Socket s = SourceAddress ("127.0.0.1", 0).bind_socket (AF_INET, SOCK_DGRAM);
+    if (!s) return s;
+    sockaddr_storage sa {};
+    socklen_t len = sizeof sa;
+    if (::getsockname (s.fd (), reinterpret_cast<sockaddr *> (&sa), &len) < 0
+        || ::connect (s.fd (), reinterpret_cast<const sockaddr *> (&sa), len) < 0)
+        return Socket {};
+    s.set_nonblocking ();
+    return s;
+}
+
+}   // namespace
+
+TcpMultinet::TcpMultinet (Element *owner, std::string name, MultinetDevice dev,
+                          std::string source_host)
+    : Multinet (owner, std::move (name), std::move (dev), std::move (source_host)),
+      wake_ (wake_socket ())
+{
+}
+
 void TcpMultinet::disconnect ()
 {
+    {
+        // What the connection takes now still goes; the rest was for this
+        // connection, and a frame half written cannot be finished on the
+        // next.
+        std::lock_guard l (txm_);
+        if (socket_ && !blocked_) flush ();
+        txbuf_.clear ();
+        txoff_ = 0;
+        blocked_ = false;
+    }
     if (socket_) {
         socket_.shutdown ();
         socket_.close ();
     }
 }
 
+bool TcpMultinet::flush ()
+{
+    while (txoff_ < txbuf_.size ()) {
+        ssize_t n = sock_send (socket_.fd (), txbuf_.data () + txoff_,
+                               txbuf_.size () - txoff_);
+        if (n < 0) {
+            int err = sock_errno ();
+            if (sock_interrupted (err)) continue;
+            if (!sock_would_block (err)) return false;
+            n = 0;
+        }
+        if (n == 0) {
+            // Full.  Keep only what is still to go.
+            blocked_ = true;
+            txbuf_.erase (txbuf_.begin (),
+                          txbuf_.begin () + static_cast<std::ptrdiff_t> (txoff_));
+            txoff_ = 0;
+            return true;
+        }
+        txoff_ += static_cast<std::size_t> (n);
+    }
+    txbuf_.clear ();
+    txoff_ = 0;
+    blocked_ = false;
+    return true;
+}
+
+void TcpMultinet::flush_posted ()
+{
+    bool ok = true, blocked;
+    {
+        std::lock_guard l (txm_);
+        posted_ = false;
+        // Blocked, the receive thread writes it as the connection drains.
+        if (!blocked_ && txoff_ < txbuf_.size ()) ok = flush ();
+        blocked = blocked_;
+    }
+    if (!ok) {
+        DN_TRACE ("send error on {}, reconnecting", name_);
+        reconnect ();
+    } else if (blocked) {
+        wake ();
+    }
+}
+
+void TcpMultinet::wake ()
+{
+    if (!wake_) return;
+    ssize_t ignored = sock_send (wake_.fd (), "w", 1);
+    (void) ignored;
+}
+
 void TcpMultinet::receive_loop ()
 {
+    // The tail of what was read: not yet a whole frame.
+    Bytes in;
+    std::vector<std::uint8_t> buf (64 * 1024);
+    std::vector<WorkPtr> frames;
     for (;;) {
-        Bytes msg;
-        try {
-            Bytes hdr = recvall (hdrlen);
-            std::size_t bc = static_cast<std::size_t> (hdr[0])
-                           | (static_cast<std::size_t> (hdr[1]) << 8);
-            if (bc > max_frame) {
-                DN_TRACE ("oversized Multinet frame ({}) on {}", bc, name_);
-                return;
-            }
-            msg = recvall (bc);
-        } catch (const std::exception &e) {
-            DN_TRACE ("receive loop on {} ending: {}", name_, e.what ());
+        bool blocked;
+        {
+            std::lock_guard l (txm_);
+            blocked = blocked_;
+        }
+        pollfd p[2] {};
+        p[0].fd = socket_.fd ();
+        p[0].events = static_cast<short> (POLLIN | (blocked ? POLLOUT : 0));
+        std::size_t nfds = 1;
+        if (wake_) {
+            p[1].fd = wake_.fd ();
+            p[1].events = POLLIN;
+            nfds = 2;
+        }
+        // The wake socket, or failing that the timeout, brings it back to
+        // a connection that has filled meanwhile.
+        int n = sock_poll (p, nfds, poll_timeout_ms);
+        if (stopping ()) return;
+        if (n < 0) {
+            if (sock_interrupted (sock_errno ())) continue;
+            DN_TRACE ("receive loop on {} ending: poll failed", name_);
             return;
         }
-        if (node ())
-            node ()->add_work (std::make_unique<Received> (this,
-                                                           std::move (msg)));
+        if (n == 0) continue;
+
+        if (nfds == 2 && p[1].revents) {
+            std::uint8_t junk[64];
+            while (sock_recv (wake_.fd (), junk, sizeof junk) > 0) {}
+        }
+        if (p[0].revents & (POLLERR | POLLNVAL)) {
+            DN_TRACE ("receive loop on {} ending: socket error", name_);
+            return;
+        }
+        if (p[0].revents & POLLOUT) {
+            std::lock_guard l (txm_);
+            if (!flush ()) {
+                DN_TRACE ("receive loop on {} ending: send failed", name_);
+                return;
+            }
+        }
+        if (!(p[0].revents & (POLLIN | POLLHUP))) continue;
+
+        ssize_t got = sock_recv (socket_.fd (), buf.data (), buf.size ());
+        if (got < 0) {
+            int err = sock_errno ();
+            if (sock_would_block (err) || sock_interrupted (err)) continue;
+        }
+        if (got <= 0) {
+            DN_TRACE ("receive loop on {} ending: connection closed", name_);
+            return;
+        }
+
+        // Frames come straight from what was just read, unless a frame was
+        // left over from the last read to complete.
+        const std::uint8_t *data = buf.data ();
+        std::size_t len = static_cast<std::size_t> (got);
+        if (!in.empty ()) {
+            in.insert (in.end (), data, data + len);
+            data = in.data ();
+            len = in.size ();
+        }
+
+        // Pass up every whole frame, all in one go.  The length is 16 bits,
+        // so never more than max_frame.
+        std::size_t at = 0;
+        while (len - at >= hdrlen) {
+            std::size_t bc = static_cast<std::size_t> (data[at])
+                           | (static_cast<std::size_t> (data[at + 1]) << 8);
+            if (len - at < hdrlen + bc) break;
+            const std::uint8_t *from = data + at + hdrlen;
+            frames.push_back (std::make_unique<Received> (
+                this, Bytes (from, from + bc)));
+            at += hdrlen + bc;
+        }
+        if (node ()) node ()->add_work (frames);
+        frames.clear ();
+
+        if (data == in.data ())
+            in.erase (in.begin (), in.begin () + static_cast<std::ptrdiff_t> (at));
+        else
+            in.assign (data + at, data + len);
     }
 }
 
@@ -196,30 +360,45 @@ void TcpMultinet::send (Bytes msg)
         DN_DEBUG ("send on {} dropped: frame too long ({})", name_, mlen);
         return;
     }
-    counters_.bytes_sent += mlen;
-    ++counters_.pkts_sent;
 
-    Bytes frame;
-    frame.reserve (hdrlen + mlen);
-    frame.push_back (static_cast<std::uint8_t> (mlen & 0xff));
-    frame.push_back (static_cast<std::uint8_t> (mlen >> 8));
-    frame.push_back (0);
-    frame.push_back (0);
-    frame.insert (frame.end (), msg.begin (), msg.end ());
-
-    // One write for the header and payload together: splitting them would
-    // let a peer see a torn frame if the connection drops between the two.
-    std::size_t off = 0;
-    while (off < frame.size ()) {
-        ssize_t n = sock_send (socket_.fd (), frame.data () + off,
-                               frame.size () - off);
-        if (n <= 0) {
-            DN_TRACE ("send error on {}, reconnecting", name_);
-            reconnect ();
+    bool ok = true, blocked = false, post = false;
+    {
+        std::lock_guard l (txm_);
+        std::size_t waiting = txbuf_.size () - txoff_;
+        if (waiting + hdrlen + mlen > max_backlog) {
+            DN_DEBUG ("send on {} dropped: {} bytes already waiting for the "
+                      "peer to read", name_, waiting);
             return;
         }
-        off += static_cast<std::size_t> (n);
+        const std::uint8_t hdr[hdrlen] = {
+            static_cast<std::uint8_t> (mlen & 0xff),
+            static_cast<std::uint8_t> (mlen >> 8), 0, 0 };
+        txbuf_.insert (txbuf_.end (), hdr, hdr + hdrlen);
+        txbuf_.insert (txbuf_.end (), msg.begin (), msg.end ());
+
+        if (blocked_) {
+            // The receive thread writes it as the connection drains.
+        } else if (waiting + hdrlen + mlen >= cork_limit) {
+            ok = flush ();
+            blocked = blocked_;
+        } else if (!posted_) {
+            // Written by the node thread once the work already queued is
+            // done: whatever else is sent meanwhile goes in the same write.
+            posted_ = true;
+            post = true;
+        }
     }
+    if (!ok) {
+        DN_TRACE ("send error on {}, reconnecting", name_);
+        reconnect ();
+        return;
+    }
+    counters_.bytes_sent += mlen;
+    ++counters_.pkts_sent;
+    if (blocked) wake ();
+    if (post && node ())
+        node ()->add_work (std::make_unique<CallbackWork> (
+            [this] { flush_posted (); }));
 }
 
 // ------------------------------------------------------- ConnectMultinet
@@ -291,10 +470,9 @@ bool ListenMultinet::check_connection ()
 
         Socket conn (sock_accept (listener_.fd ()));
         if (!conn) continue;
-        // Windows hands the listener's non-blocking mode on to the new
-        // socket; POSIX does not.  The receive loop polls, so blocking is
-        // what it expects.
-        conn.set_nonblocking (false);
+        // Non-blocking, as the send path needs.  Windows hands the
+        // listener's mode on to the new socket; POSIX does not.
+        conn.set_nonblocking ();
 
         Endpoint peer = peer_of (conn.fd ());
         if (!dest_.valid (peer)) {

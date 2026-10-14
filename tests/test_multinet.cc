@@ -259,6 +259,131 @@ DN_TEST (multinet, tcp_loopback_preserves_frame_boundaries)
     listener.stop ();
 }
 
+namespace {
+
+// A Multinet connect circuit to a bare socket the test reads, or does not
+// read, as it likes.  The bare end's receive buffer is small, so the
+// connection fills soon.
+struct BarePeer {
+    std::uint16_t port = free_port ();
+    Socket        server;
+    Config        cfg;
+    Node          node;
+    TestOwner     owner;
+    Port         *port_ = nullptr;
+    Socket        peer;
+
+    BarePeer ()
+        : server (SourceAddress ("127.0.0.1", port).create_server ()),
+          cfg (Config::from_string (
+              "node 1.2 CONN\n"
+              "circuit mul-0 Multinet 127.0.0.1:" + std::to_string (port)
+              + ":connect\n")),
+          node (cfg), owner (&node)
+    {
+        int small = 4096;
+        ::setsockopt (server.fd (), SOL_SOCKET, SO_RCVBUF,
+                      reinterpret_cast<const char *> (&small), sizeof small);
+        port_ = node.datalink ()->circuit ("mul-0")->create_port (&owner);
+        node.start ();
+        port_->open ();
+        peer = Socket (sock_accept (server.fd ()));
+    }
+
+    ~BarePeer () { node.stop (); }
+
+    // Read until nothing more comes for a while.
+    Bytes drain ()
+    {
+        Bytes stream;
+        std::uint8_t buf[65536];
+        for (;;) {
+            PollResult pr = poll_socket (peer.fd (), true, false, 1000);
+            if (!pr.readable) return stream;
+            ssize_t n = sock_recv (peer.fd (), buf, sizeof buf);
+            if (n <= 0) return stream;
+            stream.insert (stream.end (), buf, buf + n);
+        }
+    }
+};
+
+Bytes numbered (unsigned i, std::size_t size)
+{
+    Bytes b (size);
+    for (std::size_t j = 0; j < size; ++j)
+        b[j] = static_cast<std::uint8_t> (i * 31 + j);
+    return b;
+}
+
+// Split a Multinet stream into frames; false if it does not end on a frame.
+bool frames_of (const Bytes &stream, std::vector<Bytes> &out)
+{
+    std::size_t at = 0;
+    while (stream.size () - at >= 4) {
+        std::size_t n = stream[at] | (stream[at + 1] << 8);
+        if (stream.size () - at < 4 + n) return false;
+        out.emplace_back (stream.begin () + static_cast<std::ptrdiff_t> (at + 4),
+                          stream.begin () + static_cast<std::ptrdiff_t> (at + 4 + n));
+        at += 4 + n;
+    }
+    return at == stream.size ();
+}
+
+}   // namespace
+
+DN_TEST (multinet, tcp_peer_slow_to_read_loses_nothing)
+{
+    // A peer that stops reading for a while, as a busy or paused emulator
+    // does, long enough for the connection to fill.  Every frame still
+    // arrives, whole and in order, on the one connection; and sending
+    // never waited for the peer.
+    BarePeer b;
+    DN_ASSERT (static_cast<bool> (b.peer));
+    DN_ASSERT (b.owner.wait_for ([&] { return b.owner.ups_unlocked () > 0; },
+                                 patience));
+
+    constexpr unsigned frames = 180;
+    constexpr std::size_t size = 1400;
+    auto started = std::chrono::steady_clock::now ();
+    for (unsigned i = 0; i < frames; ++i) b.port_->send (numbered (i, size));
+    DN_ASSERT (std::chrono::steady_clock::now () - started
+               < std::chrono::seconds (1));
+    std::this_thread::sleep_for (std::chrono::milliseconds (300));
+
+    std::vector<Bytes> got;
+    DN_ASSERT (frames_of (b.drain (), got));
+    DN_ASSERT_EQ (b.owner.downs (), 0);
+    DN_ASSERT_EQ (got.size (), std::size_t (frames));
+    for (unsigned i = 0; i < frames; ++i)
+        DN_ASSERT (got[i] == numbered (i, size));
+}
+
+DN_TEST (multinet, tcp_peer_that_stops_reading_costs_frames_not_the_circuit)
+{
+    // Far more than is kept for a peer that has stopped reading: the
+    // excess is dropped as whole frames.  The circuit stays up, and what
+    // does arrive is whole frames, in order.
+    BarePeer b;
+    DN_ASSERT (b.owner.wait_for ([&] { return b.owner.ups_unlocked () > 0; },
+                                 patience));
+
+    constexpr unsigned frames = 4000;
+    constexpr std::size_t size = 1400;
+    for (unsigned i = 0; i < frames; ++i) b.port_->send (numbered (i, size));
+    std::this_thread::sleep_for (std::chrono::milliseconds (300));
+
+    std::vector<Bytes> got;
+    DN_ASSERT (frames_of (b.drain (), got));
+    DN_ASSERT_EQ (b.owner.downs (), 0);
+    DN_ASSERT (!got.empty () && got.size () < frames);
+    unsigned next = 0;
+    for (const Bytes &f : got) {
+        while (next < frames && f != numbered (next, size)) ++next;
+        DN_ASSERT (next < frames);
+        ++next;
+    }
+}
+
 DN_TEST (multinet, counters_track_traffic)
 {
     std::uint16_t port = free_port ();
