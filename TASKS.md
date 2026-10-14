@@ -88,6 +88,12 @@ known defects in [BUGS.md](BUGS.md).
 
 ## Other
 
+- [x] CTERM host (object 42): `chost` lines run local programs on a pseudo
+      terminal for SET HOST, with a menu when there are several
+- [x] Test the CTERM host against VMS and RSX SET HOST (VAXXY, MIM)
+- [x] Remote terminal host (object 23, RSX variant) for RSX's RMT
+- [ ] Test object 23 against a real RSX RMT
+- [ ] CTERM host: check access control, or run the program as the user
 - [ ] `bridge`
 - [x] `dap_packets`: DAP message codec (`src/dap/`), checked against
       PyDECnet's encoding

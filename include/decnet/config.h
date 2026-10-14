@@ -105,6 +105,21 @@ struct ObjectConfig {
     std::vector<std::string> arguments;
 };
 
+// chost <NAME> --file PROG [--argument A]... [--description TEXT]
+//       [--term TYPE]
+//
+// A local program offered to SET HOST: a CTERM (object 42) connection runs
+// it on a pseudo terminal.  With one chost line a connection goes straight
+// to the program; with several the user picks one from a menu.  An
+// extension: PyDECnet has no CTERM host.
+struct ChostConfig {
+    std::string              name;          // upper case
+    std::string              file;
+    std::vector<std::string> arguments;
+    std::string              description;
+    std::string              term = "vt100";    // $TERM for the program
+};
+
 // nsp [--max-connections N] [--qmax N]
 struct NspConfig {
     unsigned max_connections = 4095;
@@ -170,6 +185,7 @@ public:
     bool learn_names () const noexcept { return learn_names_; }
     unsigned learn_refresh () const noexcept { return learn_refresh_; }
     const std::vector<ObjectConfig>  &objects  () const noexcept { return objects_; }
+    const std::vector<ChostConfig>   &chosts   () const noexcept { return chosts_; }
     const std::vector<LoggingConfig> &logging  () const noexcept { return logging_; }
     const NspConfig &nsp () const noexcept { return nsp_; }
     const std::optional<RoutingConfig> &routing () const noexcept { return routing_; }
@@ -220,6 +236,7 @@ private:
     bool                          learn_names_ = false;
     unsigned                      learn_refresh_ = 3600;
     std::vector<ObjectConfig>    objects_;
+    std::vector<ChostConfig>     chosts_;
     std::vector<LoggingConfig>   logging_;
     NspConfig                    nsp_;
     std::optional<RoutingConfig> routing_;
