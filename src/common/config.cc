@@ -227,6 +227,24 @@ void Config::apply (ConfigLine line)
                         || has (line, "random");
         c.console        = opt (line, "console", empty);
         c.verify         = opt (line, "verify", empty);
+        if (has (line, "max")) {
+            c.max_connections = to_uint (opt (line, "max", empty), "max");
+            if (c.max_connections == 0)
+                throw std::runtime_error ("--max must be at least 1");
+        }
+        if (auto it = line.options.find ("allow"); it != line.options.end ()) {
+            for (const std::string &v : it->second) {
+                std::string cur;
+                for (char ch : v + ",") {
+                    if (ch == ',') {
+                        if (!cur.empty ()) c.allow.push_back (cur);
+                        cur.clear ();
+                    } else if (ch != ' ') {
+                        cur += ch;
+                    }
+                }
+            }
+        }
         c.raw            = std::move (line);
         circuits_.push_back (std::move (c));
         return;

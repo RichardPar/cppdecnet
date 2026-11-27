@@ -3,6 +3,9 @@
 #include "decnet/common/logging.h"
 #include "decnet/node.h"
 
+#include "decnet/datalink/datalink.h"
+
+#include <chrono>
 #include <charconv>
 #include <cstring>
 #include <stdexcept>
@@ -58,6 +61,7 @@ MultinetDevice MultinetDevice::parse (const std::string &device)
 
     if (tail == "connect")     d.mode = Mode::connect;
     else if (tail == "listen") d.mode = Mode::listen;
+    else if (tail == "server") d.mode = Mode::server;
     else if (tail.empty ())    d.mode = Mode::udp;
     else {
         d.mode = Mode::udp;
@@ -65,8 +69,10 @@ MultinetDevice MultinetDevice::parse (const std::string &device)
             throw std::invalid_argument ("invalid Multinet device: " + device);
     }
 
-    if (d.mode == Mode::listen) {
-        // In listen mode the port we were given is the one we bind.
+    if (d.mode == Mode::listen || d.mode == Mode::server) {
+        // In listen and server mode the port we were given is the one we
+        // bind.  For a server the host, if any, is the address to bind:
+        // the peers are whoever connects.
         d.source_port = d.dest_port;
         d.dest_port = 0;
     } else if (d.mode == Mode::udp) {
@@ -74,7 +80,11 @@ MultinetDevice MultinetDevice::parse (const std::string &device)
         if (!d.source_port) d.source_port = d.dest_port;
     }
 
-    if (d.mode != Mode::listen && d.destination.empty ())
+    if (d.mode == Mode::server && d.source_port == 0)
+        throw std::invalid_argument ("Multinet server needs a port in "
+                                     + device);
+    if (d.mode != Mode::listen && d.mode != Mode::server
+        && d.destination.empty ())
         throw std::invalid_argument ("Multinet needs a destination host in "
                                      + device);
     return d;
@@ -83,7 +93,8 @@ MultinetDevice MultinetDevice::parse (const std::string &device)
 std::string MultinetDevice::str () const
 {
     const char *m = mode == Mode::connect ? "connect"
-                  : mode == Mode::listen  ? "listen" : "udp";
+                  : mode == Mode::listen  ? "listen"
+                  : mode == Mode::server  ? "server" : "udp";
     return std::string (m) + " dest " + (destination.empty () ? "*" : destination)
         + ":" + std::to_string (dest_port)
         + " source :" + std::to_string (source_port);
@@ -118,6 +129,11 @@ std::unique_ptr<Datalink> Multinet::create (Element *owner,
         DN_WARN ("Multinet UDP mode is not recommended: it violates the "
                  "DECnet architecture");
         return std::make_unique<UdpMultinet> (owner, name, dev, source_host);
+    case MultinetDevice::Mode::server:
+        // Not a circuit: the datalink layer makes a MultinetServer, which
+        // makes the circuits.
+        throw std::invalid_argument ("Multinet server mode is not a single "
+                                     "circuit");
     }
     return nullptr;
 }
@@ -569,6 +585,235 @@ void UdpMultinet::send (Bytes msg)
         || !send_datagram (socket_.fd (),
                            ByteView (frame.data (), frame.size ()), *to))
         DN_TRACE ("send error on {}", name_);
+}
+
+// ------------------------------------------------------ AcceptedMultinet
+
+AcceptedMultinet::AcceptedMultinet (Element *owner, std::string name,
+                                    MultinetDevice dev, Socket conn,
+                                    std::string peer, RetireFn retire)
+    : TcpMultinet (owner, std::move (name), std::move (dev)),
+      peer_ (std::move (peer)), retire_ (std::move (retire))
+{
+    // The receive thread starts only when the port is opened, so this is
+    // set well before anything reads it.
+    socket_ = std::move (conn);
+}
+
+bool AcceptedMultinet::validate (Work &w)
+{
+    if (finished_) return false;
+    if (dynamic_cast<Received *> (&w)) return true;
+
+    // Every request to stop, restart or reconnect means the same thing
+    // here, since there is nobody to reconnect to: close.  The routing
+    // circuit asked, so it does not need telling the link went down.
+    if (dynamic_cast<Stop *> (&w) || dynamic_cast<Restart *> (&w)
+        || dynamic_cast<Reconnect *> (&w)) {
+        owner_knows_ = true;
+        close_now ();
+        return false;
+    }
+    if (dynamic_cast<ThreadExit *> (&w)) {
+        // The peer went away, or we asked the thread to stop.
+        finish ();
+        return false;
+    }
+    // Start, Connected and the rest go to the states as usual.
+    return true;
+}
+
+void AcceptedMultinet::close_now ()
+{
+    if (closing_) return;
+    closing_ = true;
+    if (thread_started ())
+        stop_thread (false);    // its ThreadExit brings us to finish ()
+    else
+        finish ();
+}
+
+void AcceptedMultinet::finish ()
+{
+    if (finished_) return;
+    finished_ = true;
+    closing_ = true;
+    if (thread_started ()) stop_thread (true);
+    disconnect ();
+    if (!owner_knows_) report_down ();
+    if (node ()) node ()->timers ().stop (this);
+    DN_DEBUG ("Multinet {} connection from {} closed", name_, peer_);
+    // After whatever this has queued for the routing circuit, so that it
+    // sees the link go down before it is removed.
+    if (node () && retire_)
+        node ()->add_work (std::make_unique<CallbackWork> (
+            [fn = retire_, n = name_] { fn (n); }));
+}
+
+// -------------------------------------------------------- MultinetServer
+
+MultinetServer::MultinetServer (Element *owner, const CircuitConfig &c,
+                                MultinetDevice dev, std::set<std::string> used)
+    : Element (owner), config_ (c), dev_ (std::move (dev)),
+      source_ (dev_.destination, dev_.source_port), used_ (std::move (used))
+{
+    for (const std::string &h : config_.allow)
+        allow_.emplace_back (h, 0);
+    DN_DEBUG ("Multinet server {} initialized: {}, at most {} connections{}",
+              config_.name, dev_.str (), config_.max_connections,
+              allow_.empty () ? std::string (", from anywhere")
+                              : ", from " + std::to_string (allow_.size ())
+                                    + " allowed host(s)");
+}
+
+MultinetServer::~MultinetServer ()
+{
+    stop ();
+}
+
+void MultinetServer::start ()
+{
+    if (thread_.joinable ()) return;
+    stopping_.store (false);
+    thread_ = std::thread ([this] { accept_loop (); });
+}
+
+void MultinetServer::stop ()
+{
+    stopping_.store (true);
+    if (thread_.joinable ()) thread_.join ();
+    listener_.close ();
+}
+
+bool MultinetServer::allowed (const Endpoint &peer)
+{
+    if (allow_.empty ()) return true;
+    for (HostAddress &a : allow_) {
+        a.resolve ();
+        if (a.valid (peer)) return true;
+    }
+    return false;
+}
+
+void MultinetServer::accept_loop ()
+{
+    logging::set_thread_name ((node () ? node ()->name () + "." : "")
+                              + config_.name);
+    bool warned = false;
+    while (!stopping_.load ()) {
+        if (!listener_) {
+            listener_ = source_.create_server ();
+            if (!listener_) {
+                if (!warned)
+                    DN_WARN ("Multinet server {} cannot listen on {}; "
+                             "retrying", config_.name, source_.str ());
+                warned = true;
+                // Try again in a few seconds, noticing a stop promptly.
+                for (int i = 0; i < 100 && !stopping_.load (); ++i)
+                    std::this_thread::sleep_for (std::chrono::milliseconds (50));
+                continue;
+            }
+            listener_.set_nonblocking ();
+            warned = false;
+            DN_INFO ("Multinet server {} listening on {}", config_.name,
+                     source_.str ());
+        }
+
+        PollResult p = poll_socket (listener_.fd (), true, false,
+                                    poll_timeout_ms);
+        if (stopping_.load ()) break;
+        if (p.error) {
+            DN_DEBUG ("Multinet server {} listener failed, reopening",
+                      config_.name);
+            listener_.close ();
+            continue;
+        }
+        if (p.timeout || !p.readable) continue;
+
+        Socket conn (sock_accept (listener_.fd ()));
+        if (!conn) continue;
+        conn.set_nonblocking ();
+        Endpoint peer = peer_of (conn.fd ());
+        if (!allowed (peer)) {
+            DN_INFO ("Multinet server {} refused connection from {}: not "
+                     "an allowed host", config_.name, peer.str ());
+            continue;           // conn closes here
+        }
+        conn.set_nodelay ();
+        // Hand it to the node thread, which owns the circuit tables.  The
+        // socket goes in a shared_ptr only because the work item must be
+        // copyable.
+        auto sp = std::make_shared<Socket> (std::move (conn));
+        std::string desc = peer.str ();
+        if (node ())
+            node ()->add_work (std::make_unique<CallbackWork> (
+                [this, sp, desc] { accepted (sp, desc); }));
+    }
+    listener_.close ();
+}
+
+std::string MultinetServer::next_name () const
+{
+    auto *dll = static_cast<DatalinkLayer *> (parent ());
+    for (unsigned n = 0; ; ++n) {
+        std::string name = config_.name + "-" + std::to_string (n);
+        if (used_.count (name) || live_.count (name)) continue;
+        if (dll && dll->circuit (name)) continue;
+        return name;
+    }
+}
+
+void MultinetServer::accepted (const std::shared_ptr<Socket> &conn,
+                               const std::string &peer)
+{
+    auto *dll = static_cast<DatalinkLayer *> (parent ());
+    DynamicCircuitOwner *owner = dll ? dll->dynamic_owner () : nullptr;
+    if (!owner) {
+        DN_INFO ("Multinet server {} refused connection from {}: no "
+                 "routing layer to take it", config_.name, peer);
+        return;                 // the socket closes with the last reference
+    }
+    if (live_.size () >= config_.max_connections) {
+        DN_INFO ("Multinet server {} refused connection from {}: already "
+                 "{} connections (--max {})", config_.name, peer,
+                 live_.size (), config_.max_connections);
+        return;
+    }
+
+    std::string name = next_name ();
+    auto dl = std::make_unique<AcceptedMultinet> (
+        dll, name, dev_, std::move (*conn), peer,
+        [this] (const std::string &n) { retire (n); });
+    Datalink *raw = dl.get ();
+    dll->add_circuit (std::move (dl));
+
+    CircuitConfig c = config_;
+    c.name = name;
+    c.wait_for_init = true;
+    if (!owner->add_dynamic_circuit (c, raw)) {
+        // Nothing has been started, so nothing can refer to it yet.
+        dll->remove_circuit (name);
+        DN_WARN ("Multinet server {} could not make a circuit for {}",
+                 config_.name, peer);
+        return;
+    }
+    live_.insert (name);
+    DN_INFO ("Multinet server {}: connection from {} is circuit {}",
+             config_.name, peer, name);
+}
+
+void MultinetServer::retire (const std::string &name)
+{
+    auto *dll = static_cast<DatalinkLayer *> (parent ());
+    if (!live_.erase (name) || !dll) return;
+    std::unique_ptr<Datalink> dl = dll->remove_circuit (name);
+    if (auto *am = dynamic_cast<AcceptedMultinet *> (dl.get ()))
+        am->mark_retired ();
+    if (DynamicCircuitOwner *owner = dll->dynamic_owner ())
+        owner->retire_dynamic_circuit (name, std::move (dl));
+    // With no routing layer left to hold it, dl goes here: nothing else
+    // refers to it then.
+    DN_INFO ("Multinet server {}: circuit {} removed", config_.name, name);
 }
 
 }   // namespace decnet::datalink

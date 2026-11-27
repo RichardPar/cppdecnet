@@ -12,6 +12,8 @@
 //     host[:port][:connect]    active end of a TCP connection
 //     host[:port][:listen]     passive end of a TCP connection
 //     host[:port][:localport]  UDP
+//     [host]:port:server       passive end for any number of peers: each
+//                              connection gets a circuit of its own
 //
 // The port defaults to 700.  In listen mode an empty host accepts any
 // address.
@@ -21,14 +23,21 @@
 
 #include "decnet/datalink/ptp.h"
 
+#include "decnet/config.h"
+
+#include <atomic>
+#include <functional>
+#include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
+#include <thread>
 
 namespace decnet::datalink {
 
 // The parsed --device argument.
 struct MultinetDevice {
-    enum class Mode { connect, listen, udp };
+    enum class Mode { connect, listen, udp, server };
 
     Mode          mode = Mode::udp;
     std::string   destination;      // empty means any, for listen
@@ -150,6 +159,98 @@ protected:
 
 private:
     std::uint16_t seq_ = 0;
+};
+
+// One connection accepted by a MultinetServer.  The connection is made
+// before this exists, so there is nothing to connect and nothing to
+// reconnect: when it ends, for whatever reason, the circuit goes away.
+class AcceptedMultinet : public TcpMultinet {
+public:
+    // Called on the node thread, with this datalink's name, once the
+    // connection is closed and the receive thread has finished.
+    using RetireFn = std::function<void (const std::string &)>;
+
+    AcceptedMultinet (Element *owner, std::string name, MultinetDevice dev,
+                      Socket conn, std::string peer, RetireFn retire);
+
+    bool validate (Work &w) override;
+    void dispatch (Work &w) override
+    {
+        if (retired_) return;           // stale work for a removed circuit
+        PtpDatalink::dispatch (w);
+    }
+
+    std::string peer_description () const override { return peer_; }
+
+    // Set once the datalink layer has let go of it: from here on every
+    // work item still addressed to it is dropped.
+    void mark_retired () noexcept { retired_ = true; }
+
+protected:
+    void connect () override {}
+    bool check_connection () override { return socket_.valid (); }
+
+private:
+    // Start closing: ask the receive thread to finish, or finish now if it
+    // never started.
+    void close_now ();
+    // The thread is done: close the connection and hand back the circuit.
+    void finish ();
+
+    std::string peer_;
+    RetireFn    retire_;
+    bool        closing_ = false;       // close_now has run
+    bool        finished_ = false;      // finish has run
+    bool        owner_knows_ = false;   // routing asked for the close
+    bool        retired_ = false;
+};
+
+// A Multinet TCP listener for any number of peers.  It is not a circuit:
+// each connection it accepts becomes a new circuit, named after it, "MUL"
+// giving MUL-0, MUL-1 and so on, skipping names already in use.  Whether
+// the node at the far end is welcome is for the routing layer to decide
+// once its routing init says who it is.
+class MultinetServer : public Element {
+public:
+    // c is the configuration line; its options apply to every circuit made.
+    // used holds the names of the configured circuits, never to be reused.
+    MultinetServer (Element *owner, const CircuitConfig &c,
+                    MultinetDevice dev, std::set<std::string> used);
+    ~MultinetServer () override;
+
+    static constexpr const char *class_name = "MultinetServer";
+
+    // Begin listening, on a thread of its own.
+    void start ();
+    // Stop listening and wait for the thread.  Circuits already made are
+    // left to the routing layer to stop.
+    void stop ();
+
+    const std::string &name () const noexcept { return config_.name; }
+    std::size_t live () const noexcept { return live_.size (); }
+
+    void dispatch (Work &) override {}
+
+private:
+    void accept_loop ();                // the listening thread
+    bool allowed (const Endpoint &peer);
+    // Node thread: make a circuit for a new connection.
+    void accepted (const std::shared_ptr<Socket> &conn,
+                   const std::string &peer);
+    // Node thread: the connection of circuit name has ended.
+    void retire (const std::string &name);
+    std::string next_name () const;
+
+    CircuitConfig            config_;
+    MultinetDevice           dev_;
+    SourceAddress            source_;
+    std::vector<HostAddress> allow_;
+    std::set<std::string>    used_;     // configured circuit names
+    std::set<std::string>    live_;     // circuits made and not yet removed
+
+    Socket                   listener_; // the listening thread's own
+    std::thread              thread_;
+    std::atomic<bool>        stopping_ { false };
 };
 
 }   // namespace decnet::datalink

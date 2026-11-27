@@ -196,6 +196,10 @@ protected:
     // Does the configuration give this address a name?  See reach().
     bool named_node (Nodeid id) const;
 
+    void circuit_added (PtpCircuit *c) override;
+    void circuit_removed (PtpCircuit *c,
+                          std::vector<std::unique_ptr<Element>> &bury) override;
+
     // Recompute best routes for destinations first..last.  Port of
     // L1Router.doroute.  extra is a column not in the map (the endnode column
     // for level 1).
@@ -272,6 +276,10 @@ protected:
     void read_node (const nice::NiceRequest &req, Nodeid id,
                     nice::ReplyDict &resp) override;
     void node_char (nice::NiceReply &r) override;
+
+    void circuit_added (PtpCircuit *c) override;
+    void circuit_removed (PtpCircuit *c,
+                          std::vector<std::unique_ptr<Element>> &bury) override;
 
 private:
     // Recompute area routes, then re-derive the attached flag.  Port of

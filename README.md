@@ -121,6 +121,7 @@ circuit <name> <Multinet|Ethernet|DDCMP> <device> [options]
 |---|---|---|
 | `Multinet <host>:<port>:connect` | point to point over TCP, outbound | none |
 | `Multinet <host>:<port>:listen` | point to point over TCP, inbound | none |
+| `Multinet [<host>]:<port>:server` | TCP, inbound, a circuit per caller | none |
 | `Multinet <host>:<port>[:<lport>]` | point to point over UDP | none |
 | `Ethernet udp:<lport>:<host>:<rport>` | Ethernet frames in UDP | none |
 | `Ethernet tap:<dev>` | Linux TAP device | root, or a tap owned by the user |
@@ -136,6 +137,39 @@ Ethernet circuits also take `--priority`, `--nr` and `--random-address`.
 **Multinet.** One end connects and the other listens; the port defaults
 to 700. UDP mode works but logs a warning, since UDP does not guarantee
 ordered delivery.
+
+**Multinet server.** One port for any number of Multinet neighbours, on
+a router (`l1router` or `l2router`):
+
+```
+circuit mul Multinet :7100:server --cost 3 --max 8 --allow 192.0.2.10,192.0.2.11
+```
+
+Each caller dials it with `<this host>:7100:connect`, as it would a
+`:listen` end. Each connection gets a circuit of its own, named from the
+server line (`MUL-0`, `MUL-1` and so on, skipping names already in use),
+which goes away when the connection ends. The circuit options (`--cost`,
+`--t3`, `--verify`) apply to every circuit made. `--max` (default 16)
+limits how many are open at once. `--allow` (comma separated, may be
+repeated) limits who may connect; without it anyone may. A host before
+the port binds to that address only.
+
+A Multinet connection says nothing about who is calling. The routing init
+that comes next carries the caller's node address, so that is where the
+check is made. A caller is refused if its address is:
+
+- this node's own,
+- already a neighbour on any circuit (Ethernet, Multinet or another
+  server circuit), or
+- held by another circuit that is still verifying.
+
+A refused caller never sees us as up: a server circuit sends its own
+routing init only after it has accepted the caller's. The refusal is
+logged (`MUL-3: rejecting neighbour 59.120 from 192.0.2.7:51234: it is
+already a neighbour on MUL-1`), raises event 4.16 *Adjacency rejected*,
+and counts as an initialization failure. The connection is closed ten
+seconds later, so a caller that redials at once is held to one attempt
+every ten seconds. Configured point to point circuits make the same check.
 
 **DDCMP.** Over TCP both ends listen and connect and the first connection
 wins, as SIMH does. Serial lines run raw 8N1 with no flow control. The
