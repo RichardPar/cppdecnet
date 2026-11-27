@@ -4,7 +4,7 @@ namespace decnet::version {
 
 std::string kit_version ()
 {
-    return std::string (stage) + vernum + "." + patch;
+    return std::string (stage) + vernum + "." + patch + suffix;
 }
 
 std::string full_version ()

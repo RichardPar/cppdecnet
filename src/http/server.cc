@@ -8,6 +8,8 @@
 #include "decnet/nice/nml.h"
 #include "decnet/nice/packets.h"
 #include "decnet/node.h"
+#include "decnet/routing/lan.h"
+#include "decnet/routing/routing.h"
 
 #include <cerrno>
 #include <cstring>
@@ -78,20 +80,143 @@ std::pair<std::string, std::string> split_at (const std::string &s, char c)
     return { s.substr (0, n), s.substr (n + 1) };
 }
 
+// The look of every page.  Self contained (no fonts or scripts from
+// elsewhere: the node may have no route to the internet), light or dark to
+// suit the browser.
 const char *style = R"(
-body { font-family: monospace; margin: 2em; background: #fbfbf9; color: #222; }
-h1 { font-size: 1.3em; } h2 { font-size: 1.1em; margin-top: 1.6em; }
-nav a { margin-right: 1em; } nav { margin-bottom: 1.5em; }
-table { border-collapse: collapse; margin: 0.5em 0 1.5em 0; }
-td, th { border: 1px solid #ccc; padding: 2px 10px; text-align: left;
-         vertical-align: top; }
-th { background: #eee; }
-.entity { font-weight: bold; }
-.none { color: #777; font-style: italic; }
-a.button { display: inline-block; margin: 0.5em 0 1em 0; padding: 6px 14px;
-           border: 1px solid #999; border-radius: 4px; background: #eee;
-           color: #222; text-decoration: none; font-family: inherit; }
-a.button:hover { background: #ddd; }
+:root {
+  --bg: #f4f6fa; --panel: #ffffff; --ink: #1c2433; --muted: #6b7486;
+  --line: #e3e7ef; --head: #f7f9fc; --accent: #2f6fde; --accent-ink: #ffffff;
+  --ok: #1f9d55; --ok-bg: #e5f6ec; --warn: #b7791f; --warn-bg: #fdf3e1;
+  --off: #8a93a5; --off-bg: #eef0f4; --bad: #c53030; --bad-bg: #fde8e8;
+  --bar1: #14213d; --bar2: #23407a;
+  --shadow: 0 1px 2px rgba(20,33,61,.06), 0 4px 14px rgba(20,33,61,.06);
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas,
+          "DejaVu Sans Mono", monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+          Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f141c; --panel: #171e2a; --ink: #e4e9f2; --muted: #8d97aa;
+    --line: #263042; --head: #1c2433; --accent: #5b8ff9; --accent-ink: #0f141c;
+    --ok: #48c78e; --ok-bg: #143326; --warn: #e9b85a; --warn-bg: #3a2d12;
+    --off: #8d97aa; --off-bg: #222b3a; --bad: #f07178; --bad-bg: #3b1b1f;
+    --bar1: #0b1220; --bar2: #18284a;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 18px rgba(0,0,0,.25);
+  }
+}
+* { box-sizing: border-box; }
+html { background: var(--bg); }
+body { margin: 0; font: 15px/1.45 var(--sans); color: var(--ink);
+       background: var(--bg); -webkit-font-smoothing: antialiased; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+header.bar { background: linear-gradient(120deg, var(--bar1), var(--bar2));
+             color: #fff; padding: 18px 28px 0; }
+.brand { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.logo { width: 40px; height: 40px; flex: none; display: block; }
+.brand a { color: #fff; }
+.brand a.name { display: flex; flex-direction: column; line-height: 1.1; }
+.brand a.name:hover { text-decoration: none; }
+.brand .net { font-size: 12px; font-weight: 650; letter-spacing: 1.2px;
+              opacity: .7; margin-bottom: 2px; }
+.brand .name b { font-size: 20px; font-weight: 650; letter-spacing: .3px; }
+.brand .addr { font: 13px var(--mono); padding: 2px 8px; border-radius: 999px;
+               background: rgba(255,255,255,.14); }
+.brand .soft { margin-left: auto; font-size: 12.5px; opacity: .7; }
+nav.tabs { display: flex; gap: 2px; margin-top: 16px; overflow-x: auto; }
+nav.tabs a { color: rgba(255,255,255,.75); padding: 9px 14px 11px;
+             border-radius: 9px 9px 0 0; font-weight: 550; font-size: 14px;
+             white-space: nowrap; }
+nav.tabs a:hover { color: #fff; background: rgba(255,255,255,.08);
+                   text-decoration: none; }
+nav.tabs a.on { color: var(--ink); background: var(--bg); }
+
+main { max-width: 1240px; margin: 0 auto; padding: 22px 28px 48px; }
+h1 { font-size: 22px; font-weight: 650; margin: 4px 0 16px; }
+.toolbar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+           margin-bottom: 18px; }
+.toolbar h1 { margin: 0; }
+.seg { display: inline-flex; background: var(--panel); border-radius: 10px;
+       padding: 3px; box-shadow: var(--shadow); margin-left: auto; }
+.seg a { padding: 6px 12px; border-radius: 8px; color: var(--muted);
+         font-size: 13.5px; font-weight: 550; }
+.seg a:hover { color: var(--ink); text-decoration: none; }
+.seg a.on { background: var(--accent); color: var(--accent-ink); }
+
+.grid { display: grid; gap: 16px;
+        grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); }
+.card { background: var(--panel); border-radius: 12px; box-shadow: var(--shadow);
+        overflow: hidden; border: 1px solid var(--line); }
+.card-head { display: flex; align-items: center; gap: 8px; padding: 12px 16px;
+             border-bottom: 1px solid var(--line); background: var(--head); }
+h2.entity { margin: 0; font-size: 15.5px; font-weight: 650; margin-right: auto;
+            font-family: var(--mono); }
+h2.entity .kind { font: 500 11px var(--sans); text-transform: uppercase;
+                  letter-spacing: .8px; color: var(--muted); display: block;
+                  margin-bottom: 1px; }
+.card .none { padding: 12px 16px; margin: 0; }
+
+.badge { font-size: 12px; font-weight: 600; padding: 3px 9px;
+         border-radius: 999px; white-space: nowrap; color: var(--off);
+         background: var(--off-bg); }
+.badge::before { content: ""; display: inline-block; width: 7px; height: 7px;
+                 border-radius: 50%; background: currentColor;
+                 margin-right: 6px; vertical-align: 1px; }
+.badge.ok   { color: var(--ok);   background: var(--ok-bg); }
+.badge.warn { color: var(--warn); background: var(--warn-bg); }
+.badge.bad  { color: var(--bad);  background: var(--bad-bg); }
+
+table { border-collapse: collapse; width: 100%; }
+td, th { padding: 7px 16px; text-align: left; vertical-align: top;
+         border-bottom: 1px solid var(--line); }
+tr:last-child td, tr:last-child th { border-bottom: 0; }
+th { font-weight: 500; color: var(--muted); width: 46%; font-size: 13.5px; }
+td { font: 13.5px var(--mono); word-break: break-word; }
+table.counters td { text-align: right; font-variant-numeric: tabular-nums; }
+table.counters th { width: auto; }
+tbody tr:hover td, tbody tr:hover th { background: var(--head); }
+
+.none { color: var(--muted); font-style: italic; }
+.note { display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+        margin-top: 22px; padding: 12px 16px; border-radius: 12px;
+        background: var(--panel); border: 1px dashed var(--line); }
+.note p { margin: 0; }
+a.button { display: inline-block; padding: 7px 14px; border-radius: 9px;
+           background: var(--accent); color: var(--accent-ink);
+           font-weight: 600; font-size: 13.5px; }
+a.button:hover { filter: brightness(1.08); text-decoration: none; }
+
+.hero { display: grid; gap: 16px; margin-bottom: 26px;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+.hero .card table th { width: 34%; }
+.section { font-size: 13px; font-weight: 650; text-transform: uppercase;
+           letter-spacing: .9px; color: var(--muted); margin: 26px 0 12px; }
+.tiles { display: grid; gap: 14px;
+         grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); }
+a.tile { display: block; padding: 16px 18px; border-radius: 12px;
+         background: var(--panel); border: 1px solid var(--line);
+         box-shadow: var(--shadow); color: var(--ink);
+         transition: transform .12s ease, border-color .12s ease; }
+a.tile:hover { transform: translateY(-2px); border-color: var(--accent);
+               text-decoration: none; }
+a.tile b { display: block; font-size: 15.5px; margin-bottom: 3px; }
+a.tile span { color: var(--muted); font-size: 13px; }
+table.status td:first-child { font-weight: 600; white-space: nowrap; }
+table.status td:nth-child(2) { white-space: nowrap; }
+table.status th { width: auto; }
+@media (max-width: 640px) {
+  header.bar { padding: 14px 16px 0; }
+  main { padding: 18px 14px 36px; }
+  .grid { grid-template-columns: 1fr; }
+  .brand .soft { display: none; }
+  td, th { padding: 7px 12px; }
+  .seg { margin-left: 0; }
+}
+footer { text-align: center; color: var(--muted); font-size: 12px;
+         padding: 0 0 28px; }
 )";
 
 // Split formatter output into name and value.  Parameters are
@@ -122,21 +247,169 @@ std::string breaks (const std::string &s)
     return out;
 }
 
-std::string page (const std::string &title, const std::string &nav,
+// The site header: who this is, and the tabs, the one for active marked.
+// brand is the node name, addr and soft what is shown beside it; any may
+// be empty on an error page, where the node may not be answering.
+// The mark: a D struck through its stem, white on a rounded tile.  Drawn
+// here, not fetched, as everything on these pages is.
+const char *logo_svg =
+    "<svg class=\"logo\" viewBox=\"0 0 40 40\" aria-hidden=\"true\">"
+    "<rect x=\"1\" y=\"1\" width=\"38\" height=\"38\" rx=\"10\" "
+    "fill=\"#ffffff\" fill-opacity=\".12\" stroke=\"#ffffff\" "
+    "stroke-opacity=\".28\"/>"
+    "<path d=\"M14 10h6.5a10 10 0 0 1 0 20H14z\" fill=\"none\" "
+    "stroke=\"#ffffff\" stroke-width=\"3.2\" stroke-linejoin=\"round\"/>"
+    "<path d=\"M8.5 20h11\" stroke=\"#7fb2ff\" stroke-width=\"3.2\" "
+    "stroke-linecap=\"round\"/></svg>";
+
+// The same mark as the browser tab icon, as a data: URL.
+const char *favicon =
+    "<link rel=\"icon\" href=\"data:image/svg+xml,"
+    "%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E"
+    "%3Crect width='40' height='40' rx='10' fill='%2323407a'/%3E"
+    "%3Cpath d='M14 10h6.5a10 10 0 0 1 0 20H14z' fill='none' stroke='white' "
+    "stroke-width='3.6' stroke-linejoin='round'/%3E"
+    "%3Cpath d='M8.5 20h11' stroke='%237fb2ff' stroke-width='3.6' "
+    "stroke-linecap='round'/%3E%3C/svg%3E\">";
+
+std::string header (const std::string &brand, const std::string &addr,
+                    const std::string &soft, const char *active)
+{
+    std::string h = "<header class=\"bar\"><div class=\"brand\">";
+    h += logo_svg;
+    h += "<a class=\"name\" href=\"/\"><span class=\"net\">HECnet</span><b>";
+    h += escape (brand.empty () ? std::string ("DECnet") : brand);
+    h += "</b></a>";
+    if (!addr.empty ()) {
+        h += "<span class=\"addr\">";
+        h += escape (addr);
+        h += "</span>";
+    }
+    if (!soft.empty ()) {
+        h += "<span class=\"soft\">";
+        h += escape (soft);
+        h += "</span>";
+    }
+    h += "</div>\n<nav class=\"tabs\"><a href=\"/\"";
+    if (active && !*active) h += " class=\"on\"";
+    h += ">Overview</a>";
+    for (const PageDef &d : pages) {
+        h += "<a href=\"/";
+        h += d.slug;
+        h += "\"";
+        if (active && std::strcmp (active, d.slug) == 0) h += " class=\"on\"";
+        h += ">";
+        h += d.title;
+        h += "</a>";
+    }
+    h += "</nav></header>\n";
+    return h;
+}
+
+// A whole page: title for the browser tab, head the header from header(),
+// then the body inside main.
+std::string page (const std::string &title, const std::string &head,
                   const std::string &body)
 {
-    std::string out = "<!doctype html>\n<html><head><meta charset=\"utf-8\">"
-                      "<title>";
+    std::string out = "<!doctype html>\n<html lang=\"en\"><head>"
+                      "<meta charset=\"utf-8\">"
+                      "<meta name=\"viewport\" content=\"width=device-width, "
+                      "initial-scale=1\">";
+    out += favicon;
+    out += "<title>";
     out += escape (title);
     out += "</title><style>";
     out += style;
-    out += "</style></head><body>\n<h1>";
-    out += escape (title);
-    out += "</h1>\n";
-    out += nav;
+    out += "</style></head><body>\n";
+    out += head.empty () ? header ("", "", "", nullptr) : head;
+    out += "<main>\n";
     out += body;
-    out += "</body></html>\n";
+    out += "</main>\n<footer>DECnet Phase IV &middot; NICE over HTTP</footer>\n"
+           "</body></html>\n";
     return out;
+}
+
+// The badge class for a state value: running things green, things that
+// are off grey, things on their way amber.
+const char *badge_class (const std::string &v)
+{
+    if (v == "On" || v == "Reachable" || v == "Running") return "ok";
+    if (v == "Unreachable" || v == "Off") return "off";
+    if (v == "Failed") return "bad";
+    return "warn";
+}
+
+std::string badge (const std::string &v)
+{
+    std::string b = "<span class=\"badge ";
+    b += badge_class (v);
+    b += "\">";
+    b += escape (v);
+    b += "</span>";
+    return b;
+}
+
+// "Circuit = MUL-0" as a small kind label over the name.
+std::string entity_title (const std::string &s)
+{
+    std::size_t eq = s.find (" = ");
+    if (eq == std::string::npos) return escape (s);
+    return "<span class=\"kind\">" + escape (s.substr (0, eq)) + "</span>"
+         + escape (s.substr (eq + 3));
+}
+
+// The header for a page of this node's, with tab active marked.
+std::string site_head (const Node *n, const char *active)
+{
+    if (!n) return header ("", "", "", active);
+    return header (n->name (), n->nicenode ().id.str (),
+                   n->software_identification (), active);
+}
+
+// A page that is only a message, for errors.
+std::string message_page (const std::string &title, const std::string &text,
+                          const std::string &head = std::string ())
+{
+    return page (title, head,
+                 "<h1>" + escape (title) + "</h1>\n<div class=\"card\">"
+                 "<p class=\"none\">" + escape (text) + "</p></div>\n");
+}
+
+// Read every known entity of kind at level info, as NCP would: each one's
+// name and its formatted parameter lines, in NCP's order.
+struct EntityLines {
+    std::string              name;
+    std::vector<std::string> lines;
+};
+
+std::vector<EntityLines> read_all (const Node *node, std::uint8_t kind,
+                                   unsigned info)
+{
+    std::vector<EntityLines> out;
+    if (!node) return out;
+    nice::NiceRequest req;
+    req.function    = nice::fn_read;
+    req.entity_type = kind;
+    req.info        = info;
+    req.entity      = nice::ReqEntity::make_wild (kind, nice::ReqEntity::known);
+    nice::ReplyDict replies (kind, const_cast<Node *> (node));
+    if (const_cast<Node *> (node)->nice_read (req, replies) != 0) return out;
+    nice::ParamDefs defs = nice::params_for (kind);
+    for (const auto &group : replies.sorted (req))
+        for (const nice::NiceReply *rep : group)
+            if (rep) out.push_back ({ rep->entity.str (), rep->params.format (defs) });
+    return out;
+}
+
+// The value of parameter name in formatted lines, or empty.
+std::string value_of (const std::vector<std::string> &lines,
+                      const std::string &name)
+{
+    for (const std::string &l : lines) {
+        auto [k, v] = split_param (l);
+        if (k == name) return v;
+    }
+    return {};
 }
 
 }   // namespace
@@ -265,14 +538,13 @@ void Server::handle (Socket conn)
             try { resp = f.get (); }
             catch (const std::exception &e) {
                 resp.status = 500;
-                resp.body = page ("Error", "", "<p>" + escape (e.what ()) + "</p>");
+                resp.body = message_page ("Error", e.what ());
             }
         } else {
             // The node loop is not running, or is wedged.  Say so rather
             // than hanging the browser.
             resp.status = 500;
-            resp.body = page ("Error", "", "<p class=\"none\">the node did not"
-                              " answer</p>");
+            resp.body = message_page ("Error", "the node did not answer");
         }
     } else {
         resp = serve (req);
@@ -293,7 +565,7 @@ Response Server::serve (const Request &req)
     Response r;
     if (!req.method.empty () && req.method != "GET" && req.method != "HEAD") {
         r.status = 400;
-        r.body = page ("Bad request", "", "<p>only GET is served</p>");
+        r.body = message_page ("Bad request", "only GET is served");
         return r;
     }
 
@@ -316,14 +588,29 @@ Response Server::serve (const Request &req)
     }
 
     r.status = 404;
-    r.body = page ("Not found", "<nav><a href=\"/\">home</a></nav>",
-                   "<p>no such page</p>");
+    r.body = message_page ("Not found", "no such page",
+                           site_head (node_, nullptr));
     return r;
 }
 
 std::string Server::index_page () const
 {
-    std::string b = "<table>\n";
+    static const char *const blurbs[] = {
+        "Names, reachability and routes",
+        "Routing circuits and their neighbours",
+        "Data links and their traffic",
+        "Areas and how to reach them",
+        "Configurator and other modules",
+        "Event sinks and filters",
+    };
+
+    std::string b = "<h1>Overview</h1>\n<div class=\"hero\">\n";
+    b += "<div class=\"card\"><div class=\"card-head\"><h2 class=\"entity\">"
+         "<span class=\"kind\">Executor</span>";
+    b += escape (node_ ? node_->name () : std::string ("DECnet"));
+    b += "</h2>";
+    if (node_) b += badge ("On");
+    b += "</div>\n<table>\n";
     auto row = [&b] (const char *k, const std::string &v) {
         b += "<tr><th>";
         b += k;
@@ -336,16 +623,67 @@ std::string Server::index_page () const
         row ("Identification", node_->identification ());
         row ("Software", node_->software_identification ());
     }
-    b += "</table>\n<h2>Entities</h2>\n<ul>\n";
-    for (const PageDef &pd : pages) {
-        b += "<li><a href=\"/";
-        b += pd.slug;
-        b += "\">";
-        b += pd.title;
-        b += "</a></li>\n";
+    b += "</table></div>\n";
+
+    // The circuits at a glance: the first thing anyone looks for.
+    std::vector<EntityLines> circuits =
+        read_all (node_, nice::Entity::circuit, nice::info_summary);
+    b += "<div class=\"card\"><div class=\"card-head\"><h2 class=\"entity\">"
+         "<span class=\"kind\">At a glance</span>Circuits</h2>"
+         "<a href=\"/circuits?info=status\">details</a></div>\n";
+    if (circuits.empty ()) {
+        b += "<p class=\"none\">no circuits</p>";
+    } else {
+        b += "<table class=\"status\">\n";
+        for (const EntityLines &c : circuits) {
+            std::string name = c.name;
+            if (auto eq = name.find (" = "); eq != std::string::npos)
+                name = name.substr (eq + 3);
+            std::string state = value_of (c.lines, "State");
+            std::string sub   = value_of (c.lines, "Substate");
+            std::string adj   = value_of (c.lines, "Adjacent node");
+            b += "<tr><td>";
+            b += escape (name);
+            b += "</td><td>";
+            if (!state.empty ()) b += badge (sub.empty () ? state : sub);
+            b += "</td><td>";
+            // A LAN has any number of neighbours, not one: say how many.
+            const routing::LanCircuit *lan =
+                (adj.empty () && node_ && node_->routing ())
+                ? node_->routing ()->lan_circuit (name) : nullptr;
+            if (!adj.empty ()) {
+                b += escape (adj);
+            } else if (lan) {
+                std::size_t n = lan->adjacency_count ();
+                if (n == 0) {
+                    b += "<span class=\"none\">no adjacencies</span>";
+                } else {
+                    b += std::to_string (n);
+                    b += n == 1 ? " adjacency" : " adjacencies";
+                }
+            } else {
+                b += "<span class=\"none\">no neighbour</span>";
+            }
+            b += "</td></tr>\n";
+        }
+        b += "</table>";
     }
-    b += "</ul>\n";
-    return page (node_ ? node_->name () : "DECnet", std::string (), b);
+    b += "</div>\n</div>\n";
+
+    b += "<div class=\"section\">Entities</div>\n<div class=\"tiles\">\n";
+    std::size_t i = 0;
+    for (const PageDef &pd : pages) {
+        b += "<a class=\"tile\" href=\"/";
+        b += pd.slug;
+        b += "\"><b>";
+        b += pd.title;
+        b += "</b><span>";
+        b += blurbs[i++];
+        b += "</span></a>\n";
+    }
+    b += "</div>\n";
+    return page (node_ ? node_->name () + " \xc2\xb7 Overview" : "DECnet",
+                 site_head (node_, ""), b);
 }
 
 std::string Server::entity_page (std::uint8_t kind, unsigned info,
@@ -353,31 +691,31 @@ std::string Server::entity_page (std::uint8_t kind, unsigned info,
 {
     const PageDef *pd = nullptr;
     for (const PageDef &d : pages) if (d.kind == kind) pd = &d;
-    if (!pd) return page ("Not found", "", "<p>no such entity</p>");
+    if (!pd) return message_page ("Not found", "no such entity");
 
-    // Navigation: home, the other entities, and the information levels.
-    std::string nav = "<nav><a href=\"/\">home</a>";
-    for (const PageDef &d : pages) {
-        nav += " <a href=\"/";
-        nav += d.slug;
-        nav += "\">";
-        nav += d.title;
-        nav += "</a>";
-    }
-    nav += "<br>";
+    // The header with this entity's tab marked, then a toolbar: the
+    // title and the information levels, the current one marked.
+    const std::string nav = site_head (node_, pd->slug);
+    const std::string title = (node_ ? node_->name () + " \xc2\xb7 " : std::string ())
+                            + pd->title;
+    std::string toolbar = "<div class=\"toolbar\"><h1>";
+    toolbar += pd->title;
+    toolbar += "</h1><div class=\"seg\">";
     for (const InfoDef &i : infos) {
-        nav += " <a href=\"/";
-        nav += pd->slug;
-        nav += "?info=";
-        nav += i.slug;
-        nav += "\">";
-        nav += i.title;
-        nav += "</a>";
+        toolbar += "<a href=\"/";
+        toolbar += pd->slug;
+        toolbar += "?info=";
+        toolbar += i.slug;
+        toolbar += "\"";
+        if (i.code == info) toolbar += " class=\"on\"";
+        toolbar += ">";
+        toolbar += i.title;
+        toolbar += "</a>";
     }
-    nav += "</nav>\n";
+    toolbar += "</div></div>\n";
 
-    std::string b;
-    if (!node_) return page (pd->title, nav, "<p class=\"none\">no node</p>");
+    std::string b = toolbar;
+    if (!node_) return page (title, nav, b + "<p class=\"none\">no node</p>");
 
     // Ask NICE the same question NCP would: read everything known of this
     // entity, at the requested level of detail.
@@ -396,14 +734,14 @@ std::string Server::entity_page (std::uint8_t kind, unsigned info,
         b += "<p class=\"none\">this node has nothing to say about ";
         b += escape (pd->title);
         b += "</p>\n";
-        return page (pd->title, nav, b);
+        return page (title, nav, b);
     }
 
     nice::ParamDefs defs = nice::params_for (kind);
     std::vector<std::vector<nice::NiceReply *>> groups = replies.sorted (req);
     if (groups.empty ()) {
         b += "<p class=\"none\">none</p>\n";
-        return page (pd->title, nav, b);
+        return page (title, nav, b);
     }
 
     // An entity with nothing to report is noise: a read of characteristics
@@ -451,6 +789,9 @@ std::string Server::entity_page (std::uint8_t kind, unsigned info,
         return false;
     };
 
+    // One card per entity, its state as a badge in the corner.
+    const bool counters = info == nice::info_counters;
+    b += "<div class=\"grid\">\n";
     for (const auto &group : groups) {
         for (const nice::NiceReply *rep : group) {
             if (!rep) continue;
@@ -459,14 +800,20 @@ std::string Server::entity_page (std::uint8_t kind, unsigned info,
                 ++hidden;
                 if (!all) continue;
             }
-            b += "<h2 class=\"entity\">";
-            b += escape (rep->entity.str ());
-            b += "</h2>\n";
+            b += "<section class=\"card\"><div class=\"card-head\">"
+                 "<h2 class=\"entity\">";
+            b += entity_title (rep->entity.str ());
+            b += "</h2>";
+            std::string state = value_of (lines, "State");
+            if (!state.empty ()) b += badge (state);
+            std::string sub = value_of (lines, "Substate");
+            if (!sub.empty ()) b += badge (sub);
+            b += "</div>\n";
             if (lines.empty ()) {
-                b += "<p class=\"none\">no parameters</p>\n";
+                b += "<p class=\"none\">no parameters</p></section>\n";
                 continue;
             }
-            b += "<table>\n";
+            b += counters ? "<table class=\"counters\">\n" : "<table>\n";
             for (const std::string &line : lines) {
                 auto [k, v] = split_param (line);
                 b += "<tr><th>";
@@ -475,9 +822,10 @@ std::string Server::entity_page (std::uint8_t kind, unsigned info,
                 b += breaks (escape (v));
                 b += "</td></tr>\n";
             }
-            b += "</table>\n";
+            b += "</table></section>\n";
         }
     }
+    b += "</div>\n";
 
     // The link back to this same page with the other setting of "all".
     auto same_page = [&] (bool want_all) {
@@ -496,21 +844,21 @@ std::string Server::entity_page (std::uint8_t kind, unsigned info,
     };
 
     if (hidden && !all) {
-        b += "<p class=\"none\">";
+        b += "<div class=\"note\"><p class=\"none\">";
         b += std::to_string (hidden);
         b += hidden == 1 ? " entry with nothing to report is not shown"
                          : " entries with nothing to report are not shown";
-        b += "</p>\n<p><a class=\"button\" href=\"";
+        b += "</p><a class=\"button\" href=\"";
         b += same_page (true);
-        b += "\">Show all</a></p>\n";
+        b += "\">Show all</a></div>\n";
     } else if (hidden && all) {
         // Showing them all, so offer the way back -- but only when there
         // is something to hide, or the button would do nothing.
-        b += "<p><a class=\"button\" href=\"";
+        b += "<div class=\"note\"><a class=\"button\" href=\"";
         b += same_page (false);
-        b += "\">Hide empty entries</a></p>\n";
+        b += "\">Hide empty entries</a></div>\n";
     }
-    return page (pd->title, nav, b);
+    return page (title, nav, b);
 }
 
 }   // namespace decnet::http
