@@ -5,15 +5,20 @@
 #include "decnet/common/logging.h"
 #include "decnet/common/work.h"
 #include "decnet/config.h"
+#include "decnet/dap/fal_users.h"
 #include "decnet/nice/nml.h"
 #include "decnet/nice/packets.h"
 #include "decnet/node.h"
 #include "decnet/routing/lan.h"
 #include "decnet/routing/routing.h"
+#include "decnet/session/session.h"
 
+#include <algorithm>
 #include <cerrno>
 #include <cstring>
+#include <filesystem>
 #include <future>
+#include <system_error>
 
 #ifndef _WIN32
 #include <arpa/inet.h>
@@ -215,6 +220,14 @@ table.status th { width: auto; }
   td, th { padding: 7px 12px; }
   .seg { margin-left: 0; }
 }
+.card.wide { grid-column: 1 / -1; }
+.card.wide > table:not(.list) th { width: 200px; }
+table.list thead th { font-size: 11px; font-weight: 650; text-transform: uppercase;
+                      letter-spacing: .7px; background: var(--head); width: auto; }
+table.list td { white-space: nowrap; }
+table.list td:first-child { font-weight: 600; }
+table.list td .none { font-family: var(--sans); font-size: 12.5px; }
+table.list td.dir { white-space: normal; }
 footer { text-align: center; color: var(--muted); font-size: 12px;
          padding: 0 0 28px; }
 )";
@@ -302,6 +315,9 @@ std::string header (const std::string &brand, const std::string &addr,
         h += d.title;
         h += "</a>";
     }
+    h += "<a href=\"/files\"";
+    if (active && std::strcmp (active, "files") == 0) h += " class=\"on\"";
+    h += ">Files</a>";
     h += "</nav></header>\n";
     return h;
 }
@@ -410,6 +426,147 @@ std::string value_of (const std::vector<std::string> &lines,
         if (k == name) return v;
     }
     return {};
+}
+
+// ------------------------------------------------------- file access
+
+// A FAL object from the configuration, and what its arguments say.  The
+// arguments are dnfal's; see tools/dnfal.cc.
+struct FalSetup {
+    const ObjectConfig *object = nullptr;
+    std::string root;
+    std::string users;              // the users file, if any
+    bool        rw = false, trace = false;
+    unsigned    ostype = 7, filesys = 3;
+};
+
+bool is_fal (const ObjectConfig &o)
+{
+    std::string name = o.name;
+    for (char &c : name) c = static_cast<char> (std::toupper (static_cast<unsigned char> (c)));
+    std::string base = std::filesystem::path (o.file).filename ().string ();
+    return o.number == 17 || name == "FAL" || base == "dnfal";
+}
+
+FalSetup fal_setup (const ObjectConfig &o)
+{
+    FalSetup f;
+    f.object = &o;
+    for (const std::string &a : o.arguments) {
+        if (a == "rw")                       f.rw = true;
+        else if (a == "trace")               f.trace = true;
+        else if (a.rfind ("users=", 0) == 0) f.users = a.substr (6);
+        else if (a.rfind ("ostype=", 0) == 0) {
+            try { f.ostype = static_cast<unsigned> (std::stoul (a.substr (7))); }
+            catch (...) {}
+        } else if (a.rfind ("filesys=", 0) == 0) {
+            try { f.filesys = static_cast<unsigned> (std::stoul (a.substr (8))); }
+            catch (...) {}
+        } else if (f.root.empty ())          f.root = a;
+    }
+    return f;
+}
+
+// Is the users file somewhere a FAL user could read it?  The root, or any
+// directory below it that the file gives someone, contains it.  Only the
+// root is checked when the file cannot be read.
+bool users_file_exposed (const FalSetup &f)
+{
+    namespace fs = std::filesystem;
+    if (f.users.empty () || f.root.empty ()) return false;
+    std::error_code ec;
+    fs::path file = fs::weakly_canonical (f.users, ec);
+    if (ec) return false;
+    auto under = [&] (const std::string &dir) {
+        std::error_code e;
+        fs::path d = fs::weakly_canonical (dir, e);
+        if (e) return false;
+        auto [a, b] = std::mismatch (d.begin (), d.end (), file.begin (),
+                                     file.end ());
+        return a == d.end ();
+    };
+    if (under (f.root)) return true;
+    try {
+        // Named, not a temporary: a range-for over a member of a temporary
+        // would outlive it.
+        const dap::FalUsers users = dap::FalUsers::load (f.users, f.root);
+        for (const dap::FalUser &u : users.users ())
+            if (under (u.root)) return true;
+    } catch (...) {}
+    return false;
+}
+
+// DAP's operating and file system type codes, the ones worth naming.
+std::string os_name (unsigned t)
+{
+    static const char *const names[] = {
+        nullptr, "RT-11", "RSTS/E", "RSX-11S", "RSX-11M", "RSX-11D", "IAS",
+        "VAX/VMS", "TOPS-20", "TOPS-10", "RTS-8", "OS-8", "RSX-11M-PLUS",
+        "COPOS/11", "P/OS", "VAXELN", "CP/M", "MS-DOS", "ULTRIX-32",
+        "ULTRIX-11" };
+    if (t < std::size (names) && names[t]) return names[t];
+    return "type " + std::to_string (t);
+}
+
+std::string fs_name (unsigned t)
+{
+    static const char *const names[] = {
+        nullptr, "RMS-11", "RMS-20", "RMS-32", "FCS-11", "RT-11", "none",
+        "TOPS-20", "TOPS-10", "OS-8" };
+    if (t < std::size (names) && names[t]) return names[t];
+    return "type " + std::to_string (t);
+}
+
+// How much a directory holds: files and bytes, everything below it.  The
+// page is built on the node thread, so the walk stops after a few
+// thousand entries rather than hold the node up; capped says it did.
+struct DirStats {
+    bool          exists = false;
+    std::uint64_t files = 0, bytes = 0;
+    bool          capped = false;
+};
+
+DirStats dir_stats (const std::string &path)
+{
+    namespace fs = std::filesystem;
+    DirStats d;
+    std::error_code ec;
+    if (path.empty () || !fs::is_directory (path, ec)) return d;
+    d.exists = true;
+    unsigned seen = 0;
+    fs::recursive_directory_iterator it (
+        path, fs::directory_options::skip_permission_denied, ec), end;
+    for (; !ec && it != end; it.increment (ec)) {
+        if (++seen > 5000) { d.capped = true; break; }
+        std::error_code e2;
+        if (it->is_regular_file (e2)) {
+            ++d.files;
+            d.bytes += it->file_size (e2);
+        }
+    }
+    return d;
+}
+
+std::string human_size (std::uint64_t n)
+{
+    static const char *const units[] = { "bytes", "KB", "MB", "GB", "TB" };
+    double v = static_cast<double> (n);
+    unsigned u = 0;
+    while (v >= 1024.0 && u + 1 < std::size (units)) { v /= 1024.0; ++u; }
+    char buf[32];
+    if (u == 0) std::snprintf (buf, sizeof buf, "%llu bytes",
+                               static_cast<unsigned long long> (n));
+    else        std::snprintf (buf, sizeof buf, "%.1f %s", v, units[u]);
+    return buf;
+}
+
+std::string stats_text (const DirStats &d)
+{
+    if (!d.exists) return "not there";
+    std::string t = std::to_string (d.files) + (d.files == 1 ? " file, " : " files, ")
+                  + human_size (d.bytes);
+    if (d.capped) t += " (at least)";
+    return t;
 }
 
 }   // namespace
@@ -581,6 +738,10 @@ Response Server::serve (const Request &req)
     for (const InfoDef &i : infos)
         if (want == i.slug) info = i.code;
 
+    if (path == "files") {
+        r.body = files_page ();
+        return r;
+    }
     for (const PageDef &pd : pages) {
         if (path != pd.slug) continue;
         r.body = entity_page (pd.kind, info, !req.param ("all").empty ());
@@ -681,6 +842,8 @@ std::string Server::index_page () const
         b += blurbs[i++];
         b += "</span></a>\n";
     }
+    b += "<a class=\"tile\" href=\"/files\"><b>Files</b><span>Shared "
+         "directories and who may use them</span></a>\n";
     b += "</div>\n";
     return page (node_ ? node_->name () + " \xc2\xb7 Overview" : "DECnet",
                  site_head (node_, ""), b);
@@ -859,6 +1022,158 @@ std::string Server::entity_page (std::uint8_t kind, unsigned info,
         b += "\">Hide empty entries</a></div>\n";
     }
     return page (title, nav, b);
+}
+
+std::string Server::files_page () const
+{
+    const std::string head = site_head (node_, "files");
+    const std::string title = (node_ ? node_->name () + " \xc2\xb7 " : std::string ())
+                            + "Files";
+    std::string b = "<div class=\"toolbar\"><h1>File access</h1></div>\n";
+    if (!node_) return page (title, head, b + "<p class=\"none\">no node</p>");
+
+    std::vector<FalSetup> fals;
+    for (const ObjectConfig &o : node_->config ().objects ())
+        if (is_fal (o)) fals.push_back (fal_setup (o));
+
+    if (fals.empty ()) {
+        b += "<div class=\"card\"><p class=\"none\">This node shares no "
+             "files.  An <code>object</code> line for <code>dnfal</code>, "
+             "object 17, makes it a file server: see the README, "
+             "\"File access\".</p></div>\n";
+        return page (title, head, b);
+    }
+
+    auto row = [] (std::string &t, const std::string &k, const std::string &v) {
+        t += "<tr><th>";
+        t += escape (k);
+        t += "</th><td>";
+        t += v;                         // already HTML
+        t += "</td></tr>\n";
+    };
+
+    b += "<div class=\"grid\">\n";
+    for (const FalSetup &f : fals) {
+        DirStats root = dir_stats (f.root);
+        std::string object = f.object->number
+                           ? std::to_string (f.object->number) : std::string ();
+        if (!f.object->name.empty ())
+            object += (object.empty () ? "" : " ") + f.object->name;
+
+        b += "<section class=\"card wide\"><div class=\"card-head\"><h2 class=\"entity\">"
+             "<span class=\"kind\">Object</span>";
+        b += escape (object);
+        b += "</h2>";
+        if (f.root.empty ())  b += "<span class=\"badge bad\">No directory</span>";
+        else if (!root.exists) b += "<span class=\"badge bad\">Directory missing</span>";
+        else                   b += "<span class=\"badge ok\">Serving</span>";
+        b += "</div>\n<table>\n";
+        row (b, "Program", escape (f.object->file));
+        row (b, "Directory", f.root.empty () ? std::string ("<span class=\"none\">none given</span>")
+                                             : escape (f.root));
+        row (b, "Holds", escape (stats_text (root)));
+        std::string access;
+        if (!f.users.empty ())
+            access = "<span class=\"badge warn\">Users file</span> each user as listed below";
+        else if (f.rw)
+            access = "<span class=\"badge warn\">Anyone, read and write</span>";
+        else
+            access = "<span class=\"badge ok\">Anyone, read only</span>";
+        row (b, "Access", access);
+        if (!f.users.empty ()) {
+            std::string v = escape (f.users);
+            if (users_file_exposed (f))
+                v += " <span class=\"badge bad\">inside a shared directory</span>"
+                     "<br><span class=\"none\">a user who may read there can "
+                     "copy it, password hashes and all</span>";
+            row (b, "Users file", v);
+        }
+        row (b, "Appears as", escape (os_name (f.ostype) + ", " + fs_name (f.filesys)));
+        if (f.trace) row (b, "Trace", "on: every DAP message is logged");
+        b += "</table></section>\n";
+
+        if (f.users.empty ()) continue;
+
+        // Who may connect.  Never the hashes: only whether there is one.
+        b += "<section class=\"card wide\"><div class=\"card-head\"><h2 class=\"entity\">"
+             "<span class=\"kind\">Users file</span>Who may connect</h2></div>\n";
+        try {
+            dap::FalUsers users = dap::FalUsers::load (f.users, f.root);
+            if (users.users ().empty () && users.proxies ().empty ()) {
+                b += "<p class=\"none\">no entries: every connect is refused</p>";
+            } else {
+                b += "<table class=\"list\"><thead><tr><th>User</th><th>Access</th>"
+                     "<th>Directory</th><th>Holds</th><th>Password</th></tr></thead>"
+                     "<tbody>\n";
+                for (const dap::FalUser &u : users.users ()) {
+                    std::string dir = u.root;
+                    std::string base = f.root;
+                    if (!base.empty () && base.back () != '/') base += '/';
+                    if (!base.empty () && dir.rfind (base, 0) == 0)
+                        dir = dir.substr (base.size ());
+                    if (dir.empty ()) dir = ".";
+                    b += "<tr><td>";
+                    b += escape (u.name == "*" ? std::string ("* (no user name)") : u.name);
+                    b += "</td><td>";
+                    b += u.writable ? "<span class=\"badge warn\">read and write</span>"
+                                    : "<span class=\"badge ok\">read only</span>";
+                    b += "</td><td class=\"dir\">";
+                    b += escape (dir);
+                    b += "</td><td><span class=\"none\">";
+                    b += escape (stats_text (dir_stats (u.root)));
+                    b += "</span></td><td>";
+                    b += u.hash == "-" ? "<span class=\"none\">no password</span>"
+                                       : "password";
+                    b += "</td></tr>\n";
+                }
+                for (const auto &p : users.proxies ()) {
+                    b += "<tr><td>";
+                    b += escape (p.node + "::" + p.user);
+                    b += "</td><td><span class=\"badge\">proxy</span></td><td class=\"dir\">";
+                    b += p.local == "-" ? std::string ("<span class=\"none\">refused</span>")
+                                        : "as " + escape (p.local);
+                    b += "</td><td></td><td><span class=\"none\">none needed</span></td></tr>\n";
+                }
+                b += "</tbody></table>";
+            }
+        } catch (const std::exception &e) {
+            b += "<p class=\"none\">cannot read it: ";
+            b += escape (e.what ());
+            b += "</p>";
+        }
+        b += "</section>\n";
+    }
+    b += "</div>\n";
+
+    // The conversations with a file server right now.
+    std::vector<session::Session::LinkInfo> now;
+    if (session::Session *ses = node_->session ())
+        for (const auto &l : ses->links ()) {
+            std::string dn = l.destination.name;
+            for (char &c : dn) c = static_cast<char> (std::toupper (static_cast<unsigned char> (c)));
+            if (l.destination.num == 17 || dn == "FAL") now.push_back (l);
+        }
+    b += "<div class=\"section\">Connected now</div>\n<div class=\"card\">";
+    if (now.empty ()) {
+        b += "<p class=\"none\">nobody</p>";
+    } else {
+        b += "<table class=\"list\"><thead><tr><th>From</th><th>User</th>"
+             "<th>State</th></tr></thead><tbody>\n";
+        for (const auto &l : now) {
+            b += "<tr><td>";
+            b += escape (node_->nicenode (l.remote).str ());
+            b += "</td><td>";
+            b += l.user.empty () ? std::string ("<span class=\"none\">no user name</span>")
+                                 : escape (l.user);
+            if (l.proxy) b += " <span class=\"badge\">proxy</span>";
+            b += "</td><td>";
+            b += l.running ? badge ("Running") : badge ("Starting");
+            b += "</td></tr>\n";
+        }
+        b += "</tbody></table>";
+    }
+    b += "</div>\n";
+    return page (title, head, b);
 }
 
 }   // namespace decnet::http

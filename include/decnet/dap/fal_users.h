@@ -73,11 +73,17 @@ public:
 
     std::size_t size () const noexcept { return users_.size (); }
 
-private:
     struct Proxy {
         std::string node, user;     // upper case; "*" for any
         std::string local;          // user entry; "-" to refuse
     };
+
+    // What the file says, for the monitoring pages.  The hashes are there
+    // too: whoever shows these must not show those.
+    const std::vector<FalUser> &users () const noexcept { return users_; }
+    const std::vector<Proxy> &proxies () const noexcept { return proxies_; }
+
+private:
 
     const FalUser *find (const std::string &name) const;
 

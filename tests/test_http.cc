@@ -13,6 +13,8 @@
 
 #include <chrono>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <thread>
 #include <string>
 
@@ -377,4 +379,95 @@ DN_TEST (http, a_page_is_served_over_a_real_connection)
 
     s.stop ();
     n.stop ();
+}
+
+// ------------------------------------------------------------- file access
+
+namespace {
+
+// A directory for a FAL to serve, removed afterwards.
+struct ShareDir {
+    std::filesystem::path root;
+
+    ShareDir ()
+    {
+        root = std::filesystem::temp_directory_path ()
+             / ("dnhttp-" + std::to_string (::getpid ()) + "-"
+                + std::to_string (std::chrono::steady_clock::now ()
+                                      .time_since_epoch ().count ()));
+        std::filesystem::create_directories (root / "pub");
+        std::filesystem::create_directories (root / "richard");
+        std::ofstream (root / "pub" / "readme.txt") << "hello\n";
+        std::ofstream (root / "richard" / "a.txt") << "abc\n";
+        std::ofstream (root / "richard" / "b.txt") << "defg\n";
+    }
+    ~ShareDir ()
+    {
+        std::error_code ec;
+        std::filesystem::remove_all (root, ec);
+    }
+};
+
+}   // namespace
+
+DN_TEST (http, files_page_says_when_nothing_is_shared)
+{
+    Config c = Config::from_string (conf);
+    Node n (c);
+    Server s (&n, 0);
+    Response r = s.serve (get ("/files"));
+    DN_ASSERT_EQ (r.status, 200);
+    DN_ASSERT (contains (r.body, "shares no files"));
+    // And the tab is there on every page.
+    DN_ASSERT (contains (s.serve (get ("/")).body, "href=\"/files\""));
+}
+
+DN_TEST (http, files_page_shows_the_share_and_who_may_use_it)
+{
+    ShareDir d;
+    const std::string hash = "$6$saltsalt$NOTAREALHASHbutLooksLikeOne";
+    {
+        std::ofstream u (d.root / "fal.users");
+        u << "RICHARD  " << hash << "  richard  rw\n"
+          << "*        -           pub      ro\n"
+          << "proxy    VMSNOD::SYSTEM  -\n";
+    }
+    Config c = Config::from_string (
+        std::string (conf)
+        + "object --number 17 --name FAL --file /usr/local/bin/dnfal"
+          " --argument " + d.root.string ()
+        + " --argument users=" + (d.root / "fal.users").string () + "\n");
+    Node n (c);
+    Server s (&n, 0);
+    Response r = s.serve (get ("/files"));
+    DN_ASSERT_EQ (r.status, 200);
+    DN_ASSERT (contains (r.body, "17 FAL"));
+    DN_ASSERT (contains (r.body, "Serving"));
+    DN_ASSERT (contains (r.body, d.root.string ()));
+    DN_ASSERT (contains (r.body, "RICHARD"));
+    DN_ASSERT (contains (r.body, "read and write"));
+    DN_ASSERT (contains (r.body, "read only"));
+    DN_ASSERT (contains (r.body, "VMSNOD::SYSTEM"));
+    DN_ASSERT (contains (r.body, "4 files"));      // the tree, users file too
+    DN_ASSERT (contains (r.body, "2 files"));      // RICHARD's directory
+    DN_ASSERT (contains (r.body, "nobody"));       // connected now
+    // Never the password hash, nor any file name.
+    DN_ASSERT (!contains (r.body, "NOTAREALHASH"));
+    DN_ASSERT (!contains (r.body, "readme.txt"));
+    DN_ASSERT (!contains (r.body, "<script"));
+    // The users file is inside what anyone may read: that is worth saying.
+    DN_ASSERT (contains (r.body, "inside a shared directory"));
+}
+
+DN_TEST (http, files_page_reports_a_missing_directory)
+{
+    Config c = Config::from_string (
+        std::string (conf)
+        + "object --number 17 --name FAL --file dnfal"
+          " --argument /nonexistent/dnhttp-share --argument rw\n");
+    Node n (c);
+    Server s (&n, 0);
+    Response r = s.serve (get ("/files"));
+    DN_ASSERT (contains (r.body, "Directory missing"));
+    DN_ASSERT (contains (r.body, "Anyone, read and write"));
 }

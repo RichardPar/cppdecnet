@@ -171,6 +171,22 @@ const Object *Session::find_object (const std::string &name) const
     return it == by_name_.end () ? nullptr : &objects_[it->second];
 }
 
+std::vector<Session::LinkInfo> Session::links () const
+{
+    std::vector<LinkInfo> out;
+    for (const auto &[c, live] : live_) {
+        if (!live.conn) continue;
+        LinkInfo i;
+        i.remote      = live.conn->remote ();
+        i.destination = live.conn->destination ();
+        i.user        = live.conn->username ();
+        i.proxy       = live.conn->proxy ();
+        i.running     = live.conn->running ();
+        out.push_back (std::move (i));
+    }
+    return out;
+}
+
 Session::Live *Session::find_live (nsp::Connection &c)
 {
     auto it = live_.find (&c);

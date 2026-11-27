@@ -71,6 +71,7 @@ private:
     // Page builders.  Each returns the body of a page.
     std::string index_page () const;
     std::string entity_page (std::uint8_t kind, unsigned info, bool all) const;
+    std::string files_page () const;
 
     Node             *node_;
     unsigned          port_;

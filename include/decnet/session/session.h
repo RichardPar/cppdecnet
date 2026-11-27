@@ -149,6 +149,16 @@ public:
 
     void dispatch (Work &) override {}
 
+    // One conversation in progress, for the monitoring pages.
+    struct LinkInfo {
+        Nodeid      remote;
+        EndUser     destination;        // the object asked for
+        std::string user;               // access control user, if any
+        bool        proxy = false;
+        bool        running = false;
+    };
+    std::vector<LinkInfo> links () const;
+
 private:
     // Everything known about one live conversation.
     struct Live {
