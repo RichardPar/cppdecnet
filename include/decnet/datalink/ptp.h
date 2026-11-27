@@ -119,9 +119,13 @@ protected:
     PtpCounters counters_;
     Backoff     restart_timer_ { 2.0, 120.0 };
 
-private:
+    // The receive thread.  stop_thread asks it to finish and, with wait,
+    // joins it; thread_started says whether there is one to join.
     void start_thread ();
     void stop_thread (bool wait);
+    bool thread_started () const noexcept { return thread_.joinable (); }
+
+private:
     void run ();                 // the receive thread body
 
     // Common actions for Stop and Reconnect, shared by every state.

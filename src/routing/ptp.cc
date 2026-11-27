@@ -11,10 +11,11 @@ using datalink::DlStatus;
 
 PtpCircuit::PtpCircuit (BaseRouter *parent, std::string name,
                         datalink::Datalink *dl, const CircuitConfig &config)
-    : Circuit (parent, std::move (name)), parent_ (parent)
+    : Circuit (parent, std::move (name)), parent_ (parent), dl_ (dl)
 {
     t3_ = config.t3 ? static_cast<double> (config.t3) : 60.0;
     cost_ = config.cost ? config.cost : 4;
+    wait_for_init_ = config.wait_for_init;
     port_ = dl->create_port (this);
     if (!config.verify.empty ()) {
         // A verify string means we require the neighbour to authenticate.
@@ -145,6 +146,7 @@ PtpCircuit::State PtpCircuit::restart (const char *why)
     // PtpCircuit.restart and the init_fail sites in route_ptp.py.
     if (running ()) ++counters_.cir_down;
     else if (nice_substate () == 0) ++counters_.init_fail;
+    reject_holdoff_ = false;
 
     if (running ()) down ();
     clear_neighbour ();
@@ -212,11 +214,24 @@ PtpCircuit::State PtpCircuit::ds (Work &w)
 {
     // "Datalink started": waiting for the datalink to come up.  There is
     // deliberately no timeout here; see the note at the top of the header.
+    // The one timer is the holdoff after refusing a duplicate neighbour.
+    if (dynamic_cast<Timeout *> (&w)) {
+        if (!reject_holdoff_) return nullptr;
+        reject_holdoff_ = false;
+        return restart ("duplicate neighbour");
+    }
     if (auto *s = dynamic_cast<DlStatus *> (&w)) {
         if (s->is_up ()) {
             clear_neighbour ();
             build_initmsg ();
-            dlsend (initmsg_);
+            // Normally both ends send their init at once.  A circuit that
+            // waits sends its own only once the neighbour's has passed, in
+            // ri; the t3 timer then limits the wait for it.
+            init_sent_ = false;
+            if (!wait_for_init_) {
+                dlsend (initmsg_);
+                init_sent_ = true;
+            }
             if (node ()) node ()->timers ().start (this, t3_);
             return DN_MY_STATE (PtpCircuit, ri);
         }
@@ -275,6 +290,45 @@ PtpCircuit::State PtpCircuit::ri (Work &w)
             || (!both_l2 && area != parent_->homearea ())) {
             return restart ("node id out of range", { 4, 12 },
                             events::reason::address_out_of_range);
+        }
+
+        // One neighbour per node address.  The routing init is the first
+        // time we learn who is at the other end, so this is where a second
+        // claim to an address in use is turned away: before an adjacency
+        // exists, so the neighbour that has the address is not disturbed.
+        // The routing table is keyed by address, and a second adjacency
+        // would replace the first in it.
+        std::string where;
+        if (const char *why = parent_->claim_conflict (init->srcnode, this,
+                                                       where)) {
+            std::string peer = dl_ ? dl_->peer_description () : std::string ();
+            DN_INFO ("{}: rejecting neighbour {}{}: {}{}", name_,
+                     init->srcnode.str (),
+                     peer.empty () ? std::string () : " from " + peer, why,
+                     where.empty () ? std::string () : " on " + where);
+            // The event names the node it is about, though it never became
+            // our neighbour.
+            info_.id = init->srcnode;
+            routeevent ({ 4, 16 }, events::reason::dropped);
+            ++counters_.init_fail;
+            clear_neighbour ();
+            // Hold off before restarting the datalink: a neighbour that
+            // dials again as soon as it is dropped would otherwise be
+            // refused many times a second.  ds ignores what it sends
+            // meanwhile, and the timeout brings the restart.  On a Multinet
+            // server circuit the restart closes the connection and removes
+            // the circuit; a server circuit has not sent its init, so the
+            // caller never saw us up.
+            reject_holdoff_ = true;
+            if (node ()) node ()->timers ().start (this, reject_holdoff);
+            return DN_MY_STATE (PtpCircuit, ds);
+        }
+
+        // Accepted.  A circuit waiting to hear first answers now, before
+        // any verification, as the neighbour expects our init first.
+        if (!init_sent_) {
+            dlsend (initmsg_);
+            init_sent_ = true;
         }
 
         info_.rphase  = 4;
@@ -416,6 +470,27 @@ PtpCircuit::State PtpCircuit::ru (Work &w)
 }
 
 // ------------------------------------------------------------------ misc
+
+bool PtpCircuit::claims (Nodeid id) const noexcept
+{
+    if (retired_ || !info_.id || info_.id != id) return false;
+    auto *self = const_cast<PtpCircuit *> (this);
+    return self->in_state (State (&PtpCircuit::rv, "rv")) || running ();
+}
+
+AdjacencyPtr PtpCircuit::retire ()
+{
+    AdjacencyPtr held = adj_;
+    if (running ()) {
+        ++counters_.cir_down;
+        routeevent ({ 4, 7 }, events::reason::sync_lost);  // circuit fault
+        down ();
+    }
+    retired_ = true;
+    if (node ()) node ()->timers ().stop (this);
+    clear_neighbour ();
+    return held;
+}
 
 bool PtpCircuit::check_src (Nodeid src) const noexcept
 {

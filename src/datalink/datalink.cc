@@ -7,6 +7,9 @@
 #include "decnet/datalink/multinet.h"
 #include "decnet/node.h"
 
+#include <algorithm>
+#include <set>
+
 namespace decnet::datalink {
 
 // ------------------------------------------------------------------ Port
@@ -67,7 +70,22 @@ DatalinkLayer::DatalinkLayer (Element *owner, const Config &config)
     : Element (owner)
 {
     DN_DEBUG ("initializing data link layer");
+    // Names a Multinet server must not give its circuits.
+    std::set<std::string> configured;
+    for (const CircuitConfig &c : config.circuits ())
+        configured.insert (c.name);
+
     for (const CircuitConfig &c : config.circuits ()) {
+        if (c.type == "Multinet" && is_multinet_server (c.device)) {
+            try {
+                servers_.push_back (std::make_unique<MultinetServer> (
+                    this, c, MultinetDevice::parse (c.device), configured));
+            } catch (const std::exception &e) {
+                DN_ERROR ("error initializing Multinet server {}: {}",
+                          c.name, e.what ());
+            }
+            continue;
+        }
         std::unique_ptr<Datalink> dl = create (this, c);
         if (!dl) continue;      // create() has already logged why
         Datalink *raw = dl.get ();
@@ -77,7 +95,39 @@ DatalinkLayer::DatalinkLayer (Element *owner, const Config &config)
     }
 }
 
-DatalinkLayer::~DatalinkLayer () = default;
+DatalinkLayer::~DatalinkLayer ()
+{
+    // The listening threads post work to the node; stop them first.
+    for (auto &srv : servers_) srv->stop ();
+}
+
+bool is_multinet_server (const std::string &device)
+{
+    static const std::string tail = ":server";
+    return device.size () >= tail.size ()
+        && device.compare (device.size () - tail.size (), tail.size (),
+                           tail) == 0;
+}
+
+void DatalinkLayer::add_circuit (std::unique_ptr<Datalink> dl)
+{
+    Datalink *raw = dl.get ();
+    const std::string name = raw->name ();
+    order_.push_back (raw);
+    circuits_[name] = std::move (dl);
+    DN_DEBUG ("added datalink {}", name);
+}
+
+std::unique_ptr<Datalink> DatalinkLayer::remove_circuit (const std::string &name)
+{
+    auto it = circuits_.find (name);
+    if (it == circuits_.end ()) return nullptr;
+    std::unique_ptr<Datalink> dl = std::move (it->second);
+    circuits_.erase (it);
+    std::erase (order_, dl.get ());
+    DN_DEBUG ("removed datalink {}", name);
+    return dl;
+}
 
 Datalink *DatalinkLayer::circuit (const std::string &name) const
 {
@@ -103,11 +153,16 @@ void DatalinkLayer::start ()
             DN_ERROR ("error starting datalink {}: {}", c->name (), e.what ());
         }
     }
+    for (auto &srv : servers_) {
+        srv->start ();
+        DN_DEBUG ("started Multinet server {}", srv->name ());
+    }
 }
 
 void DatalinkLayer::stop ()
 {
     DN_DEBUG ("stopping datalink layer");
+    for (auto &srv : servers_) srv->stop ();
     for (Datalink *c : order_) {
         try {
             c->close ();

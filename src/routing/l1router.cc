@@ -40,6 +40,27 @@ L1Router::L1Router (Element *parent, const Config &config)
         updates_[c] = std::make_unique<Update> (c, this, ptp_t1_, 1);
     for (LanCircuit *c : lan_order_)
         updates_[c] = std::make_unique<Update> (c, this, bc_t1_, 1);
+
+    // A router can take the circuits a Multinet server makes.
+    if (datalink::DatalinkLayer *dll = node () ? node ()->datalink () : nullptr)
+        dll->set_dynamic_owner (this);
+}
+
+void L1Router::circuit_added (PtpCircuit *c)
+{
+    auto u = std::make_unique<Update> (c, this, ptp_t1_, 1);
+    u->start ();
+    updates_[c] = std::move (u);
+}
+
+void L1Router::circuit_removed (PtpCircuit *c,
+                                std::vector<std::unique_ptr<Element>> &bury)
+{
+    if (auto it = updates_.find (c); it != updates_.end ()) {
+        it->second->stop ();
+        bury.push_back (std::move (it->second));
+        updates_.erase (it);
+    }
 }
 
 L1Router::~L1Router () = default;
@@ -401,6 +422,25 @@ L2Router::L2Router (Element *parent, const Config &config)
         area_updates_[c] = std::make_unique<Update> (c, this, ptp_t1_, 2);
     for (LanCircuit *c : lan_order_)
         area_updates_[c] = std::make_unique<Update> (c, this, bc_t1_, 2);
+}
+
+void L2Router::circuit_added (PtpCircuit *c)
+{
+    L1Router::circuit_added (c);
+    auto u = std::make_unique<Update> (c, this, ptp_t1_, 2);
+    u->start ();
+    area_updates_[c] = std::move (u);
+}
+
+void L2Router::circuit_removed (PtpCircuit *c,
+                                std::vector<std::unique_ptr<Element>> &bury)
+{
+    if (auto it = area_updates_.find (c); it != area_updates_.end ()) {
+        it->second->stop ();
+        bury.push_back (std::move (it->second));
+        area_updates_.erase (it);
+    }
+    L1Router::circuit_removed (c, bury);
 }
 
 void L2Router::start ()

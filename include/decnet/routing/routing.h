@@ -7,12 +7,16 @@
 #define DECNET_ROUTING_ROUTING_H
 
 #include "decnet/common/element.h"
+#include "decnet/common/timers.h"
+#include "decnet/datalink/datalink.h"
 #include "decnet/nice/nml.h"
 #include "decnet/routing/adjacency.h"
 #include "decnet/routing/packets.h"
 
+#include <chrono>
 #include <map>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace decnet {
@@ -26,7 +30,7 @@ namespace decnet::routing {
 class PtpCircuit;
 class LanCircuit;
 
-class BaseRouter : public Element {
+class BaseRouter : public Element, public datalink::DynamicCircuitOwner {
 public:
     BaseRouter (Element *parent, const Config &config);
     ~BaseRouter () override;
@@ -57,6 +61,20 @@ public:
 
     // Adjacency table maintenance, called by the circuits.  A router
     // overrides these to keep its routing table in step.
+    // Why node id may not become a neighbour on circuit asking, or null if
+    // it may.  A node address is used by one neighbour only: not by us, not
+    // by a neighbour already up on any circuit, and not by one another
+    // point to point circuit is still verifying.  where is set to the
+    // circuit that has it.  Node thread only.
+    const char *claim_conflict (Nodeid id, const Circuit *asking,
+                                std::string &where) const;
+
+    // Circuits made and removed while running, for a Multinet server.
+    bool add_dynamic_circuit (const CircuitConfig &c,
+                              datalink::Datalink *dl) override;
+    void retire_dynamic_circuit (const std::string &name,
+                                 std::unique_ptr<datalink::Datalink> dl) override;
+
     virtual void adj_up (const AdjacencyPtr &adj);
     virtual void adj_down (const AdjacencyPtr &adj);
     std::size_t adjacency_count () const noexcept { return adjacencies_.size (); }
@@ -115,6 +133,14 @@ protected:
     // type.
     void init_circuits (const Config &config);
 
+    // A routing circuit made or about to be removed while running.  The
+    // routers that keep per-circuit state (the update processes) add or
+    // remove it here; whatever they remove goes in bury, to be freed once
+    // nothing can still refer to it.
+    virtual void circuit_added (PtpCircuit *) {}
+    virtual void circuit_removed (PtpCircuit *,
+                                  std::vector<std::unique_ptr<Element>> &) {}
+
 public:
 
     void dispatch (Work &) override {}
@@ -153,6 +179,19 @@ protected:
     std::vector<LanCircuit *>                          lan_order_;
     std::map<std::uint16_t, AdjacencyPtr>              adjacencies_;
     bool                                               hold_circuits_ = false;
+
+private:
+    // Removed circuits, their datalinks and update processes.  Work items
+    // and timer expiries already queued hold plain pointers to them, so
+    // they are kept for a while before being freed.
+    struct Grave {
+        std::vector<std::unique_ptr<Element>>  remains;
+        std::vector<std::shared_ptr<void>>     held;    // adjacencies
+        std::chrono::steady_clock::time_point  when;
+    };
+    void reap ();
+    std::vector<Grave> graves_;
+    CallbackTimer      reaper_ { [this] { reap (); } };
 };
 
 // Routing for a Phase IV endnode.  Port of routing.EndnodeRouting.

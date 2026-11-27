@@ -104,7 +104,21 @@ public:
 
     const AdjacencyPtr &adjacency () const noexcept { return adj_; }
 
-    void dispatch (Work &w) override { StateMachine<PtpCircuit>::dispatch (w); }
+    void dispatch (Work &w) override
+    {
+        if (retired_) return;           // removed; this is stale work
+        StateMachine<PtpCircuit>::dispatch (w);
+    }
+
+    // True if this circuit holds id as its neighbour: running with it, or
+    // past its routing init and verifying.  See BaseRouter::claim_conflict.
+    bool claims (Nodeid id) const noexcept;
+
+    // The circuit is being removed (its Multinet connection has ended):
+    // take the adjacency down, stop the timers and ignore everything from
+    // now on.  Returns the adjacency it held, if any, for the caller to
+    // keep alive while timer expiries may still refer to it.
+    AdjacencyPtr retire ();
     bool validate (Work &w);
 
     // ------------------------------------------------------------- states
@@ -172,7 +186,15 @@ private:
     RoutingPacketBase                 *packet_ = nullptr;
 
     BaseRouter         *parent_;
+    datalink::Datalink *dl_;
     datalink::Port     *port_;
+    bool                retired_ = false;
+    bool                wait_for_init_ = false; // see CircuitConfig
+    bool                init_sent_ = false;     // on this datalink session
+    // After refusing a neighbour whose address is in use, ds waits this
+    // long before restarting the datalink.
+    static constexpr double reject_holdoff = 10.0;
+    bool                reject_holdoff_ = false;
     double              t3_;
     Bytes               verify_;        // the value we must send, if asked
     Bytes               expect_verify_; // the value we require, if we asked

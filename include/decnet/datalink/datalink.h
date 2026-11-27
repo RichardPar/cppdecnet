@@ -27,6 +27,7 @@ namespace datalink {
 
 class Datalink;
 class Port;
+class MultinetServer;
 
 // ------------------------------------------------------------ work items
 
@@ -176,6 +177,10 @@ public:
     // number for the DDCMP variants.  Port of nice_protocol.
     virtual unsigned nice_protocol () const noexcept { return 0; }
 
+    // Where the other end of this link is, for log messages: "host:port"
+    // for a connection, empty when there is nothing useful to say.
+    virtual std::string peer_description () const { return {}; }
+
     // Answer a line read for this circuit.  Port of
     // Datalink.nice_read_line.
     virtual void nice_read_line (const nice::NiceRequest &req,
@@ -188,6 +193,24 @@ protected:
 // --------------------------------------------------------- DatalinkLayer
 //
 // Container for the circuits.  Port of datalink.DatalinkLayer.
+// The routing layer side of a Multinet server: makes and removes the
+// routing circuit for each connection.  BaseRouter implements it.
+class DynamicCircuitOwner {
+public:
+    virtual ~DynamicCircuitOwner () = default;
+
+    // Make and start a routing circuit over dl, configured as c.  False if
+    // that could not be done; dl is then still the caller's to dispose of.
+    virtual bool add_dynamic_circuit (const CircuitConfig &c,
+                                      Datalink *dl) = 0;
+
+    // Stop and remove the routing circuit named name, and take dl, its
+    // datalink, which is already out of the datalink layer.  Both are freed
+    // once no work item can still refer to them.
+    virtual void retire_dynamic_circuit (const std::string &name,
+                                         std::unique_ptr<Datalink> dl) = 0;
+};
+
 class DatalinkLayer : public Element {
 public:
     DatalinkLayer (Element *owner, const Config &config);
@@ -214,10 +237,30 @@ public:
     static std::unique_ptr<Datalink> create (Element *owner,
                                              const CircuitConfig &c);
 
+    // Circuits made while running: a Multinet server adds one for each
+    // connection it accepts and takes it out again when the connection
+    // ends.  Node thread only.  remove_circuit returns the datalink, which
+    // the caller must keep alive until no work item can still refer to it.
+    void add_circuit (std::unique_ptr<Datalink> dl);
+    std::unique_ptr<Datalink> remove_circuit (const std::string &name);
+
+    // Who makes routing circuits for a Multinet server's connections: the
+    // routing layer, which registers itself.  Null until then, and a
+    // server refuses connections while it is.
+    void set_dynamic_owner (DynamicCircuitOwner *o) noexcept { dyn_owner_ = o; }
+    DynamicCircuitOwner *dynamic_owner () const noexcept { return dyn_owner_; }
+
 private:
     std::map<std::string, std::unique_ptr<Datalink>> circuits_;
     std::vector<Datalink *>                          order_;
+    // Multinet listeners in server mode.  Not circuits themselves.
+    std::vector<std::unique_ptr<MultinetServer>>     servers_;
+    DynamicCircuitOwner                             *dyn_owner_ = nullptr;
 };
+
+// True for a Multinet device string in server mode (host:port:server),
+// which the datalink layer makes a MultinetServer for, not a circuit.
+bool is_multinet_server (const std::string &device);
 
 }   // namespace datalink
 }   // namespace decnet

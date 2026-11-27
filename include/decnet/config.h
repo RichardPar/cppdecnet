@@ -46,6 +46,15 @@ struct CircuitConfig {
     unsigned    maxrouters = 0;
     std::string console;
     std::string verify;
+    // Multinet server mode (host:port:server) only: how many connections
+    // may be live at once (--max), and which hosts may connect (--allow,
+    // comma separated, may be repeated; empty means any).
+    unsigned    max_connections = 16;
+    std::vector<std::string> allow;
+    // Set on the circuits a Multinet server makes, not from the config:
+    // send our routing init only once the neighbour's has been accepted,
+    // so a neighbour that is refused never sees us as up.
+    bool        wait_for_init = false;
     ConfigLine  raw;
 };
 

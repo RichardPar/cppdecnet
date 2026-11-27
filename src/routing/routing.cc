@@ -86,7 +86,98 @@ void BaseRouter::init_circuits (const Config &config)
     }
 }
 
-BaseRouter::~BaseRouter () = default;
+BaseRouter::~BaseRouter ()
+{
+    if (node ()) {
+        node ()->timers ().stop (&reaper_);
+        if (datalink::DatalinkLayer *dll = node ()->datalink ())
+            if (dll->dynamic_owner () == this) dll->set_dynamic_owner (nullptr);
+    }
+}
+
+// ------------------------------------------------------ dynamic circuits
+
+const char *BaseRouter::claim_conflict (Nodeid id, const Circuit *asking,
+                                        std::string &where) const
+{
+    where.clear ();
+    if (id == nodeid_) return "it is this node's own address";
+    // Up on some circuit, point to point or LAN: adj_up has registered it.
+    // One left over on the asking circuit itself is that circuit's own
+    // business, not a second claim.
+    if (AdjacencyPtr a = find_adjacency (id); a && a->circuit () != asking) {
+        if (a->circuit ()) where = a->circuit ()->name ();
+        return "it is already a neighbour";
+    }
+    // Past its routing init but not yet up: verifying.
+    for (const PtpCircuit *c : circuit_order_) {
+        if (c != asking && c->claims (id)) {
+            where = c->name ();
+            return "another circuit is initializing with it";
+        }
+    }
+    return nullptr;
+}
+
+bool BaseRouter::add_dynamic_circuit (const CircuitConfig &c,
+                                      datalink::Datalink *dl)
+{
+    if (!dl || dynamic_cast<datalink::BcDatalink *> (dl)) return false;
+    if (circuits_.count (c.name) || lan_circuits_.count (c.name)) {
+        DN_ERROR ("routing circuit {} already exists", c.name);
+        return false;
+    }
+    try {
+        auto pc = std::make_unique<PtpCircuit> (this, c.name, dl, c);
+        PtpCircuit *raw = pc.get ();
+        circuits_[c.name] = std::move (pc);
+        circuit_order_.push_back (raw);
+        circuit_added (raw);
+        raw->start ();
+        DN_DEBUG ("added routing circuit {}", c.name);
+        return true;
+    } catch (const std::exception &e) {
+        DN_ERROR ("error adding routing circuit {}: {}", c.name, e.what ());
+        if (auto it = circuits_.find (c.name); it != circuits_.end ()) {
+            std::erase (circuit_order_, it->second.get ());
+            circuits_.erase (it);
+        }
+        return false;
+    }
+}
+
+void BaseRouter::retire_dynamic_circuit (const std::string &name,
+                                         std::unique_ptr<datalink::Datalink> dl)
+{
+    Grave g;
+    g.when = std::chrono::steady_clock::now ();
+    if (auto it = circuits_.find (name); it != circuits_.end ()) {
+        PtpCircuit *c = it->second.get ();
+        // Takes any adjacency down, so the routes through it are recomputed
+        // now, and makes the circuit ignore whatever is still queued for it.
+        if (AdjacencyPtr adj = c->retire ()) g.held.push_back (std::move (adj));
+        circuit_removed (c, g.remains);
+        std::erase (circuit_order_, c);
+        g.remains.push_back (std::move (it->second));
+        circuits_.erase (it);
+        DN_DEBUG ("removed routing circuit {}", name);
+    }
+    if (dl) g.remains.push_back (std::move (dl));
+    graves_.push_back (std::move (g));
+    if (node () && !reaper_.linked ())
+        node ()->timers ().start (&reaper_, 5.0);
+}
+
+void BaseRouter::reap ()
+{
+    // Anything retired a few seconds ago: every work item that could
+    // name it was queued before it was retired, and has long been run.
+    const auto cutoff = std::chrono::steady_clock::now ()
+                      - std::chrono::seconds (4);
+    std::erase_if (graves_, [&] (const Grave &g) { return g.when <= cutoff; });
+    if (!graves_.empty () && node ())
+        node ()->timers ().start (&reaper_, 5.0);
+}
 
 namespace {
 
@@ -191,6 +282,15 @@ PtpCircuit *BaseRouter::circuit (const std::string &name) const
 
 void BaseRouter::adj_up (const AdjacencyPtr &adj)
 {
+    // Point to point circuits refuse a second neighbour with the same
+    // address (claim_conflict); a LAN does not ask, so say when one
+    // replaces another.
+    if (AdjacencyPtr old = find_adjacency (adj->nodeid ());
+        old && old != adj && old->circuit () != adj->circuit ())
+        DN_WARN ("adjacency {} on {} replaces the one on {}",
+                 adj->nodeid ().str (),
+                 adj->circuit () ? adj->circuit ()->name () : std::string ("?"),
+                 old->circuit () ? old->circuit ()->name () : std::string ("?"));
     adjacencies_[adj->nodeid ().value ()] = adj;
     DN_DEBUG ("adjacency up: {}", adj->nodeid ().str ());
 }
@@ -212,6 +312,13 @@ AdjacencyPtr BaseRouter::find_adjacency (Nodeid id) const
 EndnodeRouting::EndnodeRouting (Element *parent, const Config &config)
     : BaseRouter (parent, config)
 {
+    // A Multinet server makes a circuit per connection, and an endnode may
+    // only ever have one.
+    for (const CircuitConfig &c : config.circuits ())
+        if (c.type == "Multinet" && datalink::is_multinet_server (c.device))
+            throw std::invalid_argument (
+                "circuit " + c.name + ": Multinet server mode needs a "
+                "router, not an end node");
     init_circuits (config);
     // The architecture allows an endnode exactly one circuit, of either
     // kind.
