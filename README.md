@@ -28,7 +28,8 @@ gateway between a local Ethernet segment and the rest of the network.
 
 Implemented:
 
-- Data links: Multinet (TCP and UDP), Ethernet (UDP, TAP, pcap), DDCMP
+- Data links: Multinet (TCP and UDP, and a server mode that takes any
+  number of neighbours on one port), Ethernet (UDP, TAP, pcap), DDCMP
   (UDP, TCP, telnet, serial)
 - Routing: endnode, level 1 router, level 2 router
 - NSP: logical links, segmentation, retransmission, flow control,
@@ -42,7 +43,7 @@ Implemented:
 - MOP: system id, counters, loopback, on 60-02 as VMS and RSX expect
 - Event logging: filters, console/file/monitor sinks, remote sinks
 - Network management: NICE listener (object 19), read only
-- Monitoring pages over HTTP
+- Monitoring pages over HTTP, including a view of file sharing
 - PyDECnet's JSON API over a Unix socket: the session API, for programs
   that open or accept logical links, and the mop API, for system ids,
   counters and loop tests from a program
@@ -146,13 +147,33 @@ circuit mul Multinet :7100:server --cost 3 --max 8 --allow 192.0.2.10,192.0.2.11
 ```
 
 Each caller dials it with `<this host>:7100:connect`, as it would a
-`:listen` end. Each connection gets a circuit of its own, named from the
-server line (`MUL-0`, `MUL-1` and so on, skipping names already in use),
-which goes away when the connection ends. The circuit options (`--cost`,
-`--t3`, `--verify`) apply to every circuit made. `--max` (default 16)
-limits how many are open at once. `--allow` (comma separated, may be
-repeated) limits who may connect; without it anyone may. A host before
-the port binds to that address only.
+`:listen` end. Each connection gets a circuit of its own, which goes away
+when the connection ends.
+
+- **Names.** Circuits are named from the server line: `MUL-0`, `MUL-1`
+  and so on, skipping names already in use. With `mul-0` and `mul-1`
+  configured, the first caller gets `MUL-2`.
+- **Options.** `--cost`, `--t3` and `--verify` apply to every circuit
+  made.
+- **`--max`.** Limits how many connections are open at once. The default
+  is 16 and there is no upper bound. When the server is full it stops
+  accepting until a circuit goes, so a caller waits in the kernel's queue
+  and retries at its own pace rather than being dropped and redialling at
+  once.
+- **`--allow`.** Limits who may connect: a comma separated list, which
+  may be repeated. Without it anyone may connect. A refused host is held
+  open for ten seconds before it is closed, and is logged at most once a
+  minute.
+- **Binding.** A host before the port binds to that address only.
+
+For more connections, either raise `--max` or add server lines on more
+ports. Each line has its own `--max`, and lines with the same name share
+the `MUL-n` numbering:
+
+```
+circuit mul Multinet :7200:server --cost 3
+circuit mul Multinet :7201:server --cost 3
+```
 
 A Multinet connection says nothing about who is calling. The routing init
 that comes next carries the caller's node address, so that is where the
@@ -163,13 +184,24 @@ check is made. A caller is refused if its address is:
   server circuit), or
 - held by another circuit that is still verifying.
 
-A refused caller never sees us as up: a server circuit sends its own
-routing init only after it has accepted the caller's. The refusal is
-logged (`MUL-3: rejecting neighbour 59.120 from 192.0.2.7:51234: it is
-already a neighbour on MUL-1`), raises event 4.16 *Adjacency rejected*,
-and counts as an initialization failure. The connection is closed ten
-seconds later, so a caller that redials at once is held to one attempt
-every ten seconds. Configured point to point circuits make the same check.
+So if 59.120 is up on `MUL-3`, a second login claiming 59.120 is refused
+on every other circuit, while `MUL-3` carries on undisturbed.
+
+What happens when a caller is refused:
+
+- **It never sees us as up.** A server circuit sends its own routing init
+  only after it has accepted the caller's.
+- **It is logged:** `MUL-4: rejecting neighbour 59.120 from
+  192.0.2.7:51234: it is already a neighbour on MUL-3`.
+- **It raises event 4.16** *Adjacency rejected*, and counts as an
+  initialization failure.
+- **It is closed ten seconds later,** so a caller that redials at once is
+  held to one attempt every ten seconds.
+
+Configured point to point circuits make the same check. A LAN circuit
+has no routing init to check, so a node that is already on a Multinet
+circuit and also turns up on Ethernet is not refused; the replacement is
+logged as a warning.
 
 **DDCMP.** Over TCP both ends listen and connect and the first connection
 wins, as SIMH does. Serial lines run raw 8N1 with no flow control. The
@@ -301,17 +333,44 @@ returns "privilege violation".
 http --http-port 8102
 ```
 
+Then browse to `http://<this host>:8102/`.
+
+![The overview page](doc/images/web-overview.png)
+
 | Page | Contents |
 |---|---|
-| `/` | node summary |
+| `/` | overview: the executor, and every circuit with its state and neighbour (or, for a LAN, how many adjacencies it has) |
 | `/nodes` | nodes (`?all=1` includes unreachable nodes) |
 | `/circuits` | circuits and adjacencies |
 | `/lines` | lines |
 | `/areas` | reachable areas |
 | `/modules` | modules |
 | `/logging` | event sinks and filters |
+| `/files` | file sharing: see [File access](#file-access) |
 
-Each page accepts `?info=summary|status|char|counters`.
+**Entity pages.** Each entity is a card, with its state as a badge:
+
+- green for On and Reachable,
+- grey for Off and Unreachable,
+- amber for a substate, such as Synchronizing.
+
+The switch at the top right picks the level of detail, which is the same
+as adding `?info=summary|status|char|counters` to the address. On the
+counters level the figures are right aligned.
+
+![Circuits at the status level](doc/images/web-circuits.png)
+
+![Line counters](doc/images/web-counters.png)
+
+**Look.** The pages follow the browser's light or dark setting, and
+narrow to one column on a phone. They are self contained, with no
+scripts and nothing fetched from elsewhere, so they work on a node with
+no route to the internet.
+
+<p>
+<img src="doc/images/web-dark.png" alt="Dark mode" width="68%">
+<img src="doc/images/web-phone.png" alt="On a phone" width="28%">
+</p>
 
 The node pages hide entries with nothing to report and say how many, with
 a **Show all** button at the foot that adds `?all=1`; the button on the
@@ -565,6 +624,33 @@ your Linux login name.
 Without a users file at all, anyone who can reach the node can read the
 root, and, with `--argument rw`, change it too. That's fine on a private
 network of your own, but please don't put a FAL on HECnet without one.
+
+### On the monitoring pages
+
+With `http` configured, the **Files** tab (`/files`) shows each file
+server and who may use it:
+
+- The object, its program, and the directory it serves, with how many
+  files that directory holds and their total size. A red badge means the
+  directory is missing.
+- How access is controlled: anyone read only, anyone read and write, or a
+  users file.
+- With a users file, each user's directory, read or read and write, and
+  whether a password is needed. The proxy entries are listed too.
+- The file access conversations in progress: which node, and which user.
+
+![The Files page](doc/images/web-files.png)
+
+Two things are deliberately never shown:
+
+- **Password hashes.** The page says only whether a user has a password.
+- **File names.** The pages have no login, so listing names would let
+  anyone who can reach them see what the users file keeps to particular
+  users. They show only how many files there are and how big.
+
+The page warns if the users file is inside a directory it serves. Anyone
+allowed to read there could copy it, password hashes and all, which is
+why the examples here keep it in `/etc/decnet`.
 
 ### Logging and trouble
 
