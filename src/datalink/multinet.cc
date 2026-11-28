@@ -699,8 +699,21 @@ void MultinetServer::accept_loop ()
 {
     logging::set_thread_name ((node () ? node ()->name () + "." : "")
                               + config_.name);
+    using clock = std::chrono::steady_clock;
+    // Refused connections are held this long, at most this many at once.
+    constexpr auto        hold_for = std::chrono::seconds (10);
+    constexpr std::size_t max_held = 16;
     bool warned = false;
     while (!stopping_.load ()) {
+        const auto now = clock::now ();
+        std::erase_if (held_, [&] (const Held &h) { return h.until <= now; });
+
+        // Full: leave callers in the kernel's queue until a slot is free.
+        if (claimed_.load () >= config_.max_connections) {
+            std::this_thread::sleep_for (std::chrono::milliseconds (100));
+            continue;
+        }
+
         if (!listener_) {
             listener_ = source_.create_server ();
             if (!listener_) {
@@ -735,11 +748,24 @@ void MultinetServer::accept_loop ()
         conn.set_nonblocking ();
         Endpoint peer = peer_of (conn.fd ());
         if (!allowed (peer)) {
-            DN_INFO ("Multinet server {} refused connection from {}: not "
-                     "an allowed host", config_.name, peer.str ());
-            continue;           // conn closes here
+            // Logged once a minute per host: the port changes every time.
+            std::string host = peer.str ();
+            if (auto c = host.rfind (':'); c != std::string::npos)
+                host.erase (c);
+            auto &last = logged_[host];
+            if (last == clock::time_point {} || now - last >= std::chrono::minutes (1)) {
+                DN_INFO ("Multinet server {} refused connection from {}: not "
+                         "an allowed host", config_.name, peer.str ());
+                last = now;
+            }
+            // Hold it open a while, so a caller that redials as soon as it
+            // is dropped does so every ten seconds and not every moment.
+            if (held_.size () < max_held)
+                held_.push_back ({ std::move (conn), now + hold_for });
+            continue;           // otherwise conn closes here
         }
         conn.set_nodelay ();
+        claimed_.fetch_add (1);
         // Hand it to the node thread, which owns the circuit tables.  The
         // socket goes in a shared_ptr only because the work item must be
         // copyable.
@@ -750,6 +776,7 @@ void MultinetServer::accept_loop ()
                 [this, sp, desc] { accepted (sp, desc); }));
     }
     listener_.close ();
+    held_.clear ();
 }
 
 std::string MultinetServer::next_name () const
@@ -771,12 +798,17 @@ void MultinetServer::accepted (const std::shared_ptr<Socket> &conn,
     if (!owner) {
         DN_INFO ("Multinet server {} refused connection from {}: no "
                  "routing layer to take it", config_.name, peer);
+        claimed_.fetch_sub (1);
         return;                 // the socket closes with the last reference
     }
+    // The listening thread has already taken a slot for this connection,
+    // so the count can only be over if something is amiss: refuse rather
+    // than exceed --max.
     if (live_.size () >= config_.max_connections) {
-        DN_INFO ("Multinet server {} refused connection from {}: already "
+        DN_WARN ("Multinet server {} refused connection from {}: already "
                  "{} connections (--max {})", config_.name, peer,
                  live_.size (), config_.max_connections);
+        claimed_.fetch_sub (1);
         return;
     }
 
@@ -795,6 +827,7 @@ void MultinetServer::accepted (const std::shared_ptr<Socket> &conn,
         dll->remove_circuit (name);
         DN_WARN ("Multinet server {} could not make a circuit for {}",
                  config_.name, peer);
+        claimed_.fetch_sub (1);
         return;
     }
     live_.insert (name);
@@ -805,7 +838,9 @@ void MultinetServer::accepted (const std::shared_ptr<Socket> &conn,
 void MultinetServer::retire (const std::string &name)
 {
     auto *dll = static_cast<DatalinkLayer *> (parent ());
-    if (!live_.erase (name) || !dll) return;
+    if (!live_.erase (name)) return;
+    claimed_.fetch_sub (1);
+    if (!dll) return;
     std::unique_ptr<Datalink> dl = dll->remove_circuit (name);
     if (auto *am = dynamic_cast<AcceptedMultinet *> (dl.get ()))
         am->mark_retired ();

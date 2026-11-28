@@ -289,7 +289,43 @@ DN_TEST (mulserver, max_limits_the_connections)
     DN_ASSERT_EQ (s.circuits.size (), 1u);
     DN_ASSERT (!s.adjacencies.count (121));
     DN_ASSERT (!endnode_up (*e2));
-    e2->stop (); e1->stop (); r->stop ();
+
+    // When the first goes, its slot is free again and the second, which
+    // has been waiting, gets in.
+    e1->stop ();
+    DN_ASSERT (wait_until ([&] {
+        return snapshot (*r).adjacencies.count (121) == 1; }));
+    DN_ASSERT_EQ (snapshot (*r).circuits.size (), 1u);
+    e2->stop (); r->stop ();
+}
+
+DN_TEST (mulserver, two_server_lines_each_have_their_own_max)
+{
+    // Two server lines with the same name, on two ports: each has its own
+    // --max, and the circuits they make share the MUL-n numbering.
+    std::uint16_t p1 = free_port (), p2 = free_port ();
+    Config rc = Config::from_string (
+        "routing 1.1 --type l1router\nnode 1.1 RTR\n"
+        "circuit mul Multinet 127.0.0.1:" + std::to_string (p1)
+        + ":server --t3 2 --max 1\n"
+        "circuit mul Multinet 127.0.0.1:" + std::to_string (p2)
+        + ":server --t3 2 --max 1\n");
+    Node r (rc);
+    auto e1 = make_endnode (120, p1);
+    auto e2 = make_endnode (121, p2);
+    auto e3 = make_endnode (122, p1);       // the first is full
+    r.start (); e1->start (); e2->start ();
+    DN_ASSERT (wait_until ([&] {
+        return snapshot (r).adjacencies.size () == 2; }));
+    Snapshot s = snapshot (r);
+    DN_ASSERT_EQ (s.circuits, (std::set<std::string> { "MUL-0", "MUL-1" }));
+
+    e3->start ();
+    std::this_thread::sleep_for (std::chrono::seconds (3));
+    s = snapshot (r);
+    DN_ASSERT_EQ (s.circuits.size (), 2u);
+    DN_ASSERT (!s.adjacencies.count (122));
+    e3->stop (); e2->stop (); e1->stop (); r.stop ();
 }
 
 DN_TEST (mulserver, allow_refuses_other_hosts)

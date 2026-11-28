@@ -26,7 +26,9 @@
 #include "decnet/config.h"
 
 #include <atomic>
+#include <chrono>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -251,6 +253,24 @@ private:
     Socket                   listener_; // the listening thread's own
     std::thread              thread_;
     std::atomic<bool>        stopping_ { false };
+
+    // Slots in use: connections handed to the node thread and not yet given
+    // back.  The listening thread takes one before it hands a connection
+    // over, and stops accepting while there are none left, so a caller
+    // waits in the kernel's queue rather than being turned away and
+    // redialling at once.  The node thread gives one back when a circuit
+    // goes, or could not be made.
+    std::atomic<std::size_t> claimed_ { 0 };
+
+    // The listening thread's own: connections from hosts not in --allow,
+    // held open a while before they are closed, for the same reason, and
+    // when each such host was last logged.
+    struct Held {
+        Socket                                conn;
+        std::chrono::steady_clock::time_point until;
+    };
+    std::vector<Held>                                            held_;
+    std::map<std::string, std::chrono::steady_clock::time_point> logged_;
 };
 
 }   // namespace decnet::datalink
